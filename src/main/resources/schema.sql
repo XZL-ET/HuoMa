@@ -1,0 +1,206 @@
+-- ============================================
+-- XX书店 · 企业微信活码管理平台 数据库建表
+-- ============================================
+
+-- 活码表
+CREATE TABLE IF NOT EXISTS qr_code (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    school_name VARCHAR(100) NOT NULL COMMENT '学校名称',
+    school_id VARCHAR(50) NOT NULL UNIQUE COMMENT '学校唯一标识（写入企微state）',
+    region_city VARCHAR(50) NOT NULL COMMENT '市',
+    region_district VARCHAR(50) NOT NULL COMMENT '区',
+    qr_config_id VARCHAR(100) COMMENT '企微联系我配置ID',
+    qr_url VARCHAR(500) COMMENT '二维码链接',
+    qr_image_path VARCHAR(500) COMMENT '二维码图片路径',
+    style_config JSON COMMENT '样式配置 {logo,theme,text,font_size}',
+    welcome_config JSON COMMENT '欢迎语配置',
+    status ENUM('active','paused','full','no_agent') NOT NULL DEFAULT 'active',
+    rotate_mode ENUM('auto','manual') NOT NULL DEFAULT 'auto',
+    warn_ratio INT DEFAULT 80 COMMENT '预警阈值%',
+    urgent_ratio INT DEFAULT 95 COMMENT '紧急阈值%',
+    create_mode ENUM('manual','batch_import') NOT NULL DEFAULT 'manual',
+    remark VARCHAR(500) COMMENT '备注',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_school_id (school_id),
+    INDEX idx_region (region_city, region_district),
+    INDEX idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码表';
+
+-- 员工表
+CREATE TABLE IF NOT EXISTS agent (
+    userid VARCHAR(100) PRIMARY KEY COMMENT '企微UserID',
+    name VARCHAR(100) NOT NULL COMMENT '姓名',
+    mobile VARCHAR(20) COMMENT '手机',
+    department VARCHAR(200) COMMENT '部门',
+    role ENUM('receptionist','service','dual') NOT NULL DEFAULT 'receptionist',
+    daily_total_cap INT NOT NULL DEFAULT 500 COMMENT '全日总上限',
+    daily_total_used INT NOT NULL DEFAULT 0 COMMENT '今日已添加（Redis同步）',
+    overall_status ENUM('normal','warning','blocked','melted') NOT NULL DEFAULT 'normal',
+    status_reason JSON COMMENT '当前异常原因汇总',
+    total_added INT NOT NULL DEFAULT 0 COMMENT '历史总添加',
+    total_deleted INT NOT NULL DEFAULT 0 COMMENT '历史被删',
+    melted_count_24h INT NOT NULL DEFAULT 0 COMMENT '24h内熔断次数',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_status (overall_status),
+    INDEX idx_role (role)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工表';
+
+-- 活码-员工关联表
+CREATE TABLE IF NOT EXISTS qr_agent (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qr_code_id BIGINT NOT NULL COMMENT '活码ID',
+    agent_userid VARCHAR(100) NOT NULL COMMENT '员工企微UserID',
+    role ENUM('receptionist','service','dual') NOT NULL DEFAULT 'receptionist',
+    daily_max INT NOT NULL DEFAULT 200 COMMENT '该活码下日添加上限',
+    daily_current INT NOT NULL DEFAULT 0 COMMENT '今日已添加（Redis实时）',
+    service_daily_max INT COMMENT '服务老师每日接手继承上限',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT '分配优先级',
+    status ENUM('active','full','removed','blocked') NOT NULL DEFAULT 'active',
+    replaced_by VARCHAR(100) COMMENT '被谁替换',
+    last_reset_at DATETIME COMMENT '上次清零时间',
+    bind_target JSON COMMENT '服务老师继承目标配置',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (qr_code_id) REFERENCES qr_code(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
+    INDEX idx_qr_agent (qr_code_id, agent_userid),
+    INDEX idx_status (status),
+    INDEX idx_agent_userid (agent_userid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码-员工关联表';
+
+-- 后备池表
+CREATE TABLE IF NOT EXISTS qr_backup_pool (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qr_code_id BIGINT NOT NULL COMMENT '活码ID',
+    agent_userid VARCHAR(100) NOT NULL COMMENT '后备员工UserID',
+    role ENUM('receptionist','service') NOT NULL DEFAULT 'receptionist',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT '优先级',
+    status ENUM('standby','activated','removed') NOT NULL DEFAULT 'standby',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (qr_code_id) REFERENCES qr_code(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
+    INDEX idx_qr_pool (qr_code_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码后备员工表';
+
+-- 客户表
+CREATE TABLE IF NOT EXISTS customer (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    external_userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微外部联系人ID',
+    name VARCHAR(200) COMMENT '昵称',
+    avatar VARCHAR(500) COMMENT '头像',
+    type TINYINT NOT NULL DEFAULT 1 COMMENT '1微信 2企业微信',
+    unionid VARCHAR(100) COMMENT '微信UnionID',
+    added_agent VARCHAR(100) COMMENT '首次接待员UserID',
+    current_agent VARCHAR(100) COMMENT '当前归属服务老师UserID',
+    source_qr_id BIGINT COMMENT '来源活码ID',
+    school_id VARCHAR(50) COMMENT '学校ID（冗余）',
+    status ENUM('active','deleted') NOT NULL DEFAULT 'active',
+    add_time DATETIME COMMENT '添加时间',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_external_userid (external_userid),
+    INDEX idx_source_qr (source_qr_id),
+    INDEX idx_current_agent (current_agent),
+    INDEX idx_school (school_id),
+    INDEX idx_add_time (add_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户表';
+
+-- 标签表
+CREATE TABLE IF NOT EXISTS tag (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL COMMENT '标签名',
+    type ENUM('system','form','manual') NOT NULL DEFAULT 'manual',
+    parent_id BIGINT COMMENT '父标签ID',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_id) REFERENCES tag(id),
+    INDEX idx_type (type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标签表';
+
+-- 客户-标签关联
+CREATE TABLE IF NOT EXISTS customer_tag (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT NOT NULL,
+    tag_id BIGINT NOT NULL,
+    source ENUM('system','form','manual') NOT NULL DEFAULT 'system',
+    tagged_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tag(id),
+    UNIQUE KEY uk_customer_tag (customer_id, tag_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户标签关联表';
+
+-- 异常记录表
+CREATE TABLE IF NOT EXISTS agent_alert (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    agent_userid VARCHAR(100) NOT NULL COMMENT '员工ID',
+    alert_type VARCHAR(50) NOT NULL COMMENT 'blocked/greeting_fail/low_approval/high_delete/traffic_spike/melt/empty_backup',
+    severity ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
+    detail JSON COMMENT '异常详情',
+    auto_action ENUM('none','paused','removed','melted') DEFAULT 'none',
+    status ENUM('open','resolved','auto_resolved') NOT NULL DEFAULT 'open',
+    resolved_by VARCHAR(100) COMMENT '处理人',
+    resolved_at DATETIME COMMENT '处理时间',
+    qr_code_id BIGINT COMMENT '关联活码',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
+    INDEX idx_agent_status (agent_userid, status),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异常记录表';
+
+-- 继承记录表
+CREATE TABLE IF NOT EXISTS customer_transfer (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT NOT NULL COMMENT '客户ID',
+    from_userid VARCHAR(100) NOT NULL COMMENT '转出（接待员）',
+    to_userid VARCHAR(100) NOT NULL COMMENT '目标（服务老师）',
+    qr_code_id BIGINT COMMENT '来源活码',
+    transfer_time DATETIME COMMENT '发起时间',
+    confirm_time DATETIME COMMENT '确认时间',
+    status ENUM('pending_confirm','confirmed','rejected','timeout','api_failed','retry_limit') NOT NULL DEFAULT 'pending_confirm',
+    retry_count INT NOT NULL DEFAULT 0,
+    fail_reason VARCHAR(500) COMMENT '失败原因',
+    form_filled_at_transfer BOOLEAN COMMENT '继承时是否已填写收集表单',
+    note_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '继承备注是否已写入',
+    greeting_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '交接欢迎语是否已发送',
+    greeting_type ENUM('filled','unfilled') COMMENT '已填写版/未填写版',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE,
+    INDEX idx_customer_transfer (customer_id),
+    INDEX idx_status (status),
+    INDEX idx_transfer_time (transfer_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户继承记录表';
+
+-- 日报表
+CREATE TABLE IF NOT EXISTS daily_report (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    date DATE NOT NULL UNIQUE COMMENT '统计日期',
+    total_scan INT NOT NULL DEFAULT 0,
+    total_add INT NOT NULL DEFAULT 0,
+    total_add_fail INT NOT NULL DEFAULT 0,
+    total_transfer INT NOT NULL DEFAULT 0,
+    total_transfer_ok INT NOT NULL DEFAULT 0,
+    total_rotate INT NOT NULL DEFAULT 0,
+    total_alert INT NOT NULL DEFAULT 0,
+    active_qr INT NOT NULL DEFAULT 0,
+    full_qr INT NOT NULL DEFAULT 0,
+    blocked_agent INT NOT NULL DEFAULT 0,
+    melted_agent INT NOT NULL DEFAULT 0,
+    detail_json JSON COMMENT '活码/员工明细快照',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='日报表';
+
+-- 操作日志表
+CREATE TABLE IF NOT EXISTS operation_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    operator VARCHAR(100) COMMENT '操作人',
+    action VARCHAR(100) NOT NULL COMMENT '操作类型',
+    target_type VARCHAR(50) COMMENT '操作对象类型',
+    target_id VARCHAR(100) COMMENT '操作对象ID',
+    detail JSON COMMENT '操作详情',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_created (created_at),
+    INDEX idx_target (target_type, target_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作日志表';

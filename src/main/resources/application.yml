@@ -1,0 +1,56 @@
+spring:
+  profiles:
+    active: dev
+  thymeleaf:
+    cache: false
+    prefix: classpath:/templates/
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+server:
+  port: 8080
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:mysql://localhost:3306/bookstore_qrcode?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${DB_PASSWORD:<YOUR_MYSQL_ROOT_PASSWORD>}
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+wecom:
+  corp-id: ${WECOM_CORP_ID:}
+  corp-secret: ${WECOM_CORP_SECRET:}
+  callback-token: ${WECOM_CALLBACK_TOKEN:}
+  callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY:}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: jdbc:mysql://localhost:3306/bookstore_qrcode?useSSL=true&serverTimezone=Asia/Shanghai
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  thymeleaf:
+    cache: true
+  jpa:
+    show-sql: false
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ${REDIS_PASSWORD:}
