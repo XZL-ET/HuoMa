@@ -10,9 +10,15 @@ public class QrCodeCreateRequest {
     private String regionDistrict;
     private String remark;
 
-    /** 接待员 JSON: [{"userid":"li","dailyMax":200}] */
+    /** 服务老师企微账号 — 活码主联系人（简化输入） */
+    private String serviceTeacherUserid;
+    /** 服务老师日接上限，默认 1000 */
+    private Integer serviceDailyMax;
+    /** 接待员企微账号 — 后备池（简化输入，逗号分隔多个） */
+    private String receptionistUserid;
+    /** 接待员 JSON（高级用法，覆盖 receptionistUserid） */
     private String agentsJson;
-    /** 服务老师 JSON: {"userid":"zhang","serviceDailyMax":1000} */
+    /** 服务老师 JSON（高级用法，覆盖 serviceTeacherUserid） */
     private String serviceTeacherJson;
     /** 后备接待员 JSON: ["wang","zhao"] */
     private String backupsJson;

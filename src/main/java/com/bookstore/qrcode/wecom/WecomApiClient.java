@@ -165,6 +165,16 @@ public class WecomApiClient {
     }
 
     /**
+     * 获取部门成员（递归），用于下拉框选择接待员。
+     */
+    public JsonNode getUserSimplelist() {
+        String url = BASE_URL + "/user/simplelist?access_token=" + getAccessToken()
+                     + "&department_id=1&fetch_child=1";
+        String resp = restTemplate.getForObject(url, String.class);
+        return parseOrThrow(resp, "获取成员列表");
+    }
+
+    /**
      * 发送消息给客户（文本）。
      */
     public void sendMessage(String sender, String externalUserid, String text) {

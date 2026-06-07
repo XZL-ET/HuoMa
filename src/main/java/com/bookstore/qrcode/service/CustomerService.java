@@ -138,4 +138,29 @@ public class CustomerService {
     public long countTotal() {
         return customerRepo.count();
     }
+
+    /**
+     * 手动创建测试客户（开发调试用）。
+     * 当本地环境无法接收企微回调时，通过此方法添加模拟客户数据。
+     */
+    @Transactional
+    public Customer createManual(String name, String externalUserid,
+                                  String agentUserid, String schoolId, Long qrCodeId) {
+        if (customerRepo.existsByExternalUserid(externalUserid)) {
+            throw new RuntimeException("客户已存在: " + externalUserid);
+        }
+
+        Customer customer = Customer.builder()
+            .externalUserid(externalUserid)
+            .name(name)
+            .type(1)
+            .addedAgent(agentUserid)
+            .currentAgent(agentUserid)
+            .sourceQrId(qrCodeId)
+            .schoolId(schoolId)
+            .status(Customer.CustomerStatus.active)
+            .addTime(LocalDateTime.now())
+            .build();
+        return customerRepo.save(customer);
+    }
 }

@@ -35,9 +35,11 @@ public class CustomerTransfer {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private TransferStatus status = TransferStatus.pending_confirm;
 
     @Column(name = "retry_count")
+    @Builder.Default
     private Integer retryCount = 0;
 
     @Column(name = "fail_reason", length = 500)
@@ -47,9 +49,11 @@ public class CustomerTransfer {
     private Boolean formFilledAtTransfer;
 
     @Column(name = "note_sent")
+    @Builder.Default
     private Boolean noteSent = false;
 
     @Column(name = "greeting_sent")
+    @Builder.Default
     private Boolean greetingSent = false;
 
     @Column(name = "greeting_type", length = 20)

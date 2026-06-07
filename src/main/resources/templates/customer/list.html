@@ -9,7 +9,44 @@
                 累计 <span th:text="${total}">0</span> 人 | 今日新增 <span th:text="${todayCount}" class="text-success">0</span> 人
             </small>
         </h4>
-        <a href="/customers/export" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
+        <div class="btn-group">
+            <button class="btn btn-outline-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#testCustomerForm">
+                ➕ 快速添加测试客户
+            </button>
+            <a href="/customers/export" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
+        </div>
+    </div>
+
+    <!-- 测试客户快速添加 -->
+    <div class="collapse card p-3 mb-3 bg-light" id="testCustomerForm">
+        <form method="post" th:action="@{/customers/create-test}" class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label small">客户昵称</label>
+                <input type="text" name="name" class="form-control form-control-sm" value="测试家长" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">接待员企微账号</label>
+                <select name="agentUserid" class="form-select form-select-sm" required>
+                    <option value="">请选择...</option>
+                    <option th:each="a : ${agents}"
+                            th:value="${a.userid}"
+                            th:text="${a.name + ' (' + a.userid + ')'}"></option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small">关联活码</label>
+                <select name="qrCodeId" class="form-select form-select-sm">
+                    <option value="">不关联</option>
+                    <option th:each="q : ${qrCodes}"
+                            th:value="${q.id}"
+                            th:text="${q.schoolName + ' (ID:' + q.id + ')'}"></option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-success btn-sm">创建测试客户</button>
+                <small class="text-muted d-block">仅用于本地开发调试</small>
+            </div>
+        </form>
     </div>
 
     <!-- 搜索栏 -->

@@ -44,16 +44,20 @@ public class QrCode {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private QrCodeStatus status = QrCodeStatus.active;
 
     @Column(name = "rotate_mode", nullable = false, length = 10)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private RotateMode rotateMode = RotateMode.auto;
 
     @Column(name = "warn_ratio")
+    @Builder.Default
     private Integer warnRatio = 80;
 
     @Column(name = "urgent_ratio")
+    @Builder.Default
     private Integer urgentRatio = 95;
 
     @Column(name = "create_mode", nullable = false, length = 20)

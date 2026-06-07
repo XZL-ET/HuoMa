@@ -3,6 +3,8 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -11,8 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -28,6 +29,8 @@ public class AgentBindService {
     private final QrCodeRepository qrCodeRepo;
     private final AgentRepository agentRepo;
     private final StringRedisTemplate redisTemplate;
+    private final WecomApiClient wecomApi;
+    private final ObjectMapper objectMapper;
 
     // ==================== 日计数 ====================
 
@@ -64,6 +67,7 @@ public class AgentBindService {
 
     /**
      * 检查日限 → 触发轮换。
+     * 新逻辑：服务老师为主联系人，满了从后备池激活接待员扩容活码。
      */
     @Transactional
     public void checkAndRotate(Long qrCodeId, String userId, int currentCount) {
@@ -77,91 +81,171 @@ public class AgentBindService {
         int warnThreshold = (dailyMax * qr.getWarnRatio()) / 100;
         int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
 
-        // 多级预警
         if (currentCount >= dailyMax) {
-            // 满员 → 从活码移除 + 通知
-            log.warn("员工 {} 在活码 {} 已达日限 {}，触发轮换", userId, qrCodeId, dailyMax);
-            rotateOut(qrCodeId, userId, qr);
+            // 满员 → 扩容：从后备池加人，服务老师保留
+            log.warn("员工 {} 在活码 {} 已达日限 {}，触发扩容", userId, qrCodeId, dailyMax);
+            expandQrCodeUsers(qrCodeId, userId, qr, qa);
         } else if (currentCount >= urgentThreshold) {
-            log.warn("员工 {} 在活码 {} 达到紧急阈值 {}/{}", userId, qrCodeId, currentCount, dailyMax);
-            // 告警，但不移除
+            // 紧急阈值 → 提前激活后备（不等满了再抢）
+            log.warn("员工 {} 在活码 {} 达到紧急阈值 {}/{}，提前激活后备",
+                userId, qrCodeId, currentCount, dailyMax);
+            preActivateBackup(qrCodeId, qr);
         } else if (currentCount >= warnThreshold) {
             log.info("员工 {} 在活码 {} 达到预警阈值 {}/{}", userId, qrCodeId, currentCount, dailyMax);
         }
     }
 
     /**
-     * 将员工从活码移除，从后备池激活替代。
+     * 扩容活码 — 从后备池激活接待员，加入企微活码用户列表。
+     * 服务老师不替换，新接待员追加到活码。
      */
     @Transactional
-    public void rotateOut(Long qrCodeId, String userId, QrCode qr) {
-        // 分布式锁，防止并发轮换
-        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":" + userId;
+    public void expandQrCodeUsers(Long qrCodeId, String fullUserId, QrCode qr, QrAgent fullAgent) {
+        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":expand";
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
         if (Boolean.FALSE.equals(locked)) {
-            log.debug("轮换进行中，跳过: qr={}, user={}", qrCodeId, userId);
+            log.debug("扩容进行中，跳过: qr={}", qrCodeId);
             return;
         }
 
         try {
-            // ① 员工标记为 full
-            QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, userId).orElse(null);
-            if (qa == null || qa.getStatus() == QrAgent.AgentStatus.full) return;
-
-            // 人工审核模式 → 只告警不轮换
+            // 人工审核模式 → 只告警不自动
             if (qr.getRotateMode() == QrCode.RotateMode.manual) {
-                log.info("人工审核模式，不自动轮换: qr={}, user={}", qrCodeId, userId);
+                log.info("人工审核模式，不自动扩容: qr={}, user={}", qrCodeId, fullUserId);
                 return;
             }
 
-            qa.setStatus(QrAgent.AgentStatus.full);
-            qa.setUpdatedAt(LocalDateTime.now());
-            qrAgentRepo.save(qa);
-
-            // ② 从后备池取第一个待命的
+            // 从后备池取待命的接待员
             List<QrBackupPool> backups = backupPoolRepo
                 .findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId, QrBackupPool.PoolStatus.standby);
             if (backups.isEmpty()) {
-                // 后备池空 → 活码标记无可用
-                log.error("活码 {} 后备池为空，无可用员工！", qrCodeId);
-                qr.setStatus(QrCode.QrCodeStatus.no_agent);
-                qrCodeRepo.save(qr);
+                log.error("活码 {} 后备池为空，无法扩容！", qrCodeId);
                 return;
             }
 
             QrBackupPool backup = backups.get(0);
+            String backupUserid = backup.getAgentUserid();
+
+            // ① 标记后备已激活
             backup.setStatus(QrBackupPool.PoolStatus.activated);
             backup.setUpdatedAt(LocalDateTime.now());
             backupPoolRepo.save(backup);
 
-            // ③ 后备员工加入活码（auto = 从被替换者的 dailyMax 继承）
+            // ② 创建接待员 QrAgent 记录
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId)
-                .agentUserid(backup.getAgentUserid())
+                .agentUserid(backupUserid)
                 .role(QrAgent.AgentRole.receptionist)
-                .dailyMax(qa.getDailyMax())
-                .sortOrder(qa.getSortOrder())
+                .dailyMax(200)
+                .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
                 .status(QrAgent.AgentStatus.active)
-                .replacedBy(null)
                 .build();
             qrAgentRepo.save(newAgent);
 
-            // ④ 记录替换关系
-            qa.setReplacedBy(backup.getAgentUserid());
-            qrAgentRepo.save(qa);
+            // ③ 标记满员的服务老师（保留在活码上，不替换）
+            fullAgent.setStatus(QrAgent.AgentStatus.full);
+            fullAgent.setReplacedBy(backupUserid);
+            fullAgent.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(fullAgent);
 
-            log.info("轮换完成: 活码 {} 员工 {}→{}", qrCodeId, userId, backup.getAgentUserid());
+            // ④ 更新企微活码 — 把新接待员加入用户列表
+            syncQrUsersToWechat(qr, fullUserId, backupUserid);
 
-            // ⑤ 重建活码状态
-            long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active).size();
-            if (activeCount > 0) {
-                qr.setStatus(QrCode.QrCodeStatus.active);
-                qrCodeRepo.save(qr);
-            }
+            log.info("扩容完成: 活码 {} 服务老师 {} 满了，激活后备 {}",
+                qrCodeId, fullUserId, backupUserid);
 
         } finally {
             redisTemplate.delete(lockKey);
+        }
+    }
+
+    /**
+     * 提前激活后备 — 在紧急阈值触发，不等满员。
+     */
+    @Transactional
+    public void preActivateBackup(Long qrCodeId, QrCode qr) {
+        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":preactivate";
+        Boolean locked = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
+        if (Boolean.FALSE.equals(locked)) return;
+
+        try {
+            if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
+
+            // 检查是否已有接待员激活了
+            long activeReceptionists = qrAgentRepo.findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active)
+                .stream().filter(a -> a.getRole() == QrAgent.AgentRole.receptionist).count();
+            if (activeReceptionists > 0) return; // 已有接待员，不重复激活
+
+            List<QrBackupPool> backups = backupPoolRepo
+                .findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId, QrBackupPool.PoolStatus.standby);
+            if (backups.isEmpty()) return;
+
+            QrBackupPool backup = backups.get(0);
+            String backupUserid = backup.getAgentUserid();
+
+            // 获取服务老师的 userid
+            QrAgent svcAgent = qrAgentRepo.findByQrCodeIdAndRole(qrCodeId, QrAgent.AgentRole.service)
+                .stream().findFirst().orElse(null);
+            String svcUserid = svcAgent != null ? svcAgent.getAgentUserid() : null;
+
+            backup.setStatus(QrBackupPool.PoolStatus.activated);
+            backup.setUpdatedAt(LocalDateTime.now());
+            backupPoolRepo.save(backup);
+
+            QrAgent newAgent = QrAgent.builder()
+                .qrCodeId(qrCodeId)
+                .agentUserid(backupUserid)
+                .role(QrAgent.AgentRole.receptionist)
+                .dailyMax(200)
+                .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
+                .status(QrAgent.AgentStatus.active)
+                .build();
+            qrAgentRepo.save(newAgent);
+
+            // 更新企微活码用户列表
+            if (svcUserid != null) {
+                syncQrUsersToWechat(qr, svcUserid, backupUserid);
+            }
+
+            log.info("提前激活后备: 活码 {} 加入接待员 {}", qrCodeId, backupUserid);
+        } finally {
+            redisTemplate.delete(lockKey);
+        }
+    }
+
+    /**
+     * 同步活码用户列表到企微。
+     * 只包含 active 状态的员工（full 的不上活码）。
+     */
+    private void syncQrUsersToWechat(QrCode qr, String fullUserId, String newUserId) {
+        try {
+            Set<String> userIds = new LinkedHashSet<>();
+            List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(
+                qr.getId(), QrAgent.AgentStatus.active);
+            for (QrAgent a : activeAgents) {
+                userIds.add(a.getAgentUserid());
+            }
+
+            // 满员的不放活码上（如果 sync 是因为扩容，fullUserId 应该已经被标记为 full 了，
+            // 不会被 activeAgents 查出来，所以不会出现在列表里）
+            // 新激活的已经在 activeAgents 中
+
+            if (userIds.isEmpty()) {
+                log.warn("活码 {} 无可用联系人，跳过同步", qr.getQrConfigId());
+                return;
+            }
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("config_id", qr.getQrConfigId());
+            body.put("user", new ArrayList<>(userIds));
+            String json = objectMapper.writeValueAsString(body);
+
+            wecomApi.updateContactWay(json);
+            log.info("企微活码用户列表已同步: config_id={}, users={}", qr.getQrConfigId(), userIds);
+        } catch (Exception e) {
+            log.error("同步企微活码用户列表失败: config_id={}", qr.getQrConfigId(), e);
         }
     }
 

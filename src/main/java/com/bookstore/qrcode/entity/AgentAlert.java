@@ -23,6 +23,7 @@ public class AgentAlert {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AlertSeverity severity = AlertSeverity.medium;
 
     @Column(columnDefinition = "JSON")
@@ -30,10 +31,12 @@ public class AgentAlert {
 
     @Column(name = "auto_action", length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AutoAction autoAction = AutoAction.none;
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AlertStatus status = AlertStatus.open;
 
     @Column(name = "resolved_by", length = 100)

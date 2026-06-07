@@ -23,6 +23,7 @@ public class CustomerTag {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private TagSource source = TagSource.system;
 
     @Column(name = "tagged_at", updatable = false)

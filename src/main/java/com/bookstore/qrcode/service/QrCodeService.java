@@ -60,9 +60,14 @@ public class QrCodeService {
             throw new RuntimeException("学校ID已存在: " + req.getSchoolId());
         }
 
-        // 1. 调用企微 API 创建「联系我」二维码
+        // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败不影响事务）
         String qrRequestJson = buildContactWayJson(req);
         JsonNode result = wecomApi.createContactWay(qrRequestJson);
+        int errcode = result.has("errcode") ? result.get("errcode").asInt() : 0;
+        if (errcode != 0) {
+            String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
+            throw new RuntimeException("创建企微活码失败 [" + errcode + "]: " + errmsg);
+        }
         String configId = result.get("config_id").asText();
         String qrUrl = result.get("qr_code").asText();
 
@@ -132,6 +137,36 @@ public class QrCodeService {
         qrCodeRepo.delete(qr);
     }
 
+    // ==================== 同步企微活码 ====================
+
+    /**
+     * 手动同步活码用户列表到企微 — 只把 active 员工放上活码。
+     */
+    public void syncQrUsersToWechat(Long qrCodeId) {
+        QrCode qr = getById(qrCodeId);
+        if (qr.getQrConfigId() == null) {
+            throw new RuntimeException("活码未关联企微 config_id");
+        }
+
+        List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(
+            qrCodeId, QrAgent.AgentStatus.active);
+        List<String> userIds = activeAgents.stream()
+            .map(QrAgent::getAgentUserid)
+            .distinct()
+            .toList();
+
+        try {
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("config_id", qr.getQrConfigId());
+            body.put("user", userIds);
+            String json = objectMapper.writeValueAsString(body);
+            wecomApi.updateContactWay(json);
+            log.info("手动同步企微活码: config_id={}, users={}", qr.getQrConfigId(), userIds);
+        } catch (Exception e) {
+            throw new RuntimeException("同步企微活码失败: " + e.getMessage(), e);
+        }
+    }
+
     // ==================== 状态更新 ====================
 
     @Transactional
@@ -152,15 +187,51 @@ public class QrCodeService {
 
     private String buildContactWayJson(QrCodeCreateRequest req) {
         try {
+            // 提取服务老师 userid（活码主联系人，优先放活码上）
+            String svcUserid = null;
+            if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+                svcUserid = req.getServiceTeacherUserid().trim();
+            }
+            if (svcUserid == null && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
+                JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
+                if (svc.has("userid")) svcUserid = svc.get("userid").asText();
+            }
+
+            // 如果没填服务老师，退回到接待员
+            List<String> userIds = new ArrayList<>();
+            if (svcUserid != null) {
+                userIds.add(svcUserid);
+            } else {
+                // 兼容旧逻辑：从 receptionistUserid 或 agentsJson 提取
+                if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
+                    for (String uid : req.getReceptionistUserid().split(",")) {
+                        String trimmed = uid.trim();
+                        if (!trimmed.isEmpty()) userIds.add(trimmed);
+                    }
+                }
+                if (userIds.isEmpty() && req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
+                    JsonNode agents = objectMapper.readTree(req.getAgentsJson());
+                    for (JsonNode agent : agents) {
+                        if (agent.has("userid")) userIds.add(agent.get("userid").asText());
+                    }
+                }
+            }
+
+            if (userIds.isEmpty()) {
+                throw new RuntimeException("请填写服务老师或接待员企微账号");
+            }
+
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("type", 2);    // 多人
             body.put("scene", 2);   // 二维码
             body.put("style", 1);
             body.put("state", req.getSchoolId());
-            body.put("user", List.of()); // 先空
+            body.put("user", userIds);
             return objectMapper.writeValueAsString(body);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("构造活码参数失败", e);
+            throw new RuntimeException("构造活码参数失败: " + e.getMessage(), e);
         }
     }
 
@@ -199,41 +270,61 @@ public class QrCodeService {
 
     private void bindAgents(Long qrCodeId, QrCodeCreateRequest req) {
         try {
-            if (req.getAgentsJson() != null && !req.getAgentsJson().isEmpty()) {
-                JsonNode agents = objectMapper.readTree(req.getAgentsJson());
-                int order = 0;
-                for (JsonNode a : agents) {
-                    String userid = a.get("userid").asText();
-                    ensureAgent(userid, "receptionist");
-                    int dailyMax = a.has("dailyMax") ? a.get("dailyMax").asInt() : 200;
-                    qrAgentRepo.save(QrAgent.builder()
-                        .qrCodeId(qrCodeId)
-                        .agentUserid(userid)
-                        .role(QrAgent.AgentRole.receptionist)
-                        .dailyMax(dailyMax)
-                        .sortOrder(order++)
-                        .status(QrAgent.AgentStatus.active)
-                        .build());
-                }
+            // ① 服务老师 — 活码主联系人（QrAgent, 角色=service）
+            String svcUserid = null;
+            int svcDailyMax = 1000;
+            if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+                svcUserid = req.getServiceTeacherUserid().trim();
+                svcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
             }
-
-            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isEmpty()) {
+            if (svcUserid == null && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
                 JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
-                String userid = svc.get("userid").asText();
-                ensureAgent(userid, "service");
-                int svcMax = svc.has("serviceDailyMax") ? svc.get("serviceDailyMax").asInt() : 1000;
+                svcUserid = svc.get("userid").asText();
+                svcDailyMax = svc.has("serviceDailyMax") ? svc.get("serviceDailyMax").asInt() : 1000;
+            }
+            if (svcUserid != null) {
+                ensureAgent(svcUserid, "service");
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId)
-                    .agentUserid(userid)
+                    .agentUserid(svcUserid)
                     .role(QrAgent.AgentRole.service)
-                    .serviceDailyMax(svcMax)
+                    .dailyMax(svcDailyMax)
+                    .serviceDailyMax(svcDailyMax)
+                    .sortOrder(0)
                     .status(QrAgent.AgentStatus.active)
                     .build());
             }
 
+            // ② 接待员 — 进后备池（不是直接上活码，等服务老师满了才激活）
+            List<String> receptionistUserids = new ArrayList<>();
+            if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
+                for (String uid : req.getReceptionistUserid().split(",")) {
+                    String trimmed = uid.trim();
+                    if (!trimmed.isEmpty()) receptionistUserids.add(trimmed);
+                }
+            }
+            if (receptionistUserids.isEmpty() && req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
+                JsonNode agents = objectMapper.readTree(req.getAgentsJson());
+                for (JsonNode a : agents) {
+                    receptionistUserids.add(a.get("userid").asText());
+                }
+            }
+
+            int order = 0;
+            for (String userid : receptionistUserids) {
+                ensureAgent(userid, "receptionist");
+                backupRepo.save(QrBackupPool.builder()
+                    .qrCodeId(qrCodeId)
+                    .agentUserid(userid)
+                    .role(QrBackupPool.PoolRole.receptionist)
+                    .sortOrder(order++)
+                    .status(QrBackupPool.PoolStatus.standby)
+                    .build());
+            }
+
+            // ③ 额外后备员工
             if (req.getBackupsJson() != null && !req.getBackupsJson().isEmpty()) {
                 JsonNode backups = objectMapper.readTree(req.getBackupsJson());
-                int order = 0;
                 for (JsonNode b : backups) {
                     String userid = b.asText();
                     ensureAgent(userid, "receptionist");
@@ -247,7 +338,8 @@ public class QrCodeService {
                 }
             }
         } catch (Exception e) {
-            log.warn("绑定员工失败: {}", e.getMessage());
+            log.error("绑定员工失败", e);
+            throw new RuntimeException("绑定员工失败: " + e.getMessage(), e);
         }
     }
 

@@ -1,8 +1,11 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
+import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.QrCodeService;
+import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -12,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @Controller
@@ -20,6 +25,7 @@ import java.util.Map;
 public class QrCodeController {
 
     private final QrCodeService qrCodeService;
+    private final WecomApiClient wecomApiClient;
 
     /** 活码列表页 */
     @GetMapping
@@ -48,6 +54,23 @@ public class QrCodeController {
     /** 手动创建页 */
     @GetMapping("/create")
     public String createForm(Model model) {
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
+                model.addAttribute("loadError", "成员列表加载失败: " + result.get("errmsg").asText());
+                model.addAttribute("userList", List.of());
+            } else {
+                List<Map<String, String>> userList = new ArrayList<>();
+                for (JsonNode u : result.get("userlist")) {
+                    userList.add(Map.of("userid", u.get("userid").asText(),
+                                        "name", u.get("name").asText()));
+                }
+                model.addAttribute("userList", userList);
+            }
+        } catch (Exception e) {
+            model.addAttribute("loadError", "成员列表加载失败: " + e.getMessage());
+            model.addAttribute("userList", List.of());
+        }
         return "qrcode/create";
     }
 
@@ -87,8 +110,13 @@ public class QrCodeController {
     @GetMapping("/{id}")
     public String detail(@PathVariable Long id, Model model) {
         QrCode qr = qrCodeService.getById(id);
+        List<QrAgent> agents = qrCodeService.getAgents(id);
         model.addAttribute("qr", qr);
-        model.addAttribute("agents", qrCodeService.getAgents(id));
+        model.addAttribute("receptionists",
+            agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.receptionist
+                                   || a.getRole() == QrAgent.AgentRole.dual).toList());
+        model.addAttribute("services",
+            agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
         model.addAttribute("backups", qrCodeService.getBackups(id));
         return "qrcode/detail";
     }
@@ -113,6 +141,18 @@ public class QrCodeController {
         try {
             qrCodeService.updateRotateMode(id, QrCode.RotateMode.valueOf(mode));
             redirect.addFlashAttribute("message", "轮换模式已更新");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 手动同步企微活码用户列表 */
+    @PostMapping("/{id}/sync")
+    public String syncQrUsers(@PathVariable Long id, RedirectAttributes redirect) {
+        try {
+            qrCodeService.syncQrUsersToWechat(id);
+            redirect.addFlashAttribute("message", "活码已同步 — 仅 active 员工在活码上");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
         }

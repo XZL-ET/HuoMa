@@ -33,68 +33,103 @@
             </div>
         </div>
 
-        <!-- 值守接待员 -->
-        <div class="col-md-6">
+        <!-- 二维码 -->
+        <div class="col-12" th:if="${qr.qrUrl != null}">
+            <div class="card p-4 text-center">
+                <h6>活码二维码</h6>
+                <img th:src="${qr.qrUrl}" alt="活码二维码" style="max-width: 300px; margin: 0 auto;">
+                <div class="mt-2 small text-muted">
+                    链接：<code th:text="${qr.qrUrl}"></code>
+                </div>
+                <div class="mt-1">
+                    <a th:href="${qr.qrUrl}" target="_blank" class="btn btn-sm btn-primary">打开二维码大图</a>
+                    <small class="text-muted ms-2">打印此二维码供家长扫码添加</small>
+            </div>
+        </div>
+
+        <!-- 活码联系人 -->
+        <div class="col-12">
             <div class="card p-4">
-                <h6>值守接待员</h6>
+                <h6>
+                    📱 活码联系人
+                    <small class="text-muted">（扫码后客户随机分配到这几位中的一位）</small>
+                </h6>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>日限</th><th>角色</th><th>状态</th></tr></thead>
+                    <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th></tr></thead>
                     <tbody>
-                        <tr th:each="a : ${agents}" th:if="${a.role.name() == 'receptionist' || a.role.name() == 'dual'}">
-                            <td th:text="${a.agentUserid}"></td>
+                        <!-- 服务老师 -->
+                        <tr th:each="a : ${services}">
+                            <td>
+                                <strong th:text="${a.agentUserid}"></strong>
+                                <span class="badge bg-primary ms-1">服务老师</span>
+                            </td>
+                            <td>🎯 主联系人</td>
                             <td th:text="${a.dailyMax}"></td>
-                            <td th:text="${a.role.name()}"></td>
                             <td>
-                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
-                                      th:text="${a.status.name()}"></span>
+                                <span th:text="${a.dailyCurrent}"></span>
+                                <small class="text-muted">/ <span th:text="${a.dailyMax}"></span></small>
+                            </td>
+                            <td>
+                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : (a.status.name() == 'full' ? 'bg-warning' : 'bg-danger')}"
+                                      th:text="${a.status.name() == 'active' ? '接客中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
                         </tr>
-                        <tr th:if="${agents.stream().filter(a -> a.role.name() == 'receptionist' || a.role.name() == 'dual').toList().isEmpty()}">
-                            <td colspan="4" class="text-muted text-center">暂未配置接待员</td>
+                        <!-- 已激活的接待员 -->
+                        <tr th:each="a : ${receptionists}">
+                            <td>
+                                <strong th:text="${a.agentUserid}"></strong>
+                                <span class="badge bg-info ms-1">接待员</span>
+                            </td>
+                            <td>🔁 后备顶上</td>
+                            <td th:text="${a.dailyMax}"></td>
+                            <td>
+                                <span th:text="${a.dailyCurrent}"></span>
+                                <small class="text-muted">/ <span th:text="${a.dailyMax}"></span></small>
+                            </td>
+                            <td>
+                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
+                                      th:text="${a.status.name() == 'active' ? '接客中' : a.status.name()}"></span>
+                            </td>
+                        </tr>
+                        <tr th:if="${services.isEmpty() and receptionists.isEmpty()}">
+                            <td colspan="5" class="text-muted text-center">暂未配置联系人</td>
                         </tr>
                     </tbody>
                 </table>
+                <small class="text-muted mt-2 d-block">
+                    💡 策略：扫码优先加到<span class="text-primary">服务老师</span>。
+                    服务老师日限快满时，自动从后备池激活<span class="text-info">接待员</span>加入活码。
+                    满员后<span class="text-danger">切换</span>为仅接待员。
+                </small>
+                <form th:action="@{/qrcodes/{id}/sync(id=${qr.id})}" method="post" class="mt-2">
+                    <button class="btn btn-sm btn-outline-secondary" title="将 active 员工同步到企微活码">
+                        🔄 手动同步到企微
+                    </button>
+                </form>
             </div>
         </div>
 
-        <!-- 服务老师 -->
+        <!-- 后备接待员 -->
         <div class="col-md-6">
             <div class="card p-4">
-                <h6>服务老师（继承目标）</h6>
+                <h6>
+                    🛡️ 后备接待员
+                    <span class="badge bg-secondary" th:text="${backups.size()} + '人待命'"></span>
+                </h6>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>日接上限</th><th>状态</th></tr></thead>
-                    <tbody>
-                        <tr th:each="a : ${agents}" th:if="${a.role.name() == 'service'}">
-                            <td th:text="${a.agentUserid}"></td>
-                            <td th:text="${a.serviceDailyMax}"></td>
-                            <td>
-                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
-                                      th:text="${a.status.name()}"></span>
-                            </td>
-                        </tr>
-                        <tr th:if="${agents.stream().filter(a -> a.role.name() == 'service').toList().isEmpty()}">
-                            <td colspan="3" class="text-muted text-center">暂未配置服务老师</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- 后备池 -->
-        <div class="col-md-6">
-            <div class="card p-4">
-                <h6>后备池（<span th:text="${backups.size()}"></span>人待命）</h6>
-                <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>角色</th><th>优先级</th><th>状态</th></tr></thead>
+                    <thead><tr><th>姓名</th><th>优先级</th><th>日限</th><th>状态</th></tr></thead>
                     <tbody>
                         <tr th:each="b : ${backups}">
                             <td th:text="${b.agentUserid}"></td>
-                            <td th:text="${b.role.name()}"></td>
-                            <td th:text="${b.sortOrder}"></td>
+                            <td><span class="badge bg-light text-dark" th:text="'#' + ${b.sortOrder}"></span></td>
+                            <td>200</td>
                             <td><span class="badge bg-info">待命</span></td>
                         </tr>
                         <tr th:if="${backups.isEmpty()}">
-                            <td colspan="4" class="text-muted text-center">后备池为空</td>
+                            <td colspan="4" class="text-muted text-center">
+                                后备池为空
+                                <br><small class="text-warning">⚠️ 服务老师满了没人顶</small>
+                            </td>
                         </tr>
                     </tbody>
                 </table>

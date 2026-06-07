@@ -23,13 +23,16 @@ public class QrBackupPool {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private PoolRole role = PoolRole.receptionist;
 
     @Column(name = "sort_order")
+    @Builder.Default
     private Integer sortOrder = 0;
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private PoolStatus status = PoolStatus.standby;
 
     @Column(name = "created_at", updatable = false)

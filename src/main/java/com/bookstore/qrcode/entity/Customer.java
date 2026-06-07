@@ -25,6 +25,7 @@ public class Customer {
     private String avatar;
 
     @Column(nullable = false)
+    @Builder.Default
     private Integer type = 1;
 
     @Column(length = 100)
@@ -44,6 +45,7 @@ public class Customer {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private CustomerStatus status = CustomerStatus.active;
 
     @Column(name = "add_time")

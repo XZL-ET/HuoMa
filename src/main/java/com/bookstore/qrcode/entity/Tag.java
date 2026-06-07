@@ -20,6 +20,7 @@ public class Tag {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private TagType type = TagType.manual;
 
     @Column(name = "parent_id")

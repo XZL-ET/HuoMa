@@ -23,22 +23,27 @@ public class QrAgent {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AgentRole role = AgentRole.receptionist;
 
     @Column(name = "daily_max", nullable = false)
+    @Builder.Default
     private Integer dailyMax = 200;
 
     @Column(name = "daily_current")
+    @Builder.Default
     private Integer dailyCurrent = 0;
 
     @Column(name = "service_daily_max")
     private Integer serviceDailyMax;
 
     @Column(name = "sort_order")
+    @Builder.Default
     private Integer sortOrder = 0;
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AgentStatus status = AgentStatus.active;
 
     @Column(name = "replaced_by", length = 100)

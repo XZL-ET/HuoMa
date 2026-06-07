@@ -29,22 +29,35 @@
                 </div>
             </div>
 
-            <h6 class="mb-3">员工配置（JSON 格式）</h6>
+            <h6 class="mb-3">员工配置</h6>
+            <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
             <div class="row g-3 mb-3">
                 <div class="col-md-6">
-                    <label class="form-label">接待员</label>
-                    <textarea name="agentsJson" class="form-control" rows="2"
-                              placeholder='[{"userid":"li","dailyMax":200}]'></textarea>
+                    <label class="form-label">服务老师 <span class="text-danger">*</span></label>
+                    <select name="serviceTeacherUserid" class="form-select" required>
+                        <option value="">请选择...</option>
+                        <option th:each="u : ${userList}"
+                                th:value="${u.userid}"
+                                th:text="${u.name + ' (' + u.userid + ')'}"></option>
+                    </select>
+                    <small class="text-muted">活码主联系人，客户扫码优先加他。日接上限默认 1000</small>
                 </div>
                 <div class="col-md-6">
-                    <label class="form-label">服务老师</label>
-                    <textarea name="serviceTeacherJson" class="form-control" rows="2"
-                              placeholder='{"userid":"zhang","serviceDailyMax":1000}'></textarea>
+                    <label class="form-label">服务老师日接上限</label>
+                    <input type="number" name="serviceDailyMax" class="form-control" value="1000" min="1" max="5000">
+                    <small class="text-muted">达到预警阈值后自动激活后备接待员</small>
                 </div>
                 <div class="col-md-6">
-                    <label class="form-label">后备员工</label>
-                    <textarea name="backupsJson" class="form-control" rows="2"
-                              placeholder='["wang","zhao"]'></textarea>
+                    <label class="form-label">后备接待员</label>
+                    <select name="receptionistUserid" class="form-select">
+                        <option value="">无需后备（可多选，逗号分隔输入）</option>
+                        <option th:each="u : ${userList}"
+                                th:value="${u.userid}"
+                                th:text="${u.name + ' (' + u.userid + ')'}"></option>
+                    </select>
+                    <input type="text" name="receptionistUserid" class="form-control form-control-sm mt-1"
+                           placeholder="或手动输入userid，多个用逗号分隔（覆盖下拉选择）">
+                    <small class="text-muted">服务老师满员后再激活这些人。日限默认 200</small>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">欢迎语文案</label>

@@ -1,7 +1,11 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.CustomerService;
+import com.bookstore.qrcode.service.AgentBindService;
+import com.bookstore.qrcode.repository.AgentRepository;
+import com.bookstore.qrcode.repository.QrCodeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -18,6 +22,9 @@ import java.time.LocalDateTime;
 public class CustomerController {
 
     private final CustomerService customerService;
+    private final AgentBindService agentBindService;
+    private final AgentRepository agentRepo;
+    private final QrCodeRepository qrCodeRepo;
 
     @GetMapping
     public String list(@RequestParam(required = false) String keyword,
@@ -47,6 +54,8 @@ public class CustomerController {
         model.addAttribute("status", status);
         model.addAttribute("total", customerService.countTotal());
         model.addAttribute("todayCount", customerService.countToday());
+        model.addAttribute("agents", agentRepo.findAll());
+        model.addAttribute("qrCodes", qrCodeRepo.findAll());
         return "customer/list";
     }
 
@@ -56,5 +65,29 @@ public class CustomerController {
         model.addAttribute("customer", customer);
         model.addAttribute("tags", customerService.getTags(id));
         return "customer/detail";
+    }
+
+    @PostMapping("/create-test")
+    public String createTest(@RequestParam String agentUserid,
+                             @RequestParam(required = false) String qrCodeId,
+                             @RequestParam(defaultValue = "测试客户") String name) {
+        String externalId = "test_" + System.currentTimeMillis();
+        String schoolId = null;
+        Long qrId = null;
+        if (qrCodeId != null && !qrCodeId.isBlank()) {
+            try {
+                qrId = Long.parseLong(qrCodeId);
+                QrCode qr = qrCodeRepo.findById(qrId).orElse(null);
+                if (qr != null) schoolId = qr.getSchoolId();
+            } catch (NumberFormatException ignored) {}
+        }
+        customerService.createManual(name, externalId, agentUserid, schoolId, qrId);
+
+        // 同步更新员工日计数 + 触发轮换检查
+        if (schoolId != null) {
+            agentBindService.incrementDailyCount(agentUserid, schoolId);
+        }
+
+        return "redirect:/customers";
     }
 }

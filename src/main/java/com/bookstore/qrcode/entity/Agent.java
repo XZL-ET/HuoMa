@@ -26,28 +26,35 @@ public class Agent {
 
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private AgentRole role = AgentRole.receptionist;
 
     @Column(name = "daily_total_cap", nullable = false)
+    @Builder.Default
     private Integer dailyTotalCap = 500;
 
     @Column(name = "daily_total_used")
+    @Builder.Default
     private Integer dailyTotalUsed = 0;
 
     @Column(name = "overall_status", nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     private OverallStatus overallStatus = OverallStatus.normal;
 
     @Column(name = "status_reason", columnDefinition = "JSON")
     private String statusReason;
 
     @Column(name = "total_added")
+    @Builder.Default
     private Integer totalAdded = 0;
 
     @Column(name = "total_deleted")
+    @Builder.Default
     private Integer totalDeleted = 0;
 
     @Column(name = "melted_count_24h")
+    @Builder.Default
     private Integer meltedCount24h = 0;
 
     @Column(name = "created_at", updatable = false)
