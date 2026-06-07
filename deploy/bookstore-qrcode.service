@@ -1,0 +1,16 @@
+[Unit]
+Description=Bookstore WeCom QR Code Platform
+After=network.target mysql.service redis.service
+Wants=mysql.service redis.service
+
+[Service]
+User=root
+WorkingDirectory=/opt/bookstore-qrcode
+ExecStart=/usr/bin/java -jar -Xms1g -Xmx3g -XX:+UseG1GC -Duser.timezone=Asia/Shanghai /opt/bookstore-qrcode/app.jar
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/opt/bookstore-qrcode/logs/app.log
+StandardError=append:/opt/bookstore-qrcode/logs/error.log
+
+[Install]
+WantedBy=multi-user.target
