@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='活码详情', content=~{::main})}">
+<main>
+    <div class="row g-3">
+        <!-- 基础信息 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h5 th:text="${qr.schoolName}">学校名</h5>
+                        <div class="text-muted small">
+                            学校ID：<code th:text="${qr.schoolId}"></code> |
+                            地区：<span th:text="${qr.regionCity + ' ' + qr.regionDistrict}"></span> |
+                            创建方式：<span th:text="${qr.createMode.name()}"></span>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <span class="badge fs-6"
+                              th:classappend="${qr.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
+                              th:text="${qr.status.name()}"></span>
+                        <form th:action="@{/qrcodes/{id}/toggle-status(id=${qr.id})}" method="post" class="d-inline">
+                            <button class="btn btn-sm btn-outline-warning">
+                                <span th:text="${qr.status.name() == 'active' ? '暂停' : '启用'}"></span>
+                            </button>
+                        </form>
+                        <form th:action="@{/qrcodes/{id}/delete(id=${qr.id})}" method="post" class="d-inline"
+                              onsubmit="return confirm('确定要删除该活码吗？已打印的二维码将失效。')">
+                            <button class="btn btn-sm btn-outline-danger">删除</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 值守接待员 -->
+        <div class="col-md-6">
+            <div class="card p-4">
+                <h6>值守接待员</h6>
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>姓名</th><th>日限</th><th>角色</th><th>状态</th></tr></thead>
+                    <tbody>
+                        <tr th:each="a : ${agents}" th:if="${a.role.name() == 'receptionist' || a.role.name() == 'dual'}">
+                            <td th:text="${a.agentUserid}"></td>
+                            <td th:text="${a.dailyMax}"></td>
+                            <td th:text="${a.role.name()}"></td>
+                            <td>
+                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
+                                      th:text="${a.status.name()}"></span>
+                            </td>
+                        </tr>
+                        <tr th:if="${agents.stream().filter(a -> a.role.name() == 'receptionist' || a.role.name() == 'dual').toList().isEmpty()}">
+                            <td colspan="4" class="text-muted text-center">暂未配置接待员</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 服务老师 -->
+        <div class="col-md-6">
+            <div class="card p-4">
+                <h6>服务老师（继承目标）</h6>
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>姓名</th><th>日接上限</th><th>状态</th></tr></thead>
+                    <tbody>
+                        <tr th:each="a : ${agents}" th:if="${a.role.name() == 'service'}">
+                            <td th:text="${a.agentUserid}"></td>
+                            <td th:text="${a.serviceDailyMax}"></td>
+                            <td>
+                                <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
+                                      th:text="${a.status.name()}"></span>
+                            </td>
+                        </tr>
+                        <tr th:if="${agents.stream().filter(a -> a.role.name() == 'service').toList().isEmpty()}">
+                            <td colspan="3" class="text-muted text-center">暂未配置服务老师</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 后备池 -->
+        <div class="col-md-6">
+            <div class="card p-4">
+                <h6>后备池（<span th:text="${backups.size()}"></span>人待命）</h6>
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>姓名</th><th>角色</th><th>优先级</th><th>状态</th></tr></thead>
+                    <tbody>
+                        <tr th:each="b : ${backups}">
+                            <td th:text="${b.agentUserid}"></td>
+                            <td th:text="${b.role.name()}"></td>
+                            <td th:text="${b.sortOrder}"></td>
+                            <td><span class="badge bg-info">待命</span></td>
+                        </tr>
+                        <tr th:if="${backups.isEmpty()}">
+                            <td colspan="4" class="text-muted text-center">后备池为空</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 轮换设置 -->
+        <div class="col-md-6">
+            <div class="card p-4">
+                <h6>轮换设置</h6>
+                <div class="mb-2">
+                    预警阈值：<strong th:text="${qr.warnRatio + '%'}"></strong> |
+                    紧急阈值：<strong th:text="${qr.urgentRatio + '%'}"></strong>
+                </div>
+                <div class="d-flex gap-2">
+                    <form th:action="@{/qrcodes/{id}/rotate-mode(id=${qr.id})}" method="post" class="d-flex gap-2 align-items-center">
+                        <select name="mode" class="form-select form-select-sm" style="width:auto;">
+                            <option value="auto" th:selected="${qr.rotateMode.name() == 'auto'}">全自动</option>
+                            <option value="manual" th:selected="${qr.rotateMode.name() == 'manual'}">人工审核</option>
+                        </select>
+                        <button class="btn btn-sm btn-primary">切换</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-3">
+        <a href="/qrcodes" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
+    </div>
+</main>
+</html>

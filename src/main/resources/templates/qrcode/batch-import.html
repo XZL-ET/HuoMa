@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='批量导入活码', content=~{::main})}">
+<main>
+    <div class="card p-4 mx-auto" style="max-width: 600px;">
+        <h5 class="mb-3">批量导入活码</h5>
+        <div class="alert alert-info">
+            <strong>Excel 格式要求：</strong><br>
+            第1行：表头（学校名称 / 学校ID / 市 / 区 / 备注）<br>
+            第2行起：数据行，每行一个学校
+        </div>
+        <form method="post" th:action="@{/qrcodes/batch-import}" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label class="form-label">选择 Excel 文件 (.xlsx)</label>
+                <input type="file" name="file" class="form-control" accept=".xlsx" required>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="bi bi-upload"></i> 开始导入</button>
+            <a href="/qrcodes" class="btn btn-outline-secondary">返回列表</a>
+        </form>
+
+        <!-- 导入结果 -->
+        <th:block th:if="${importResult}">
+            <hr class="my-4">
+            <h6>导入结果</h6>
+            <div class="alert" th:classappend="${importResult.fail == 0 ? 'alert-success' : 'alert-warning'}">
+                共 <strong th:text="${importResult.total}"></strong> 条，
+                成功 <strong th:text="${importResult.success}"></strong> 条，
+                失败 <strong th:text="${importResult.fail}"></strong> 条
+            </div>
+            <div th:if="${importResult.fail > 0}">
+                <table class="table table-sm">
+                    <thead><tr><th>行号</th><th>学校</th><th>状态</th><th>原因</th></tr></thead>
+                    <tbody>
+                        <tr th:each="d : ${importResult.details}">
+                            <td th:text="${d.row}"></td>
+                            <td th:text="${d.school}"></td>
+                            <td>
+                                <span class="badge" th:classappend="${d.status == 'ok' ? 'bg-success' : 'bg-danger'}"
+                                      th:text="${d.status == 'ok' ? '成功' : '失败'}"></span>
+                            </td>
+                            <td th:text="${d.reason}" class="text-danger small"></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </th:block>
+    </div>
+</main>
+</html>

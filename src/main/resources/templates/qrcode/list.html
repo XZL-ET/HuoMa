@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='活码管理', content=~{::main})}">
+<main>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">
+            活码管理
+            <small class="text-muted fs-6 ms-2" th:text="'共 ' + ${qrCodes.totalElements} + ' 条'">共 0 条</small>
+        </h4>
+        <div class="btn-group">
+            <a href="/qrcodes/create" class="btn btn-primary"><i class="bi bi-plus-lg"></i> 手动创建</a>
+            <a href="/qrcodes/batch-import" class="btn btn-outline-primary"><i class="bi bi-upload"></i> 批量导入</a>
+        </div>
+    </div>
+
+    <!-- 搜索栏 -->
+    <div class="card p-3 mb-3">
+        <form class="row g-2" method="get" th:action="@{/qrcodes}">
+            <div class="col-md-3">
+                <input type="text" name="keyword" class="form-control" placeholder="搜索学校名/ID"
+                       th:value="${keyword}">
+            </div>
+            <div class="col-md-2">
+                <select name="city" class="form-select">
+                    <option value="">全部城市</option>
+                    <option value="A市" th:selected="${city == 'A市'}">A市</option>
+                    <option value="B市" th:selected="${city == 'B市'}">B市</option>
+                    <option value="C市" th:selected="${city == 'C市'}">C市</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="district" class="form-select">
+                    <option value="">全部区县</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="status" class="form-select">
+                    <option value="">全部状态</option>
+                    <option value="active" th:selected="${status == 'active'}">✅ 正常</option>
+                    <option value="paused" th:selected="${status == 'paused'}">⏸ 暂停</option>
+                    <option value="full" th:selected="${status == 'full'}">🔴 满员</option>
+                    <option value="no_agent" th:selected="${status == 'no_agent'}">⚫ 无可用</option>
+                </select>
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 表格 -->
+    <div class="card p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>学校名称</th>
+                        <th>城市</th>
+                        <th>区县</th>
+                        <th>创建方式</th>
+                        <th>轮换模式</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="qr : ${qrCodes.content}">
+                        <td>
+                            <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
+                               class="text-decoration-none fw-semibold">学校名</a>
+                        </td>
+                        <td th:text="${qr.regionCity}"></td>
+                        <td th:text="${qr.regionDistrict}"></td>
+                        <td>
+                            <span class="badge bg-secondary"
+                                  th:text="${qr.createMode.name() == 'batch_import' ? '批量导入' : '手动创建'}"></span>
+                        </td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${qr.rotateMode.name() == 'auto' ? 'bg-success' : 'bg-warning text-dark'}"
+                                  th:text="${qr.rotateMode.name() == 'auto' ? '自动' : '人工'}"></span>
+                        </td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${qr.status.name() == 'active' ? 'bg-success' : (qr.status.name() == 'full' ? 'bg-danger' : 'bg-secondary')}"
+                                  th:switch="${qr.status.name()}">
+                                <span th:case="'active'">正常</span>
+                                <span th:case="'paused'">暂停</span>
+                                <span th:case="'full'">满员</span>
+                                <span th:case="'no_agent'">无可用</span>
+                            </span>
+                        </td>
+                        <td th:text="${#temporals.format(qr.createdAt, 'yyyy-MM-dd HH:mm')}"></td>
+                        <td>
+                            <a th:href="@{/qrcodes/{id}(id=${qr.id})}"
+                               class="btn btn-sm btn-outline-secondary">详情</a>
+                        </td>
+                    </tr>
+                    <tr th:if="${qrCodes.content.isEmpty()}">
+                        <td colspan="8" class="text-center text-muted py-4">
+                            暂无活码数据，点击"手动创建"或"批量导入"开始
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <nav th:if="${qrCodes.totalPages > 1}" class="mt-3">
+        <ul class="pagination justify-content-center">
+            <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
+                <a class="page-link"
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number - 1})}">上一页</a>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link" th:text="'第 ' + ${qrCodes.number + 1} + ' / ' + ${qrCodes.totalPages} + ' 页'"></span>
+            </li>
+            <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
+                <a class="page-link"
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number + 1})}">下一页</a>
+            </li>
+        </ul>
+    </nav>
+</main>
+</html>
