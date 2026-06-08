@@ -1,11 +1,14 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.CustomerService;
 import com.bookstore.qrcode.service.AgentBindService;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -15,6 +18,8 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Controller
 @RequestMapping("/customers")
@@ -25,6 +30,7 @@ public class CustomerController {
     private final AgentBindService agentBindService;
     private final AgentRepository agentRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final WecomApiClient wecomApiClient;
 
     @GetMapping
     public String list(@RequestParam(required = false) String keyword,
@@ -56,6 +62,28 @@ public class CustomerController {
         model.addAttribute("todayCount", customerService.countToday());
         model.addAttribute("agents", agentRepo.findAll());
         model.addAttribute("qrCodes", qrCodeRepo.findAll());
+
+        // 构建 userid → 姓名 映射
+        Map<String, String> agentNameMap = new HashMap<>();
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                for (JsonNode u : result.get("userlist")) {
+                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
+                }
+            }
+        } catch (Exception ignored) {}
+        // fallback: 从 Agent 表补充
+        for (Agent a : agentRepo.findAll()) {
+            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
+        }
+        model.addAttribute("agentNameMap", agentNameMap);
+
+        // 构建 schoolId → 学校名 映射
+        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+            .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
+        model.addAttribute("schoolNameMap", schoolNameMap);
+
         return "customer/list";
     }
 

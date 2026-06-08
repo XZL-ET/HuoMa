@@ -57,9 +57,12 @@ public class WecomCallbackValidator {
             }
 
             // 验证签名
-            String signature = sha1(config.getCallbackToken(), timestamp, nonce, encrypt);
+            String callbackToken = config.getCallbackToken();
+            log.info("回调签名调试: token={}, timestamp={}, nonce={}, encrypt前20字符={}",
+                callbackToken, timestamp, nonce, encrypt != null ? encrypt.substring(0, Math.min(20, encrypt.length())) : "null");
+            String signature = sha1(callbackToken, timestamp, nonce, encrypt);
             if (!signature.equals(msgSignature)) {
-                log.error("回调消息签名校验失败");
+                log.error("回调消息签名校验失败, 期望={}, 实际={}", msgSignature, signature);
                 throw new RuntimeException("回调签名校验失败");
             }
 
@@ -123,20 +126,26 @@ public class WecomCallbackValidator {
      * 简单提取 XML 标签内容（生产环境建议用 JAXB/XStream）。
      */
     private String extractXmlTag(String xml, String tag) {
-        String startTag = "<" + tag + ">";
-        String endTag = "</" + tag + ">";
+        // CDATA 包裹优先（企微回调均使用 CDATA）
+        String startTag = "<" + tag + "><![CDATA[";
+        String endTag = "]]></" + tag + ">";
         int start = xml.indexOf(startTag);
         int end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
             return xml.substring(start + startTag.length(), end);
         }
-        // CDATA 包裹
-        startTag = "<" + tag + "><![CDATA[";
-        endTag = "]]></" + tag + ">";
+        // 标准格式
+        startTag = "<" + tag + ">";
+        endTag = "</" + tag + ">";
         start = xml.indexOf(startTag);
         end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
-            return xml.substring(start + startTag.length(), end);
+            String content = xml.substring(start + startTag.length(), end);
+            // 防御：如果内容仍包含 CDATA，去掉
+            if (content.startsWith("<![CDATA[")) {
+                content = content.substring(9, content.length() - 3);
+            }
+            return content;
         }
         return null;
     }

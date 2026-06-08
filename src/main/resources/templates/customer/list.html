@@ -96,9 +96,9 @@
                                th:text="${c.name}">昵称</a>
                         </td>
                         <td th:text="${c.addTime != null ? #temporals.format(c.addTime, 'yyyy-MM-dd HH:mm') : '-'}"></td>
-                        <td th:text="${c.addedAgent ?: '-'}"></td>
-                        <td th:text="${c.currentAgent ?: '-'}"></td>
-                        <td th:text="${c.schoolId ?: '-'}"></td>
+                        <td th:text="${agentNameMap.getOrDefault(c.addedAgent, c.addedAgent ?: '-')}"></td>
+                        <td th:text="${agentNameMap.getOrDefault(c.currentAgent, c.currentAgent ?: '-')}"></td>
+                        <td th:text="${schoolNameMap.getOrDefault(c.schoolId, c.schoolId ?: '-')}"></td>
                         <td>
                             <span class="badge" th:classappend="${c.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
                                   th:text="${c.status.name() == 'active' ? '活跃' : '已删除'}"></span>

@@ -144,40 +144,60 @@ public class CallbackWorker {
 
     /**
      * 添加成功：打标 → 记录客户 → 记数 → 速率检测 → 继承。
+     * 每一步独立 catch，单步失败不影响后续处理。
      */
     private void handleAddSuccess(JsonNode event) {
-        try {
-            String externalUserId = getField(event, "external_userid");
-            String userId = getField(event, "userid");
-            String state = getField(event, "state");
-            String rawXml = event.has("raw_xml") ? event.get("raw_xml").asText() : null;
+        String externalUserId = getField(event, "external_userid");
+        String userId = getField(event, "userid");
+        String state = getField(event, "state");
 
-            if (externalUserId == null || userId == null) {
-                log.warn("添加成功事件缺少关键字段: external={}, userid={}", externalUserId, userId);
-                return;
-            }
-
-            // ① 速率检测（防封）
-            rateLimiterService.recordAdd(userId);
-
-            // ② 自动打标（市/区/学校）
-            if (state != null) {
-                tagService.autoTag(externalUserId, userId, state);
-            }
-
-            // ③ 记录/更新客户信息
-            Long customerId = customerService.upsertFromCallback(
-                externalUserId, userId, state);
-
-            // ④ 员工日计数 +1
-            agentBindService.incrementDailyCount(userId, state);
-
-            // ⑤ 触发在职继承
-            transferService.initiate(customerId, userId, externalUserId, state);
-
-        } catch (Exception e) {
-            log.error("处理添加成功事件失败: external={}", getField(event, "external_userid"), e);
+        if (externalUserId == null || userId == null) {
+            log.warn("添加成功事件缺少关键字段: external={}, userid={}", externalUserId, userId);
+            return;
         }
+
+        // ① 速率检测（防封）
+        try {
+            rateLimiterService.recordAdd(userId);
+        } catch (Exception e) {
+            log.error("速率检测失败: userid={}", userId, e);
+        }
+
+        // ② 自动打标（市/区/学校）— 失败不阻塞后续
+        if (state != null) {
+            try {
+                tagService.autoTag(externalUserId, userId, state);
+            } catch (Exception e) {
+                log.error("自动打标失败（非阻塞）: external={}, state={}", externalUserId, state, e);
+            }
+        }
+
+        // ③ 记录/更新客户信息
+        Long customerId = null;
+        try {
+            customerId = customerService.upsertFromCallback(externalUserId, userId, state);
+        } catch (Exception e) {
+            log.error("记录客户失败（非阻塞）: external={}", externalUserId, e);
+        }
+
+        // ④ 员工日计数 +1
+        try {
+            agentBindService.incrementDailyCount(userId, state);
+        } catch (Exception e) {
+            log.error("日计数失败: userid={}, state={}", userId, state, e);
+        }
+
+        // ⑤ 触发在职继承
+        if (customerId != null) {
+            try {
+                transferService.initiate(customerId, userId, externalUserId, state);
+            } catch (Exception e) {
+                log.error("在职继承失败（非阻塞）: customerId={}", customerId, e);
+            }
+        }
+
+        log.info("添加成功处理完成: external={}, userid={}, state={}, customerId={}",
+            externalUserId, userId, state, customerId);
     }
 
     private String getField(JsonNode event, String field) {
@@ -187,19 +207,25 @@ public class CallbackWorker {
 
     private String extractXmlTag(String xml, String tag) {
         if (xml == null) return null;
-        String startTag = "<" + tag + ">";
-        String endTag = "</" + tag + ">";
+        // CDATA 包裹优先（企微回调均使用 CDATA）
+        String startTag = "<" + tag + "><![CDATA[";
+        String endTag = "]]></" + tag + ">";
         int start = xml.indexOf(startTag);
         int end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
             return xml.substring(start + startTag.length(), end);
         }
-        startTag = "<" + tag + "><![CDATA[";
-        endTag = "]]></" + tag + ">";
+        // 标准格式
+        startTag = "<" + tag + ">";
+        endTag = "</" + tag + ">";
         start = xml.indexOf(startTag);
         end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
-            return xml.substring(start + startTag.length(), end);
+            String content = xml.substring(start + startTag.length(), end);
+            if (content.startsWith("<![CDATA[")) {
+                content = content.substring(9, content.length() - 3);
+            }
+            return content;
         }
         return null;
     }

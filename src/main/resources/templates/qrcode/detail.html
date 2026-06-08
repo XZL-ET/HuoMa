@@ -53,14 +53,17 @@
                 <h6>
                     📱 活码联系人
                     <small class="text-muted">（扫码后客户随机分配到这几位中的一位）</small>
+                    <button class="btn btn-sm btn-outline-success float-end" data-bs-toggle="modal" data-bs-target="#addAgentModal">
+                        <i class="bi bi-plus-lg"></i> 新增联系人
+                    </button>
                 </h6>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th></tr></thead>
+                    <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
                     <tbody>
                         <!-- 服务老师 -->
                         <tr th:each="a : ${services}">
                             <td>
-                                <strong th:text="${a.agentUserid}"></strong>
+                                <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
                                 <span class="badge bg-primary ms-1">服务老师</span>
                             </td>
                             <td>🎯 主联系人</td>
@@ -73,11 +76,17 @@
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : (a.status.name() == 'full' ? 'bg-warning' : 'bg-danger')}"
                                       th:text="${a.status.name() == 'active' ? '接客中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
+                            <td class="text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
+                                        th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
+                                        data-bs-toggle="modal" data-bs-target="#editAgentModal"
+                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                            </td>
                         </tr>
                         <!-- 已激活的接待员 -->
                         <tr th:each="a : ${receptionists}">
                             <td>
-                                <strong th:text="${a.agentUserid}"></strong>
+                                <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
                                 <span class="badge bg-info ms-1">接待员</span>
                             </td>
                             <td>🔁 后备顶上</td>
@@ -90,9 +99,20 @@
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
                                       th:text="${a.status.name() == 'active' ? '接客中' : a.status.name()}"></span>
                             </td>
+                            <td class="text-nowrap">
+                                <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
+                                        th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
+                                        data-bs-toggle="modal" data-bs-target="#editAgentModal"
+                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                                <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
+                                      method="post" class="d-inline"
+                                      onsubmit="return confirm('确定要将该联系人从活码中移除吗？')">
+                                    <button class="btn btn-sm btn-outline-danger" title="移除"><i class="bi bi-trash"></i></button>
+                                </form>
+                            </td>
                         </tr>
                         <tr th:if="${services.isEmpty() and receptionists.isEmpty()}">
-                            <td colspan="5" class="text-muted text-center">暂未配置联系人</td>
+                            <td colspan="6" class="text-muted text-center">暂未配置联系人</td>
                         </tr>
                     </tbody>
                 </table>
@@ -115,18 +135,40 @@
                 <h6>
                     🛡️ 后备接待员
                     <span class="badge bg-secondary" th:text="${backups.size()} + '人待命'"></span>
+                    <button class="btn btn-sm btn-outline-primary float-end" data-bs-toggle="modal" data-bs-target="#addBackupModal">
+                        <i class="bi bi-plus-lg"></i> 新增
+                    </button>
                 </h6>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>优先级</th><th>日限</th><th>状态</th></tr></thead>
+                    <thead><tr><th>姓名</th><th>优先级</th><th>日限</th><th>状态</th><th style="width:120px;">操作</th></tr></thead>
                     <tbody>
-                        <tr th:each="b : ${backups}">
-                            <td th:text="${b.agentUserid}"></td>
+                        <tr th:each="b,iter : ${backups}">
+                            <td th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid)}"></td>
                             <td><span class="badge bg-light text-dark" th:text="'#' + ${b.sortOrder}"></span></td>
                             <td>200</td>
                             <td><span class="badge bg-info">待命</span></td>
+                            <td class="text-nowrap">
+                                <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
+                                      method="post" class="d-inline">
+                                    <input type="hidden" name="direction" value="up">
+                                    <button class="btn btn-sm btn-outline-secondary" title="上移"
+                                            th:disabled="${iter.first}"><i class="bi bi-chevron-up"></i></button>
+                                </form>
+                                <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
+                                      method="post" class="d-inline">
+                                    <input type="hidden" name="direction" value="down">
+                                    <button class="btn btn-sm btn-outline-secondary" title="下移"
+                                            th:disabled="${iter.last}"><i class="bi bi-chevron-down"></i></button>
+                                </form>
+                                <form th:action="@{/qrcodes/{qid}/backups/{bid}/remove(qid=${qr.id},bid=${b.id})}"
+                                      method="post" class="d-inline"
+                                      onsubmit="return confirm('确定要移除该后备接待员吗？')">
+                                    <button class="btn btn-sm btn-outline-danger" title="移除"><i class="bi bi-trash"></i></button>
+                                </form>
+                            </td>
                         </tr>
                         <tr th:if="${backups.isEmpty()}">
-                            <td colspan="4" class="text-muted text-center">
+                            <td colspan="5" class="text-muted text-center">
                                 后备池为空
                                 <br><small class="text-warning">⚠️ 服务老师满了没人顶</small>
                             </td>
@@ -157,8 +199,201 @@
         </div>
     </div>
 
+    <!-- 新增后备接待员弹窗 -->
+    <div class="modal fade" id="addBackupModal" tabindex="-1" aria-labelledby="addBackupModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addBackupModalLabel">
+                        <i class="bi bi-person-plus"></i> 选择后备接待员
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <div class="modal-body">
+                    <div th:if="${loadError}" class="alert alert-warning py-1 small" th:text="${loadError}"></div>
+                    <!-- 搜索过滤 -->
+                    <div class="mb-3">
+                        <input type="text" id="backupSearchInput" class="form-control form-control-sm"
+                               placeholder="🔍 搜索姓名或账号..." oninput="filterBackupCandidates()">
+                    </div>
+                    <!-- 已加入的提示 -->
+                    <div th:if="${!backups.isEmpty()}" class="alert alert-info py-1 small mb-2">
+                        已在后备池：
+                        <span th:each="b,stat : ${backups}"
+                              th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid) + (stat.last ? '' : '、')}"></span>
+                    </div>
+                    <!-- 员工列表 -->
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <table class="table table-sm table-hover mb-0" id="backupCandidateTable">
+                            <thead class="table-light sticky-top">
+                                <tr><th>姓名</th><th>账号</th><th style="width:100px;"></th></tr>
+                            </thead>
+                            <tbody>
+                                <tr th:each="u : ${userList}" class="backup-candidate-row"
+                                    th:data-name="${u.name.toLowerCase() + ' ' + u.userid.toLowerCase()}">
+                                    <td>
+                                        <strong th:text="${u.name}"></strong>
+                                    </td>
+                                    <td><code class="small" th:text="${u.userid}"></code></td>
+                                    <td>
+                                        <form th:action="@{/qrcodes/{id}/backups(id=${qr.id})}" method="post" class="d-inline">
+                                            <input type="hidden" name="agentUserid" th:value="${u.userid}">
+                                            <button class="btn btn-sm btn-outline-success"
+                                                    th:disabled="${#lists.contains(backups.![agentUserid], u.userid)}">
+                                                <i class="bi bi-plus-circle"></i> 加入后备
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                <tr th:if="${userList.isEmpty() and loadError == null}">
+                                    <td colspan="3" class="text-muted text-center">暂无员工数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新增活码联系人弹窗 -->
+    <div class="modal fade" id="addAgentModal" tabindex="-1" aria-labelledby="addAgentModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addAgentModalLabel">
+                        <i class="bi bi-person-plus"></i> 新增活码联系人
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <div class="modal-body">
+                    <div th:if="${loadError}" class="alert alert-warning py-1 small" th:text="${loadError}"></div>
+                    <div class="mb-3">
+                        <input type="text" id="agentSearchInput" class="form-control form-control-sm"
+                               placeholder="🔍 搜索姓名或账号..." oninput="filterAgentCandidates()">
+                    </div>
+                    <div th:if="${!contactUserids.isEmpty()}" class="alert alert-info py-1 small mb-2">
+                        已在联系人中：
+                        <span th:each="uid,stat : ${contactUserids}"
+                              th:text="${agentNameMap.getOrDefault(uid, uid) + (stat.last ? '' : '、')}"></span>
+                    </div>
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <table class="table table-sm table-hover mb-0" id="agentCandidateTable">
+                            <thead class="table-light sticky-top">
+                                <tr><th>姓名</th><th>账号</th><th style="width:100px;"></th></tr>
+                            </thead>
+                            <tbody>
+                                <tr th:each="u : ${userList}" class="agent-candidate-row"
+                                    th:data-name="${u.name.toLowerCase() + ' ' + u.userid.toLowerCase()}"
+                                    th:if="${!#lists.contains(contactUserids, u.userid)}">
+                                    <td><strong th:text="${u.name}"></strong></td>
+                                    <td><code class="small" th:text="${u.userid}"></code></td>
+                                    <td>
+                                        <form th:action="@{/qrcodes/{id}/agents(id=${qr.id})}" method="post" class="d-inline">
+                                            <input type="hidden" name="agentUserid" th:value="${u.userid}">
+                                            <button class="btn btn-sm btn-outline-success">
+                                                <i class="bi bi-plus-circle"></i> 加入
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                <tr th:if="${userList.isEmpty() and loadError == null}">
+                                    <td colspan="3" class="text-muted text-center">暂无员工数据</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑活码联系人弹窗 -->
+    <div class="modal fade" id="editAgentModal" tabindex="-1" aria-labelledby="editAgentModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="editAgentModalLabel">
+                        <i class="bi bi-pencil"></i> 编辑联系人 — <span class="agent-name-display"></span>
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <form method="post" id="editAgentForm">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label small">日添加上限</label>
+                            <input type="number" name="dailyMax" class="form-control form-control-sm"
+                                   min="1" max="9999" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small">角色</label>
+                            <select name="role" class="form-select form-select-sm">
+                                <option value="service">服务老师</option>
+                                <option value="receptionist">接待员</option>
+                                <option value="dual">双角色</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small">优先级（sortOrder）</label>
+                            <input type="number" name="sortOrder" class="form-control form-control-sm"
+                                   min="0" max="999">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <div class="mt-3">
         <a href="/qrcodes" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
     </div>
+
+    <script th:inline="javascript">
+        const qrId = /*[[ ${qr.id} ]]*/ 0;
+
+        function filterBackupCandidates() {
+            const input = document.getElementById('backupSearchInput');
+            const filter = input.value.toLowerCase().trim();
+            const rows = document.querySelectorAll('.backup-candidate-row');
+            rows.forEach(row => {
+                const text = row.getAttribute('data-name');
+                row.style.display = (!filter || text.includes(filter)) ? '' : 'none';
+            });
+        }
+
+        function filterAgentCandidates() {
+            const input = document.getElementById('agentSearchInput');
+            const filter = input.value.toLowerCase().trim();
+            const rows = document.querySelectorAll('.agent-candidate-row');
+            rows.forEach(row => {
+                const text = row.getAttribute('data-name');
+                row.style.display = (!filter || text.includes(filter)) ? '' : 'none';
+            });
+        }
+
+        // 编辑联系人弹窗：点击编辑按钮时填充表单
+        document.querySelectorAll('.edit-agent-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const d = this.dataset;
+                const modal = document.getElementById('editAgentModal');
+                const form = document.getElementById('editAgentForm');
+                form.action = '/qrcodes/' + qrId + '/agents/' + d.id + '/update';
+                form.querySelector('[name=dailyMax]').value = d.dailymax;
+                form.querySelector('[name=role]').value = d.role;
+                form.querySelector('[name=sortOrder]').value = d.sortorder;
+                modal.querySelector('.agent-name-display').textContent = d.name + ' (' + d.userid + ')';
+            });
+        });
+    </script>
 </main>
 </html>

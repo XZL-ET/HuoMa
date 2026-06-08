@@ -31,10 +31,10 @@ spring:
       port: 6379
 
 wecom:
-  corp-id: ${WECOM_CORP_ID:}
-  corp-secret: ${WECOM_CORP_SECRET:}
-  callback-token: ${WECOM_CALLBACK_TOKEN:}
-  callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY:}
+  corp-id: ${WECOM_CORP_ID:ww36b412d53f0fe0c6}
+  corp-secret: ${WECOM_CORP_SECRET:<YOUR_WECOM_CORP_SECRET>}
+  callback-token: ${WECOM_CALLBACK_TOKEN:<YOUR_WECOM_CALLBACK_TOKEN>}
+  callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY:<YOUR_WECOM_AES_KEY>}
 
 ---
 spring:
@@ -54,3 +54,9 @@ spring:
       host: localhost
       port: 6379
       password: ${REDIS_PASSWORD:}
+
+wecom:
+  corp-id: ${WECOM_CORP_ID}
+  corp-secret: ${WECOM_CORP_SECRET}
+  callback-token: ${WECOM_CALLBACK_TOKEN}
+  callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY}

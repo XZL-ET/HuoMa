@@ -18,7 +18,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/wecom/callback")
+@RequestMapping("/api/v1/callback/wecom")
 @RequiredArgsConstructor
 public class WecomCallbackController {
 
@@ -105,21 +105,25 @@ public class WecomCallbackController {
 
     private String extractXmlTag(String xml, String tag) {
         if (xml == null) return null;
-        // 尝试标准格式
-        String startTag = "<" + tag + ">";
-        String endTag = "</" + tag + ">";
+        // CDATA 包裹优先（企微回调均使用 CDATA）
+        String startTag = "<" + tag + "><![CDATA[";
+        String endTag = "]]></" + tag + ">";
         int start = xml.indexOf(startTag);
         int end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
             return xml.substring(start + startTag.length(), end);
         }
-        // 尝试 CDATA 格式
-        startTag = "<" + tag + "><![CDATA[";
-        endTag = "]]></" + tag + ">";
+        // 标准格式
+        startTag = "<" + tag + ">";
+        endTag = "</" + tag + ">";
         start = xml.indexOf(startTag);
         end = xml.indexOf(endTag);
         if (start >= 0 && end > start) {
-            return xml.substring(start + startTag.length(), end);
+            String content = xml.substring(start + startTag.length(), end);
+            if (content.startsWith("<![CDATA[")) {
+                content = content.substring(9, content.length() - 3);
+            }
+            return content;
         }
         return null;
     }

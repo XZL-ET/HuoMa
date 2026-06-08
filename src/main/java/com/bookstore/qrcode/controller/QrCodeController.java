@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.QrAgent;
+import com.bookstore.qrcode.entity.QrBackupPool;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -15,9 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Controller
 @RequestMapping("/qrcodes")
@@ -117,8 +116,126 @@ public class QrCodeController {
                                    || a.getRole() == QrAgent.AgentRole.dual).toList());
         model.addAttribute("services",
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
-        model.addAttribute("backups", qrCodeService.getBackups(id));
+        List<QrBackupPool> backups = qrCodeService.getBackups(id);
+        model.addAttribute("backups", backups);
+
+        // 加载企业全部员工（供后备新增弹窗使用）
+        Map<String, String> agentNameMap = new HashMap<>();
+        List<Map<String, String>> userList = new ArrayList<>();
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
+                model.addAttribute("loadError", "成员列表加载失败: " + result.get("errmsg").asText());
+            } else {
+                for (JsonNode u : result.get("userlist")) {
+                    String userid = u.get("userid").asText();
+                    String name = u.get("name").asText();
+                    userList.add(Map.of("userid", userid, "name", name));
+                    agentNameMap.put(userid, name);
+                }
+            }
+        } catch (Exception e) {
+            model.addAttribute("loadError", "成员列表加载失败: " + e.getMessage());
+        }
+        model.addAttribute("userList", userList);
+        model.addAttribute("agentNameMap", agentNameMap);
+
+        // 已在活码中的 userid 列表（供"新增联系人"弹窗过滤用）
+        List<String> contactUserids = agents.stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .map(QrAgent::getAgentUserid)
+            .distinct()
+            .toList();
+        model.addAttribute("contactUserids", contactUserids);
+
         return "qrcode/detail";
+    }
+
+    /** 添加后备接待员 */
+    @PostMapping("/{id}/backups")
+    public String addBackup(@PathVariable Long id,
+                            @RequestParam String agentUserid,
+                            RedirectAttributes redirect) {
+        try {
+            qrCodeService.addBackup(id, agentUserid);
+            redirect.addFlashAttribute("message", "后备接待员已添加: " + agentUserid);
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 新增活码联系人 */
+    @PostMapping("/{id}/agents")
+    public String addAgent(@PathVariable Long id,
+                           @RequestParam String agentUserid,
+                           RedirectAttributes redirect) {
+        try {
+            qrCodeService.addAgent(id, agentUserid);
+            redirect.addFlashAttribute("message", "联系人已添加: " + agentUserid);
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 编辑活码联系人 */
+    @PostMapping("/{id}/agents/{agentId}/update")
+    public String updateAgent(@PathVariable Long id,
+                              @PathVariable Long agentId,
+                              @RequestParam(required = false) Integer dailyMax,
+                              @RequestParam(required = false) String role,
+                              @RequestParam(required = false) Integer sortOrder,
+                              RedirectAttributes redirect) {
+        try {
+            qrCodeService.updateAgent(id, agentId, dailyMax, role, sortOrder);
+            redirect.addFlashAttribute("message", "联系人已更新");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 移除活码联系人 */
+    @PostMapping("/{id}/agents/{agentId}/remove")
+    public String removeAgent(@PathVariable Long id,
+                              @PathVariable Long agentId,
+                              RedirectAttributes redirect) {
+        try {
+            qrCodeService.removeAgent(id, agentId);
+            redirect.addFlashAttribute("message", "联系人已移除");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 移除后备接待员 */
+    @PostMapping("/{id}/backups/{backupId}/remove")
+    public String removeBackup(@PathVariable Long id,
+                               @PathVariable Long backupId,
+                               RedirectAttributes redirect) {
+        try {
+            qrCodeService.removeBackup(id, backupId);
+            redirect.addFlashAttribute("message", "后备接待员已移除");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /** 调整后备接待员优先级 */
+    @PostMapping("/{id}/backups/{backupId}/move")
+    public String moveBackup(@PathVariable Long id,
+                             @PathVariable Long backupId,
+                             @RequestParam String direction,
+                             RedirectAttributes redirect) {
+        try {
+            qrCodeService.moveBackup(id, backupId, direction);
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
     }
 
     /** 删除活码 */

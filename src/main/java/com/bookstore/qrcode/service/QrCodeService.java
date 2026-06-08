@@ -167,6 +167,155 @@ public class QrCodeService {
         }
     }
 
+    // ==================== 后备池管理 ====================
+
+    @Transactional
+    public void addBackup(Long qrCodeId, String agentUserid) {
+        QrCode qr = getById(qrCodeId);
+
+        // 检查是否已在后备池中
+        List<QrBackupPool> existing = backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(
+            qrCodeId, QrBackupPool.PoolStatus.standby);
+        boolean alreadyExists = existing.stream()
+            .anyMatch(b -> b.getAgentUserid().equals(agentUserid));
+        if (alreadyExists) {
+            throw new RuntimeException("该员工已在后备池中");
+        }
+
+        // 确保 Agent 表中存在
+        ensureAgent(agentUserid, "receptionist");
+
+        // 确定排序号
+        int maxOrder = existing.stream()
+            .mapToInt(QrBackupPool::getSortOrder)
+            .max().orElse(-1);
+
+        QrBackupPool backup = QrBackupPool.builder()
+            .qrCodeId(qrCodeId)
+            .agentUserid(agentUserid)
+            .role(QrBackupPool.PoolRole.receptionist)
+            .sortOrder(maxOrder + 1)
+            .status(QrBackupPool.PoolStatus.standby)
+            .build();
+        backupRepo.save(backup);
+
+        log.info("后备接待员已添加: qrCodeId={}, agentUserid={}", qrCodeId, agentUserid);
+    }
+
+    // ==================== 活码联系人管理 ====================
+
+    @Transactional
+    public void addAgent(Long qrCodeId, String agentUserid) {
+        getById(qrCodeId);
+
+        // 检查是否已在联系人中（排除已移除的）
+        List<QrAgent> existing = qrAgentRepo.findByQrCodeId(qrCodeId);
+        boolean duplicate = existing.stream()
+            .anyMatch(a -> a.getAgentUserid().equals(agentUserid)
+                && a.getStatus() != QrAgent.AgentStatus.removed);
+        if (duplicate) {
+            throw new RuntimeException("该员工已在活码联系人中");
+        }
+
+        ensureAgent(agentUserid, "receptionist");
+
+        int maxOrder = existing.stream()
+            .mapToInt(QrAgent::getSortOrder)
+            .max().orElse(-1);
+
+        qrAgentRepo.save(QrAgent.builder()
+            .qrCodeId(qrCodeId)
+            .agentUserid(agentUserid)
+            .role(QrAgent.AgentRole.receptionist)
+            .dailyMax(200)
+            .sortOrder(maxOrder + 1)
+            .status(QrAgent.AgentStatus.active)
+            .build());
+
+        log.info("联系人已添加: qrCodeId={}, agentUserid={}", qrCodeId, agentUserid);
+    }
+
+    @Transactional
+    public void removeAgent(Long qrCodeId, Long agentId) {
+        QrAgent agent = qrAgentRepo.findById(agentId)
+            .orElseThrow(() -> new RuntimeException("联系人不存在"));
+        if (!agent.getQrCodeId().equals(qrCodeId)) {
+            throw new RuntimeException("联系人不属于该活码");
+        }
+        if (agent.getRole() == QrAgent.AgentRole.service) {
+            throw new RuntimeException("服务老师不能移除，请先更换服务老师");
+        }
+        agent.setStatus(QrAgent.AgentStatus.removed);
+        qrAgentRepo.save(agent);
+        log.info("联系人已移除: qrCodeId={}, agentUserid={}", qrCodeId, agent.getAgentUserid());
+    }
+
+    @Transactional
+    public void updateAgent(Long qrCodeId, Long agentId,
+                            Integer dailyMax, String role, Integer sortOrder) {
+        QrAgent agent = qrAgentRepo.findById(agentId)
+            .orElseThrow(() -> new RuntimeException("联系人不存在"));
+        if (!agent.getQrCodeId().equals(qrCodeId)) {
+            throw new RuntimeException("联系人不属于该活码");
+        }
+        if (dailyMax != null && dailyMax > 0) agent.setDailyMax(dailyMax);
+        if (role != null) {
+            try {
+                agent.setRole(QrAgent.AgentRole.valueOf(role));
+            } catch (IllegalArgumentException ignored) {}
+        }
+        if (sortOrder != null) agent.setSortOrder(sortOrder);
+        qrAgentRepo.save(agent);
+        log.info("联系人已更新: qrCodeId={}, agentId={}", qrCodeId, agentId);
+    }
+
+    // ==================== 后备池管理（续） ====================
+
+    @Transactional
+    public void removeBackup(Long qrCodeId, Long backupId) {
+        QrBackupPool backup = backupRepo.findById(backupId)
+            .orElseThrow(() -> new RuntimeException("后备接待员不存在"));
+        if (!backup.getQrCodeId().equals(qrCodeId)) {
+            throw new RuntimeException("后备接待员不属于该活码");
+        }
+        backupRepo.delete(backup);
+        log.info("后备接待员已移除: qrCodeId={}, agentUserid={}", qrCodeId, backup.getAgentUserid());
+    }
+
+    @Transactional
+    public void moveBackup(Long qrCodeId, Long backupId, String direction) {
+        QrBackupPool backup = backupRepo.findById(backupId)
+            .orElseThrow(() -> new RuntimeException("后备接待员不存在"));
+        if (!backup.getQrCodeId().equals(qrCodeId)) {
+            throw new RuntimeException("后备接待员不属于该活码");
+        }
+
+        List<QrBackupPool> all = backupRepo
+            .findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId, QrBackupPool.PoolStatus.standby);
+
+        int idx = -1;
+        for (int i = 0; i < all.size(); i++) {
+            if (all.get(i).getId().equals(backupId)) { idx = i; break; }
+        }
+        if (idx < 0) return;
+
+        if ("up".equals(direction) && idx > 0) {
+            QrBackupPool other = all.get(idx - 1);
+            int tmp = backup.getSortOrder();
+            backup.setSortOrder(other.getSortOrder());
+            other.setSortOrder(tmp);
+            backupRepo.save(backup);
+            backupRepo.save(other);
+        } else if ("down".equals(direction) && idx < all.size() - 1) {
+            QrBackupPool other = all.get(idx + 1);
+            int tmp = backup.getSortOrder();
+            backup.setSortOrder(other.getSortOrder());
+            other.setSortOrder(tmp);
+            backupRepo.save(backup);
+            backupRepo.save(other);
+        }
+    }
+
     // ==================== 状态更新 ====================
 
     @Transactional
