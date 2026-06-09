@@ -26,4 +26,6 @@ public class QrCodeCreateRequest {
     private String welcomeText;
     /** 收集表单 JSON */
     private String collectFormJson;
+    /** 自定义标签，逗号分隔（如 "VIP,重点校,高三优先"），客户扫码后自动打标 */
+    private String customTags;
 }

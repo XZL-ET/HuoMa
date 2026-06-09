@@ -67,6 +67,9 @@ public class QrCode {
     @Column(length = 500)
     private String remark;
 
+    @Column(name = "custom_tags", length = 500)
+    private String customTags;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

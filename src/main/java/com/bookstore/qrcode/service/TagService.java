@@ -63,6 +63,21 @@ public class TagService {
             bindCustomerTag(customer.getId(), districtTag.getId(), "system");
             bindCustomerTag(customer.getId(), schoolTag.getId(), "system");
 
+            // 活码自定义标签：客户扫码后自动打上
+            if (qr.getCustomTags() != null && !qr.getCustomTags().isBlank()) {
+                List<String> customTagIds = new ArrayList<>();
+                for (String tagName : qr.getCustomTags().split(",")) {
+                    String trimmed = tagName.trim();
+                    if (trimmed.isEmpty()) continue;
+                    Tag customTag = getOrCreateTag(trimmed, Tag.TagType.system, null);
+                    bindCustomerTag(customer.getId(), customTag.getId(), "system");
+                    customTagIds.add(customTag.getId().toString());
+                }
+                if (!customTagIds.isEmpty()) {
+                    wecomApi.markTag(externalUserId, userId, customTagIds);
+                }
+            }
+
         } catch (Exception e) {
             log.error("自动打标异常: external={}, state={}", externalUserId, state, e);
         }

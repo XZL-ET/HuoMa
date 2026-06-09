@@ -89,6 +89,7 @@ public class QrCodeService {
             .rotateMode(QrCode.RotateMode.auto)
             .createMode(QrCode.CreateMode.manual)
             .remark(req.getRemark())
+            .customTags(req.getCustomTags())
             .build();
         qr = qrCodeRepo.save(qr);
 
