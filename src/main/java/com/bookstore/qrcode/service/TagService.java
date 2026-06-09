@@ -25,9 +25,6 @@ public class TagService {
     private final QrCodeRepository qrCodeRepo;
     private final WecomApiClient wecomApi;
 
-    /** 平台标签名 */
-    private static final String PLATFORM_TAG_NAME = "XX书店家校服务";
-
     /**
      * 自动打标：从 state（学校ID）反查市/区/学校，调企微 API 打标签。
      */
@@ -40,25 +37,21 @@ public class TagService {
                 return;
             }
 
-            // 确保标签存在：平台、市、区、学校
-            Tag platformTag = getOrCreateTag(PLATFORM_TAG_NAME, Tag.TagType.system, null);
-            Tag cityTag = getOrCreateTag(qr.getRegionCity(), Tag.TagType.system, platformTag.getId());
+            // 确保标签存在：市、区、学校
+            Tag cityTag = getOrCreateTag(qr.getRegionCity(), Tag.TagType.system, null);
             Tag districtTag = getOrCreateTag(qr.getRegionDistrict(), Tag.TagType.system, cityTag.getId());
             Tag schoolTag = getOrCreateTag(qr.getSchoolName(), Tag.TagType.system, districtTag.getId());
 
-            // 调企微 API 打标签（传企微标签 ID 列表）
-            List<String> wecomTagIds = List.of(
-                platformTag.getId().toString(),
-                cityTag.getId().toString(),
-                districtTag.getId().toString(),
-                schoolTag.getId().toString()
-            );
+            // 调企微 API 打标签
+            List<String> wecomTagIds = new ArrayList<>();
+            wecomTagIds.add(cityTag.getId().toString());
+            wecomTagIds.add(districtTag.getId().toString());
+            wecomTagIds.add(schoolTag.getId().toString());
             wecomApi.markTag(externalUserId, userId, wecomTagIds);
 
             // 写入客户-标签关联
             Customer customer = customerRepo.findByExternalUserid(externalUserId)
                 .orElseThrow(() -> new RuntimeException("客户不存在: " + externalUserId));
-            bindCustomerTag(customer.getId(), platformTag.getId(), "system");
             bindCustomerTag(customer.getId(), cityTag.getId(), "system");
             bindCustomerTag(customer.getId(), districtTag.getId(), "system");
             bindCustomerTag(customer.getId(), schoolTag.getId(), "system");
