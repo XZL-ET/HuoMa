@@ -142,6 +142,11 @@ class EmployeePicker {
     }
 
     render(filter = '') {
+        // 保存搜索框焦点和光标位置
+        const oldInput = this.el.querySelector('.search-input');
+        const wasFocused = oldInput && document.activeElement === oldInput;
+        const cursorPos = wasFocused ? oldInput.selectionStart : 0;
+
         const q = filter.toLowerCase();
         const filtered = this.items.filter(it =>
             it.name.toLowerCase().includes(q) || it.userid.toLowerCase().includes(q)
@@ -151,7 +156,7 @@ class EmployeePicker {
         this.el.innerHTML = `
             <div class="search-bar">
                 <i class="bi bi-search"></i>
-                <input type="text" class="search-input" placeholder="${this.placeholder}" value="${this._escape(filter)}" autocomplete="off">
+                <input type="text" class="search-input" placeholder="${this.placeholder}" value="${this._escape(filter)}" autocomplete="off" autofocus>
                 <span class="count">已选 <strong>${selCount}</strong> 人</span>
             </div>
             <div class="list">
@@ -175,6 +180,16 @@ class EmployeePicker {
                     </div>`;
                 }).join('')}
             </div>`;
+
+        // 恢复搜索框焦点和光标位置
+        if (wasFocused) {
+            const newInput = this.el.querySelector('.search-input');
+            if (newInput) {
+                newInput.focus();
+                newInput.setSelectionRange(Math.min(cursorPos, newInput.value.length),
+                    Math.min(cursorPos, newInput.value.length));
+            }
+        }
 
         // re-bind event listeners
         this.bindRowEvents();
