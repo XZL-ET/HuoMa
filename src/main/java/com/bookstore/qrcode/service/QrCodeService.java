@@ -30,6 +30,7 @@ public class QrCodeService {
     private final QrCodeRepository qrCodeRepo;
     private final QrAgentRepository qrAgentRepo;
     private final QrBackupPoolRepository backupRepo;
+    private final QrRotateLogRepository rotateLogRepo;
     private final AgentRepository agentRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
@@ -180,8 +181,9 @@ public class QrCodeService {
             wecomApi.deleteContactWay(qr.getQrConfigId());
         }
         qrAgentRepo.findByQrCodeId(qrCodeId).forEach(qa -> qrAgentRepo.delete(qa));
-        backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId,
-            QrBackupPool.PoolStatus.standby).forEach(bp -> backupRepo.delete(bp));
+        backupRepo.findByQrCodeId(qrCodeId).forEach(bp -> backupRepo.delete(bp));
+        rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(qrCodeId, Pageable.unpaged())
+            .forEach(rl -> rotateLogRepo.delete(rl));
         qrCodeRepo.delete(qr);
     }
 
