@@ -133,12 +133,12 @@ public class AgentBindService {
             backup.setUpdatedAt(LocalDateTime.now());
             backupPoolRepo.save(backup);
 
-            // ② 创建接待员 QrAgent 记录
+            // ② 创建接待员 QrAgent 记录（使用后备池中预设的日上限）
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId)
                 .agentUserid(backupUserid)
                 .role(QrAgent.AgentRole.receptionist)
-                .dailyMax(200)
+                .dailyMax(backup.getDailyMax() != null ? backup.getDailyMax() : 200)
                 .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
                 .status(QrAgent.AgentStatus.active)
                 .build();
@@ -207,7 +207,7 @@ public class AgentBindService {
                 .qrCodeId(qrCodeId)
                 .agentUserid(backupUserid)
                 .role(QrAgent.AgentRole.receptionist)
-                .dailyMax(200)
+                .dailyMax(backup.getDailyMax() != null ? backup.getDailyMax() : 200)
                 .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
                 .status(QrAgent.AgentStatus.active)
                 .build();

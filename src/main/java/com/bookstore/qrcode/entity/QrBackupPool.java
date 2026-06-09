@@ -30,6 +30,10 @@ public class QrBackupPool {
     @Builder.Default
     private Integer sortOrder = 0;
 
+    @Column(name = "daily_max")
+    @Builder.Default
+    private Integer dailyMax = 200;
+
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
     @Builder.Default

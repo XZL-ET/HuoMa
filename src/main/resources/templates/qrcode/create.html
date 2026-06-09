@@ -3,56 +3,45 @@
       th:replace="~{layout :: layout(title='手动创建活码', content=~{::main})}">
 <main>
 <style>
-/* ── 搜索多选组件 ── */
-.multi-select { position: relative; }
-.multi-select-trigger {
-    display: flex; flex-wrap: wrap; gap: 4px;
-    min-height: 38px; padding: 4px 36px 4px 8px;
-    border: 1px solid #dee2e6; border-radius: 6px;
-    cursor: pointer; background: #fff;
-    align-items: center;
+/* ── 可搜索员工选择面板 ── */
+.employee-picker {
+    border: 1px solid #dee2e6; border-radius: 8px;
+    background: #fff; overflow: hidden;
 }
-.multi-select-trigger:focus-within { border-color: #86b7fe; box-shadow: 0 0 0 .25rem rgba(13,110,253,.25); }
-.multi-select-trigger .placeholder { color: #999; }
-.multi-select-trigger .chip {
-    display: inline-flex; align-items: center; gap: 2px;
-    background: #e9ecef; border-radius: 4px; padding: 2px 6px;
-    font-size: 13px; max-width: 180px;
-}
-.multi-select-trigger .chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.multi-select-trigger .chip .remove { cursor: pointer; color: #888; font-weight: bold; margin-left: 2px; }
-.multi-select-trigger .chip .remove:hover { color: #dc3545; }
-.multi-select-trigger .arrow {
-    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
-    pointer-events: none; color: #888;
-}
-.multi-select-dropdown {
-    display: none; position: absolute; z-index: 1050; top: 100%; left: 0; right: 0;
-    margin-top: 2px; background: #fff; border: 1px solid #dee2e6; border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.12); max-height: 280px; overflow: hidden;
-}
-.multi-select-dropdown.open { display: block; }
-.multi-select-dropdown .search-box {
-    padding: 8px; border-bottom: 1px solid #eee;
-    position: sticky; top: 0; background: #fff;
-}
-.multi-select-dropdown .search-box input {
-    width: 100%; border: 1px solid #dee2e6; border-radius: 4px;
-    padding: 6px 10px; font-size: 14px; outline: none;
-}
-.multi-select-dropdown .search-box input:focus { border-color: #86b7fe; }
-.multi-select-dropdown .options {
-    overflow-y: auto; max-height: 210px; padding: 4px 0;
-}
-.multi-select-dropdown .option {
+.employee-picker .search-bar {
+    padding: 8px 10px; border-bottom: 1px solid #eee;
     display: flex; align-items: center; gap: 8px;
-    padding: 6px 12px; cursor: pointer; font-size: 14px;
-    transition: background .1s;
 }
-.multi-select-dropdown .option:hover { background: #f0f4ff; }
-.multi-select-dropdown .option.selected { background: #e8f0fe; }
-.multi-select-dropdown .option input[type=checkbox] { pointer-events: none; }
-.multi-select-dropdown .no-result { padding: 12px; text-align: center; color: #999; font-size: 13px; }
+.employee-picker .search-bar input {
+    flex: 1; border: none; outline: none; font-size: 14px; padding: 4px 0;
+}
+.employee-picker .search-bar .bi-search { color: #999; }
+.employee-picker .search-bar .count { font-size: 12px; color: #888; white-space: nowrap; }
+.employee-picker .list {
+    max-height: 220px; overflow-y: auto;
+}
+.employee-picker .list .row-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-bottom: 1px solid #f5f5f5;
+    transition: background .1s; cursor: pointer;
+}
+.employee-picker .list .row-item:hover { background: #f8f9ff; }
+.employee-picker .list .row-item.selected { background: #e8f0fe; }
+.employee-picker .list .row-item .form-check-input { cursor: pointer; flex-shrink: 0; }
+.employee-picker .list .row-item .name-col { flex: 1; min-width: 0; }
+.employee-picker .list .row-item .name-col .name { font-size: 14px; font-weight: 500; }
+.employee-picker .list .row-item .name-col .uid { font-size: 11px; color: #999; }
+.employee-picker .list .row-item .limit-col { flex-shrink: 0; width: 100px; }
+.employee-picker .list .row-item .limit-col input {
+    width: 100%; text-align: center; font-size: 13px;
+    border: 1px solid #dee2e6; border-radius: 4px; padding: 3px 6px;
+}
+.employee-picker .list .row-item .limit-col input:disabled {
+    background: #f5f5f5; color: #bbb;
+}
+.employee-picker .list .no-result {
+    padding: 20px; text-align: center; color: #999; font-size: 13px;
+}
 </style>
 
 <div class="card p-4 mx-auto" style="max-width: 800px;">
@@ -93,26 +82,27 @@
         </script>
 
         <div class="row g-3 mb-3">
-            <!-- 服务老师（多选 + 搜索） -->
-            <div class="col-md-6">
-                <label class="form-label">服务老师 <span class="text-danger">*</span></label>
-                <div class="multi-select" id="svcMultiSelect"></div>
-                <input type="hidden" name="serviceTeacherUserid" id="svcHidden">
-                <small class="text-muted">活码主联系人，可多选。客户扫码随机分配给其中一人</small>
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">服务老师日接上限</label>
-                <input type="number" name="serviceDailyMax" class="form-control" value="1000" min="1" max="5000">
-                <small class="text-muted">每位服务老师共享此日上限。达到后自动激活后备</small>
+            <!-- 服务老师 -->
+            <div class="col-12">
+                <label class="form-label">
+                    服务老师 <span class="text-danger">*</span>
+                    <small class="text-muted fw-normal">— 活码主联系人，客户扫码随机分配给其中一人</small>
+                </label>
+                <div id="svcPicker" class="employee-picker"></div>
+                <input type="hidden" name="serviceTeacherJson" id="svcJson">
+                <input type="hidden" name="serviceTeacherUserid" id="svcFallback">
             </div>
 
-            <!-- 后备接待员（多选 + 搜索） -->
-            <div class="col-md-6">
-                <label class="form-label">后备接待员</label>
-                <div class="multi-select" id="receptionistMultiSelect"></div>
-                <input type="hidden" name="receptionistUserid" id="receptionistHidden">
-                <small class="text-muted">服务老师满员后按顺序激活，日限默认 200</small>
+            <!-- 后备接待员 -->
+            <div class="col-12">
+                <label class="form-label">
+                    后备接待员
+                    <small class="text-muted fw-normal">— 服务老师满员后按顺序激活</small>
+                </label>
+                <div id="receptionistPicker" class="employee-picker"></div>
+                <input type="hidden" name="agentsJson" id="receptionistJson">
             </div>
+
             <div class="col-md-6">
                 <label class="form-label">欢迎语文案</label>
                 <textarea name="welcomeText" class="form-control" rows="2"
@@ -129,154 +119,134 @@
 
 <script>
 /**
- * 可搜索多选组件
- * 用法: new MultiSelect(container, options) — options = [{userid, name}, ...]
+ * EmployeePicker — 可搜索的员工选择面板，每人独立日上限
+ *
+ * 用法: new EmployeePicker(el, {
+ *   items: [{userid, name}, ...],
+ *   defaultDailyMax: 1000,
+ *   placeholder: '搜索姓名或账号...'
+ * })
+ *
+ * 方法: getSelected() → [{userid, name, dailyMax}, ...]
  */
-class MultiSelect {
-    constructor(el, items) {
+class EmployeePicker {
+    constructor(el, opts = {}) {
         this.el = el;
-        this.items = items;                    // [{userid, name}]
-        this.selected = new Map();             // userid → name
-        this.dropdownOpen = false;
+        this.items = opts.items || [];
+        this.defaultDailyMax = opts.defaultDailyMax || 200;
+        this.placeholder = opts.placeholder || '搜索姓名或账号...';
+        this.selected = new Map(); // userid → dailyMax (int)
 
         this.render();
         this.bindEvents();
     }
 
-    render() {
-        this.el.innerHTML = `
-            <div class="multi-select-trigger">
-                <span class="placeholder">搜索并选择...</span>
-                <span class="arrow">▾</span>
-            </div>
-            <div class="multi-select-dropdown">
-                <div class="search-box">
-                    <input type="text" placeholder="输入姓名或账号搜索..." autocomplete="off">
-                </div>
-                <div class="options"></div>
-            </div>`;
-        this.trigger = this.el.querySelector('.multi-select-trigger');
-        this.placeholder = this.el.querySelector('.placeholder');
-        this.dropdown = this.el.querySelector('.multi-select-dropdown');
-        this.searchInput = this.el.querySelector('.search-box input');
-        this.optionsEl = this.el.querySelector('.options');
-
-        this.renderOptions();
-    }
-
-    renderOptions(filter = '') {
+    render(filter = '') {
         const q = filter.toLowerCase();
         const filtered = this.items.filter(it =>
             it.name.toLowerCase().includes(q) || it.userid.toLowerCase().includes(q)
         );
-        if (filtered.length === 0) {
-            this.optionsEl.innerHTML = '<div class="no-result">无匹配员工</div>';
-            return;
-        }
-        this.optionsEl.innerHTML = filtered.map(it => {
-            const sel = this.selected.has(it.userid);
-            return `<div class="option${sel ? ' selected' : ''}" data-userid="${it.userid}">
-                <input type="checkbox" ${sel ? 'checked' : ''}>
-                <span>${it.name}</span>
-                <small class="text-muted ms-auto">${it.userid}</small>
+        const selCount = this.selected.size;
+
+        this.el.innerHTML = `
+            <div class="search-bar">
+                <i class="bi bi-search"></i>
+                <input type="text" class="search-input" placeholder="${this.placeholder}" value="${this._escape(filter)}" autocomplete="off">
+                <span class="count">已选 <strong>${selCount}</strong> 人</span>
+            </div>
+            <div class="list">
+                ${filtered.length === 0 ? '<div class="no-result">无匹配员工</div>' : filtered.map(it => {
+                    const checked = this.selected.has(it.userid);
+                    const dm = checked ? this.selected.get(it.userid) : this.defaultDailyMax;
+                    return `<div class="row-item${checked ? ' selected' : ''}" data-userid="${it.userid}">
+                        <input class="form-check-input" type="checkbox" ${checked ? 'checked' : ''}>
+                        <div class="name-col">
+                            <div class="name">${it.name}</div>
+                            <div class="uid">${it.userid}</div>
+                        </div>
+                        <div class="limit-col">
+                            <div class="input-group input-group-sm">
+                                <span class="input-group-text" style="font-size:11px;">日限</span>
+                                <input type="number" class="form-control form-control-sm"
+                                    value="${dm}" min="1" max="9999"
+                                    ${checked ? '' : 'disabled'}>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('')}
             </div>`;
-        }).join('');
+
+        // re-bind event listeners
+        this.bindRowEvents();
     }
 
     bindEvents() {
-        // 打开/关闭
-        this.trigger.addEventListener('click', () => {
-            this.dropdownOpen ? this.close() : this.open();
+        // Search input
+        this.el.addEventListener('input', e => {
+            if (e.target.classList.contains('search-input')) {
+                this.render(e.target.value);
+            }
         });
 
-        // 搜索
-        this.searchInput.addEventListener('input', () => {
-            this.renderOptions(this.searchInput.value);
-        });
-        // 阻止搜索框点击冒泡（否则会关闭下拉）
-        this.searchInput.addEventListener('click', e => e.stopPropagation());
-
-        // 选项点击
-        this.optionsEl.addEventListener('click', e => {
-            const opt = e.target.closest('.option');
-            if (!opt) return;
-            const userid = opt.dataset.userid;
-            const name = opt.querySelector('span').textContent;
-            this.toggle(userid, name);
-        });
-
-        // 点击外部关闭
-        document.addEventListener('click', e => {
-            if (!this.el.contains(e.target)) this.close();
-        });
-
-        // 键盘：ESC 关闭
-        document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && this.dropdownOpen) this.close();
-        });
+        // Click outside — not needed for this pattern
     }
 
-    open() {
-        this.dropdownOpen = true;
-        this.dropdown.classList.add('open');
-        this.searchInput.value = '';
-        this.renderOptions();
-        setTimeout(() => this.searchInput.focus(), 50);
-    }
-
-    close() {
-        this.dropdownOpen = false;
-        this.dropdown.classList.remove('open');
-    }
-
-    toggle(userid, name) {
-        if (this.selected.has(userid)) {
-            this.selected.delete(userid);
-        } else {
-            this.selected.set(userid, name);
-        }
-        this.updateUI();
-        this.renderOptions(this.searchInput.value);
-    }
-
-    remove(userid) {
-        this.selected.delete(userid);
-        this.updateUI();
-        this.renderOptions(this.searchInput.value);
-    }
-
-    updateUI() {
-        const chips = this.trigger.querySelectorAll('.chip');
-        chips.forEach(c => c.remove());
-
-        if (this.selected.size === 0) {
-            this.placeholder.style.display = '';
-            this.trigger.insertBefore(this.placeholder, this.trigger.querySelector('.arrow'));
-        } else {
-            this.placeholder.style.display = 'none';
-            const arrow = this.trigger.querySelector('.arrow');
-            this.selected.forEach((name, userid) => {
-                const chip = document.createElement('span');
-                chip.className = 'chip';
-                chip.innerHTML = `<span class="name" title="${name} (${userid})">${name}</span>
-                    <span class="remove" data-userid="${userid}">×</span>`;
-                chip.querySelector('.remove').addEventListener('click', e => {
-                    e.stopPropagation();
-                    this.remove(userid);
-                });
-                this.trigger.insertBefore(chip, arrow);
+    bindRowEvents() {
+        const rows = this.el.querySelectorAll('.row-item');
+        rows.forEach(row => {
+            // Checkbox click
+            const cb = row.querySelector('.form-check-input');
+            cb.addEventListener('change', () => {
+                const userid = row.dataset.userid;
+                if (cb.checked) {
+                    const limitInput = row.querySelector('.limit-col input');
+                    this.selected.set(userid, parseInt(limitInput.value) || this.defaultDailyMax);
+                } else {
+                    this.selected.delete(userid);
+                }
+                this.render(this.el.querySelector('.search-input')?.value || '');
             });
-        }
+
+            // Click anywhere on row toggles checkbox (but not on input)
+            row.addEventListener('click', e => {
+                if (e.target.tagName === 'INPUT') return; // let inputs handle themselves
+                cb.checked = !cb.checked;
+                cb.dispatchEvent(new Event('change'));
+            });
+
+            // Daily max change
+            const limitInput = row.querySelector('.limit-col input');
+            limitInput.addEventListener('change', () => {
+                const userid = row.dataset.userid;
+                if (this.selected.has(userid)) {
+                    this.selected.set(userid, parseInt(limitInput.value) || this.defaultDailyMax);
+                }
+            });
+            // Stop click propagation on the limit input
+            limitInput.addEventListener('click', e => e.stopPropagation());
+        });
     }
 
-    /** 获取选中的 userid 列表 */
-    getValue() {
-        return Array.from(this.selected.keys());
+    _escape(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
     }
 
-    /** 获取逗号分隔字符串 */
-    getValueString() {
-        return this.getValue().join(',');
+    /** 获取选中的员工列表 [{userid, name, dailyMax}] */
+    getSelected() {
+        const result = [];
+        const nameMap = new Map(this.items.map(it => [it.userid, it.name]));
+        this.selected.forEach((dailyMax, userid) => {
+            result.push({ userid, name: nameMap.get(userid) || userid, dailyMax });
+        });
+        return result;
+    }
+
+    /** 重置为全部未选 */
+    reset() {
+        this.selected.clear();
+        this.render();
     }
 }
 
@@ -285,16 +255,32 @@ document.addEventListener('DOMContentLoaded', () => {
     const employees = window._employeeList || [];
     if (employees.length === 0) return;
 
-    // 服务老师多选
-    const svc = new MultiSelect(document.getElementById('svcMultiSelect'), employees);
+    // 服务老师选择器
+    const svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
+        items: employees,
+        defaultDailyMax: 1000,
+        placeholder: '搜索服务老师姓名或账号...'
+    });
 
-    // 后备接待员多选
-    const receptionist = new MultiSelect(document.getElementById('receptionistMultiSelect'), employees);
+    // 后备接待员选择器
+    const receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
+        items: employees,
+        defaultDailyMax: 200,
+        placeholder: '搜索后备接待员姓名或账号...'
+    });
 
-    // 提交前把选中值写入隐藏域
+    // 提交前序列化
     document.getElementById('createForm').addEventListener('submit', () => {
-        document.getElementById('svcHidden').value = svc.getValueString();
-        document.getElementById('receptionistHidden').value = receptionist.getValueString();
+        // 服务老师 → JSON
+        const svc = svcPicker.getSelected();
+        document.getElementById('svcJson').value = svc.length > 0 ? JSON.stringify(svc) : '';
+        // 逗号分隔回退（兼容）
+        document.getElementById('svcFallback').value = svc.map(s => s.userid).join(',');
+
+        // 接待员 → JSON
+        const receptionist = receptionistPicker.getSelected();
+        document.getElementById('receptionistJson').value = receptionist.length > 0
+            ? JSON.stringify(receptionist) : '';
     });
 });
 </script>

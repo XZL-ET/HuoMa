@@ -448,31 +448,30 @@ public class QrCodeService {
         try {
             List<String> userIds = new ArrayList<>();
 
-            // ① 服务老师（支持多个，逗号分隔）
-            if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+            // ① 服务老师（JSON 数组优先，回退逗号分隔）
+            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
+                JsonNode arr = objectMapper.readTree(req.getServiceTeacherJson());
+                for (JsonNode svc : arr) {
+                    if (svc.has("userid")) userIds.add(svc.get("userid").asText());
+                }
+            } else if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
                 for (String uid : req.getServiceTeacherUserid().split(",")) {
                     String trimmed = uid.trim();
                     if (!trimmed.isEmpty()) userIds.add(trimmed);
                 }
             }
-            // JSON 方式（高级用法，追加到列表）
-            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
-                JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
-                if (svc.has("userid")) userIds.add(svc.get("userid").asText());
-            }
 
             // ② 如果没有服务老师，退回到接待员
             if (userIds.isEmpty()) {
-                if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
+                if (req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
+                    JsonNode arr = objectMapper.readTree(req.getAgentsJson());
+                    for (JsonNode a : arr) {
+                        if (a.has("userid")) userIds.add(a.get("userid").asText());
+                    }
+                } else if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
                     for (String uid : req.getReceptionistUserid().split(",")) {
                         String trimmed = uid.trim();
                         if (!trimmed.isEmpty()) userIds.add(trimmed);
-                    }
-                }
-                if (userIds.isEmpty() && req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
-                    JsonNode agents = objectMapper.readTree(req.getAgentsJson());
-                    for (JsonNode agent : agents) {
-                        if (agent.has("userid")) userIds.add(agent.get("userid").asText());
                     }
                 }
             }
@@ -530,73 +529,77 @@ public class QrCodeService {
 
     private void bindAgents(Long qrCodeId, QrCodeCreateRequest req) {
         try {
-            // ① 服务老师 — 活码主联系人（支持多个，逗号分隔；共享日上限）
-            int svcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
-            List<String> svcUserids = new ArrayList<>();
-            if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+            // ① 服务老师 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
+            int defaultSvcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
+            int sortOrder = 0;
+
+            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
+                // JSON 格式: [{"userid":"xx","dailyMax":500}, ...]
+                JsonNode arr = objectMapper.readTree(req.getServiceTeacherJson());
+                for (JsonNode svc : arr) {
+                    String uid = svc.get("userid").asText();
+                    int dm = svc.has("dailyMax") ? svc.get("dailyMax").asInt() : defaultSvcDailyMax;
+                    ensureAgent(uid, "service");
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(uid)
+                        .role(QrAgent.AgentRole.service)
+                        .dailyMax(dm).serviceDailyMax(dm)
+                        .sortOrder(sortOrder++).status(QrAgent.AgentStatus.active)
+                        .build());
+                }
+            } else if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
                 for (String uid : req.getServiceTeacherUserid().split(",")) {
                     String trimmed = uid.trim();
-                    if (!trimmed.isEmpty()) svcUserids.add(trimmed);
+                    if (trimmed.isEmpty()) continue;
+                    ensureAgent(trimmed, "service");
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(trimmed)
+                        .role(QrAgent.AgentRole.service)
+                        .dailyMax(defaultSvcDailyMax).serviceDailyMax(defaultSvcDailyMax)
+                        .sortOrder(sortOrder++).status(QrAgent.AgentStatus.active)
+                        .build());
                 }
             }
-            if (svcUserids.isEmpty() && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
-                JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
-                svcUserids.add(svc.get("userid").asText());
-                svcDailyMax = svc.has("serviceDailyMax") ? svc.get("serviceDailyMax").asInt() : 1000;
-            }
-            int sortOrder = 0;
-            for (String svcUserid : svcUserids) {
-                ensureAgent(svcUserid, "service");
-                qrAgentRepo.save(QrAgent.builder()
-                    .qrCodeId(qrCodeId)
-                    .agentUserid(svcUserid)
-                    .role(QrAgent.AgentRole.service)
-                    .dailyMax(svcDailyMax)
-                    .serviceDailyMax(svcDailyMax)
-                    .sortOrder(sortOrder++)
-                    .status(QrAgent.AgentStatus.active)
-                    .build());
-            }
 
-            // ② 接待员 — 进后备池（不是直接上活码，等服务老师满了才激活）
-            List<String> receptionistUserids = new ArrayList<>();
-            if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
+            // ② 接待员 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
+            int order = 0;
+            if (req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
+                // JSON 格式: [{"userid":"xx","dailyMax":150}, ...]
+                JsonNode arr = objectMapper.readTree(req.getAgentsJson());
+                for (JsonNode a : arr) {
+                    String uid = a.get("userid").asText();
+                    int dm = a.has("dailyMax") ? a.get("dailyMax").asInt() : 200;
+                    ensureAgent(uid, "receptionist");
+                    backupRepo.save(QrBackupPool.builder()
+                        .qrCodeId(qrCodeId).agentUserid(uid)
+                        .role(QrBackupPool.PoolRole.receptionist)
+                        .dailyMax(dm).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
+                        .build());
+                }
+            } else if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
                 for (String uid : req.getReceptionistUserid().split(",")) {
                     String trimmed = uid.trim();
-                    if (!trimmed.isEmpty()) receptionistUserids.add(trimmed);
-                }
-            }
-            if (receptionistUserids.isEmpty() && req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
-                JsonNode agents = objectMapper.readTree(req.getAgentsJson());
-                for (JsonNode a : agents) {
-                    receptionistUserids.add(a.get("userid").asText());
+                    if (trimmed.isEmpty()) continue;
+                    ensureAgent(trimmed, "receptionist");
+                    backupRepo.save(QrBackupPool.builder()
+                        .qrCodeId(qrCodeId).agentUserid(trimmed)
+                        .role(QrBackupPool.PoolRole.receptionist)
+                        .dailyMax(200).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
+                        .build());
                 }
             }
 
-            int order = 0;
-            for (String userid : receptionistUserids) {
-                ensureAgent(userid, "receptionist");
-                backupRepo.save(QrBackupPool.builder()
-                    .qrCodeId(qrCodeId)
-                    .agentUserid(userid)
-                    .role(QrBackupPool.PoolRole.receptionist)
-                    .sortOrder(order++)
-                    .status(QrBackupPool.PoolStatus.standby)
-                    .build());
-            }
-
-            // ③ 额外后备员工
+            // ③ 额外后备员工（纯 userid 数组，日限默认 200）
             if (req.getBackupsJson() != null && !req.getBackupsJson().isEmpty()) {
                 JsonNode backups = objectMapper.readTree(req.getBackupsJson());
                 for (JsonNode b : backups) {
-                    String userid = b.asText();
-                    ensureAgent(userid, "receptionist");
+                    String uid = b.isObject() ? b.get("userid").asText() : b.asText();
+                    int dm = b.isObject() && b.has("dailyMax") ? b.get("dailyMax").asInt() : 200;
+                    ensureAgent(uid, "receptionist");
                     backupRepo.save(QrBackupPool.builder()
-                        .qrCodeId(qrCodeId)
-                        .agentUserid(userid)
+                        .qrCodeId(qrCodeId).agentUserid(uid)
                         .role(QrBackupPool.PoolRole.receptionist)
-                        .sortOrder(order++)
-                        .status(QrBackupPool.PoolStatus.standby)
+                        .dailyMax(dm).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
                         .build());
                 }
             }
