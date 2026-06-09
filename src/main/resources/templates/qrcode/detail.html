@@ -34,16 +34,25 @@
         </div>
 
         <!-- 二维码 -->
-        <div class="col-12" th:if="${qr.qrUrl != null}">
+        <div class="col-12">
             <div class="card p-4 text-center">
                 <h6>活码二维码</h6>
-                <img th:src="${qr.qrUrl}" alt="活码二维码" style="max-width: 300px; margin: 0 auto;">
-                <div class="mt-2 small text-muted">
-                    链接：<code th:text="${qr.qrUrl}"></code>
+                <div th:if="${qr.qrUrl != null}">
+                    <img th:src="${qr.qrUrl}" alt="活码二维码" style="max-width: 300px; margin: 0 auto;">
+                    <div class="mt-2 small text-muted">
+                        企微链接：<code th:text="${qr.qrUrl}"></code>
+                    </div>
                 </div>
-                <div class="mt-1">
-                    <a th:href="${qr.qrUrl}" target="_blank" class="btn btn-sm btn-primary">打开二维码大图</a>
-                    <small class="text-muted ms-2">打印此二维码供家长扫码添加</small>
+                <div class="mt-3 d-flex gap-2 justify-content-center">
+                    <a th:href="@{/qrcodes/{id}/download(id=${qr.id},dpi=72)}"
+                       class="btn btn-sm btn-outline-primary">📥 下载 72dpi（线上）</a>
+                    <a th:href="@{/qrcodes/{id}/download(id=${qr.id},dpi=300)}"
+                       class="btn btn-sm btn-outline-secondary">🖨️ 下载 300dpi（打印）</a>
+                    <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#styleModal">
+                        🎨 自定义样式
+                    </button>
+                    <a th:href="${qr.qrUrl}" target="_blank" class="btn btn-sm btn-outline-info">🔗 企微原图</a>
+                </div>
             </div>
         </div>
 
@@ -182,10 +191,22 @@
         <div class="col-md-6">
             <div class="card p-4">
                 <h6>轮换设置</h6>
-                <div class="mb-2">
-                    预警阈值：<strong th:text="${qr.warnRatio + '%'}"></strong> |
-                    紧急阈值：<strong th:text="${qr.urgentRatio + '%'}"></strong>
-                </div>
+                <form th:action="@{/qrcodes/{id}/thresholds(id=${qr.id})}" method="post"
+                      class="row g-2 align-items-end mb-3">
+                    <div class="col-auto">
+                        <label class="form-label small">预警阈值 %</label>
+                        <input type="number" name="warnRatio" class="form-control form-control-sm"
+                               th:value="${qr.warnRatio}" min="1" max="100" style="width:80px;">
+                    </div>
+                    <div class="col-auto">
+                        <label class="form-label small">紧急阈值 %</label>
+                        <input type="number" name="urgentRatio" class="form-control form-control-sm"
+                               th:value="${qr.urgentRatio}" min="1" max="100" style="width:80px;">
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-primary">更新阈值</button>
+                    </div>
+                </form>
                 <div class="d-flex gap-2">
                     <form th:action="@{/qrcodes/{id}/rotate-mode(id=${qr.id})}" method="post" class="d-flex gap-2 align-items-center">
                         <select name="mode" class="form-select form-select-sm" style="width:auto;">
@@ -350,6 +371,66 @@
                         <button type="submit" class="btn btn-primary">保存</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 外观自定义弹窗 -->
+    <div class="modal fade" id="styleModal" tabindex="-1" aria-labelledby="styleModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="styleModalLabel">🎨 自定义活码外观 — <span th:text="${qr.schoolName}"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <form th:action="@{/qrcodes/{id}/style(id=${qr.id})}" method="post">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">主题色</label>
+                            <select name="theme" class="form-select">
+                                <option value="blue">🔵 蓝色（默认）</option>
+                                <option value="green">🟢 绿色</option>
+                                <option value="orange">🟠 橙色</option>
+                                <option value="purple">🟣 紫色</option>
+                                <option value="red">🔴 红色</option>
+                                <option value="gray">⚫ 灰色</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">引导文案（每行一条）</label>
+                            <textarea name="guideText" class="form-control" rows="3"
+                                      placeholder="XX书店·家校服务\nXX第一小学专属通道\n扫码添加 领取购书优惠"></textarea>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" name="showSchoolName" value="true" class="form-check-input" checked>
+                            <label class="form-check-label">在二维码下方显示学校名称</label>
+                        </div>
+                        <small class="text-muted">💡 样式保存后，重新下载二维码即可看到效果。</small>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">保存样式</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 轮换日志 -->
+    <div class="col-12 mt-3" th:if="${!rotateLogs.isEmpty()}">
+        <div class="card p-4">
+            <h6>📋 轮换日志</h6>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>时间</th><th>原因</th><th>激活员工</th></tr></thead>
+                    <tbody>
+                        <tr th:each="log : ${rotateLogs}">
+                            <td th:text="${#temporals.format(log.createdAt, 'MM-dd HH:mm:ss')}"></td>
+                            <td th:text="${log.reason}"></td>
+                            <td><code th:text="${log.toUserid}"></code></td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>

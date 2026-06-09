@@ -21,7 +21,8 @@
         <!-- 标签 -->
         <h6 class="mt-4">标签</h6>
         <div class="d-flex flex-wrap gap-1 mb-3">
-            <span th:each="ct : ${tags}" class="badge bg-info" th:text="${ct.tagId}">标签</span>
+            <span th:each="ct : ${tags}" class="badge bg-info"
+                  th:text="${tagNameMap.getOrDefault(ct.tagId, ct.tagId.toString())}">标签</span>
             <span th:if="${tags.isEmpty()}" class="text-muted">暂无标签</span>
         </div>
 

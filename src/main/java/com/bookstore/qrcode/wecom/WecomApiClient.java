@@ -97,6 +97,65 @@ public class WecomApiClient {
     // ==================== 标签 ====================
 
     /**
+     * 创建企业标签（或标签组下的标签）。
+     * @param tagName 标签名称
+     * @param groupId 标签组 ID（可为 null，则创建到默认组或作为根标签）
+     * @return {errcode, errmsg, tagid} — tagid 是 WeCom 标签 ID
+     */
+    public JsonNode addCorpTag(String tagName, String groupId) {
+        String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
+        try {
+            String body;
+            if (groupId != null && !groupId.isEmpty()) {
+                body = String.format(
+                    "{\"group_id\":\"%s\",\"tag\":[{\"name\":\"%s\"}]}",
+                    groupId, tagName);
+            } else {
+                body = String.format(
+                    "{\"tag\":[{\"name\":\"%s\"}]}", tagName);
+            }
+            String resp = restTemplate.postForObject(url, body, String.class);
+            return parseOrThrow(resp, "创建企业标签");
+        } catch (Exception e) {
+            throw new RuntimeException("创建企业标签失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 创建企业标签（带 group_name，用于首次创建组和标签）。
+     * @param tagName 标签名称
+     * @param groupName 标签组名称
+     * @return {errcode, errmsg, tag_group: {group_id, group_name, tag: [{id, name}]}}
+     */
+    public JsonNode addCorpTagWithGroup(String tagName, String groupName) {
+        String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
+        try {
+            String body = String.format(
+                "{\"group_name\":\"%s\",\"tag\":[{\"name\":\"%s\"}]}",
+                groupName, tagName);
+            String resp = restTemplate.postForObject(url, body, String.class);
+            return parseOrThrow(resp, "创建企业标签组");
+        } catch (Exception e) {
+            throw new RuntimeException("创建企业标签组失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 获取企业标签列表。
+     * @return {errcode, errmsg, tag_group: [{group_id, group_name, tag: [{id, name}]}]}
+     */
+    public JsonNode getCorpTagList() {
+        String url = BASE_URL + "/externalcontact/get_corp_tag_list?access_token=" + getAccessToken();
+        try {
+            String body = "{}";
+            String resp = restTemplate.postForObject(url, body, String.class);
+            return parseOrThrow(resp, "获取标签列表");
+        } catch (Exception e) {
+            throw new RuntimeException("获取标签列表失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 为客户打标签。
      */
     public void markTag(String externalUserId, String userId, List<String> tagIds) {

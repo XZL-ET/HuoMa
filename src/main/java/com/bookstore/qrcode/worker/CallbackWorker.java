@@ -163,21 +163,21 @@ public class CallbackWorker {
             log.error("速率检测失败: userid={}", userId, e);
         }
 
-        // ② 自动打标（市/区/学校）— 失败不阻塞后续
+        // ② 记录/更新客户信息（必须在打标之前，autoTag 依赖客户记录）
+        Long customerId = null;
+        try {
+            customerId = customerService.upsertFromCallback(externalUserId, userId, state);
+        } catch (Exception e) {
+            log.error("记录客户失败（非阻塞）: external={}", externalUserId, e);
+        }
+
+        // ③ 自动打标（市/区/学校）— 失败不阻塞后续
         if (state != null) {
             try {
                 tagService.autoTag(externalUserId, userId, state);
             } catch (Exception e) {
                 log.error("自动打标失败（非阻塞）: external={}, state={}", externalUserId, state, e);
             }
-        }
-
-        // ③ 记录/更新客户信息
-        Long customerId = null;
-        try {
-            customerId = customerService.upsertFromCallback(externalUserId, userId, state);
-        } catch (Exception e) {
-            log.error("记录客户失败（非阻塞）: external={}", externalUserId, e);
         }
 
         // ④ 员工日计数 +1

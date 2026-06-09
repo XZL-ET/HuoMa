@@ -3,10 +3,12 @@ package com.bookstore.qrcode.controller;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.service.CustomerService;
 import com.bookstore.qrcode.service.AgentBindService;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.repository.TagRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +32,7 @@ public class CustomerController {
     private final AgentBindService agentBindService;
     private final AgentRepository agentRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final TagRepository tagRepo;
     private final WecomApiClient wecomApiClient;
 
     @GetMapping
@@ -92,7 +95,49 @@ public class CustomerController {
         Customer customer = customerService.getById(id);
         model.addAttribute("customer", customer);
         model.addAttribute("tags", customerService.getTags(id));
+
+        // 构建 tagId → 标签名 映射
+        Map<Long, String> tagNameMap = new HashMap<>();
+        for (Tag t : tagRepo.findAll()) {
+            tagNameMap.put(t.getId(), t.getName());
+        }
+        model.addAttribute("tagNameMap", tagNameMap);
+
         return "customer/detail";
+    }
+
+    /**
+     * 修复存量客户缺失数据（unionid / avatar / name）。
+     */
+    @PostMapping("/repair-data")
+    public String repairCustomerData() {
+        int repaired = customerService.repairCustomerData();
+        return "redirect:/customers";
+    }
+
+    /**
+     * 从企微 API 同步员工姓名到本地 Agent 表。
+     */
+    @PostMapping("/sync-agent-names")
+    public String syncAgentNames() {
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                for (JsonNode u : result.get("userlist")) {
+                    String userid = u.get("userid").asText();
+                    String name = u.get("name").asText();
+                    agentRepo.findById(userid).ifPresent(agent -> {
+                        if (userid.equals(agent.getName())) {
+                            agent.setName(name);
+                            agentRepo.save(agent);
+                        }
+                    });
+                }
+            }
+        } catch (Exception e) {
+            // 忽略同步失败，不影响主流程
+        }
+        return "redirect:/customers";
     }
 
     @PostMapping("/create-test")

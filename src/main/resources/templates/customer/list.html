@@ -13,6 +13,12 @@
             <button class="btn btn-outline-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#testCustomerForm">
                 ➕ 快速添加测试客户
             </button>
+            <form method="post" th:action="@{/customers/sync-agent-names}" style="display:inline">
+                <button type="submit" class="btn btn-outline-secondary btn-sm">🔄 同步员工姓名</button>
+            </form>
+            <form method="post" th:action="@{/customers/repair-data}" style="display:inline">
+                <button type="submit" class="btn btn-outline-warning btn-sm">🔧 修复客户数据</button>
+            </form>
             <a href="/customers/export" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
         </div>
     </div>

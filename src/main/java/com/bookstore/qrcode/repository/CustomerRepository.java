@@ -31,4 +31,5 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     long countByAddTimeBetween(LocalDateTime start, LocalDateTime end);
     long countByAddTimeBetweenAndStatus(LocalDateTime start, LocalDateTime end,
                                         Customer.CustomerStatus status);
+    long countBySourceQrIdAndAddTimeBetween(Long sourceQrId, LocalDateTime start, LocalDateTime end);
 }

@@ -27,4 +27,10 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     long countByStatus(QrCode.QrCodeStatus status);
     List<QrCode> findByStatus(QrCode.QrCodeStatus status);
     List<QrCode> findAll();
+
+    @Query("SELECT DISTINCT q.regionCity FROM QrCode q WHERE q.regionCity IS NOT NULL ORDER BY q.regionCity")
+    List<String> findDistinctRegionCity();
+
+    @Query("SELECT DISTINCT q.regionDistrict FROM QrCode q WHERE q.regionDistrict IS NOT NULL ORDER BY q.regionDistrict")
+    List<String> findDistinctRegionDistrict();
 }

@@ -18,7 +18,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/callback/wecom")
+@RequestMapping("/api/wecom/callback")
 @RequiredArgsConstructor
 public class WecomCallbackController {
 

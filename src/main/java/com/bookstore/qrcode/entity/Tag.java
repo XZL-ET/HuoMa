@@ -26,6 +26,9 @@ public class Tag {
     @Column(name = "parent_id")
     private Long parentId;
 
+    @Column(name = "wecom_tag_id", length = 50)
+    private String wecomTagId;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

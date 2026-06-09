@@ -23,14 +23,15 @@
             <div class="col-md-2">
                 <select name="city" class="form-select">
                     <option value="">全部城市</option>
-                    <option value="A市" th:selected="${city == 'A市'}">A市</option>
-                    <option value="B市" th:selected="${city == 'B市'}">B市</option>
-                    <option value="C市" th:selected="${city == 'C市'}">C市</option>
+                    <option th:each="c : ${cities}" th:value="${c}"
+                            th:text="${c}" th:selected="${city == c}"></option>
                 </select>
             </div>
             <div class="col-md-2">
                 <select name="district" class="form-select">
                     <option value="">全部区县</option>
+                    <option th:each="d : ${districts}" th:value="${d}"
+                            th:text="${d}" th:selected="${district == d}"></option>
                 </select>
             </div>
             <div class="col-md-2">
@@ -54,18 +55,20 @@
             <table class="table table-hover mb-0">
                 <thead class="table-light">
                     <tr>
+                        <th style="width:36px;"><input type="checkbox" id="selectAll" onchange="toggleAll(this)" title="全选"></th>
                         <th>学校名称</th>
                         <th>城市</th>
                         <th>区县</th>
-                        <th>创建方式</th>
+                        <th>值守/后备</th>
+                        <th>今日新增</th>
                         <th>轮换模式</th>
                         <th>状态</th>
-                        <th>创建时间</th>
                         <th>操作</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr th:each="qr : ${qrCodes.content}">
+                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox"></td>
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
@@ -73,8 +76,10 @@
                         <td th:text="${qr.regionCity}"></td>
                         <td th:text="${qr.regionDistrict}"></td>
                         <td>
-                            <span class="badge bg-secondary"
-                                  th:text="${qr.createMode.name() == 'batch_import' ? '批量导入' : '手动创建'}"></span>
+                            <span class="badge bg-info" th:text="${agentCountMap.getOrDefault(qr.id, '-')}">-</span>
+                        </td>
+                        <td>
+                            <span class="fw-semibold" th:text="${todayCountMap.getOrDefault(qr.id, 0)}">0</span>
                         </td>
                         <td>
                             <span class="badge"
@@ -91,20 +96,46 @@
                                 <span th:case="'no_agent'">无可用</span>
                             </span>
                         </td>
-                        <td th:text="${#temporals.format(qr.createdAt, 'yyyy-MM-dd HH:mm')}"></td>
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}"
                                class="btn btn-sm btn-outline-secondary">详情</a>
                         </td>
                     </tr>
                     <tr th:if="${qrCodes.content.isEmpty()}">
-                        <td colspan="8" class="text-center text-muted py-4">
+                        <td colspan="9" class="text-center text-muted py-4">
                             暂无活码数据，点击"手动创建"或"批量导入"开始
                         </td>
                     </tr>
                 </tbody>
             </table>
         </div>
+    </div>
+
+    <!-- 批量操作 -->
+    <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
+        <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchAutoForm">
+            <input type="hidden" name="mode" value="auto">
+            <div id="batchAutoIds"></div>
+        </form>
+        <button class="btn btn-sm btn-outline-success" onclick="batchSubmit('auto')">📋 批量切换为自动</button>
+
+        <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchManualForm">
+            <input type="hidden" name="mode" value="manual">
+            <div id="batchManualIds"></div>
+        </form>
+        <button class="btn btn-sm btn-outline-warning" onclick="batchSubmit('manual')">📋 批量切换为人工</button>
+
+        <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload72Form">
+            <input type="hidden" name="dpi" value="72">
+            <div id="batchDownload72Ids"></div>
+        </form>
+        <button class="btn btn-sm btn-outline-primary" onclick="batchDownload(72)">📥 批量下载 72dpi</button>
+
+        <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload300Form">
+            <input type="hidden" name="dpi" value="300">
+            <div id="batchDownload300Ids"></div>
+        </form>
+        <button class="btn btn-sm btn-outline-secondary" onclick="batchDownload(300)">🖨️ 批量下载 300dpi</button>
     </div>
 
     <!-- 分页 -->
@@ -123,5 +154,49 @@
             </li>
         </ul>
     </nav>
+
+    <script>
+        function toggleAll(source) {
+            document.querySelectorAll('.qr-checkbox').forEach(cb => cb.checked = source.checked);
+        }
+
+        function batchSubmit(mode) {
+            const checked = document.querySelectorAll('.qr-checkbox:checked');
+            if (checked.length === 0) {
+                alert('请先勾选要操作的活码');
+                return;
+            }
+            const formId = mode === 'auto' ? 'batchAutoForm' : 'batchManualForm';
+            const idsDiv = document.getElementById(mode === 'auto' ? 'batchAutoIds' : 'batchManualIds');
+            idsDiv.innerHTML = '';
+            checked.forEach(cb => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'ids';
+                input.value = cb.value;
+                idsDiv.appendChild(input);
+            });
+            document.getElementById(formId).submit();
+        }
+
+        function batchDownload(dpi) {
+            const checked = document.querySelectorAll('.qr-checkbox:checked');
+            if (checked.length === 0) {
+                alert('请先勾选要下载的活码');
+                return;
+            }
+            const formId = dpi === 300 ? 'batchDownload300Form' : 'batchDownload72Form';
+            const idsDiv = document.getElementById(dpi === 300 ? 'batchDownload300Ids' : 'batchDownload72Ids');
+            idsDiv.innerHTML = '';
+            checked.forEach(cb => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'ids';
+                input.value = cb.value;
+                idsDiv.appendChild(input);
+            });
+            document.getElementById(formId).submit();
+        }
+    </script>
 </main>
 </html>
