@@ -446,22 +446,23 @@ public class QrCodeService {
 
     private String buildContactWayJson(QrCodeCreateRequest req) {
         try {
-            // 提取服务老师 userid（活码主联系人，优先放活码上）
-            String svcUserid = null;
+            List<String> userIds = new ArrayList<>();
+
+            // ① 服务老师（支持多个，逗号分隔）
             if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
-                svcUserid = req.getServiceTeacherUserid().trim();
+                for (String uid : req.getServiceTeacherUserid().split(",")) {
+                    String trimmed = uid.trim();
+                    if (!trimmed.isEmpty()) userIds.add(trimmed);
+                }
             }
-            if (svcUserid == null && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
+            // JSON 方式（高级用法，追加到列表）
+            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
                 JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
-                if (svc.has("userid")) svcUserid = svc.get("userid").asText();
+                if (svc.has("userid")) userIds.add(svc.get("userid").asText());
             }
 
-            // 如果没填服务老师，退回到接待员
-            List<String> userIds = new ArrayList<>();
-            if (svcUserid != null) {
-                userIds.add(svcUserid);
-            } else {
-                // 兼容旧逻辑：从 receptionistUserid 或 agentsJson 提取
+            // ② 如果没有服务老师，退回到接待员
+            if (userIds.isEmpty()) {
                 if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
                     for (String uid : req.getReceptionistUserid().split(",")) {
                         String trimmed = uid.trim();
@@ -529,19 +530,22 @@ public class QrCodeService {
 
     private void bindAgents(Long qrCodeId, QrCodeCreateRequest req) {
         try {
-            // ① 服务老师 — 活码主联系人（QrAgent, 角色=service）
-            String svcUserid = null;
-            int svcDailyMax = 1000;
+            // ① 服务老师 — 活码主联系人（支持多个，逗号分隔；共享日上限）
+            int svcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
+            List<String> svcUserids = new ArrayList<>();
             if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
-                svcUserid = req.getServiceTeacherUserid().trim();
-                svcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
+                for (String uid : req.getServiceTeacherUserid().split(",")) {
+                    String trimmed = uid.trim();
+                    if (!trimmed.isEmpty()) svcUserids.add(trimmed);
+                }
             }
-            if (svcUserid == null && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
+            if (svcUserids.isEmpty() && req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
                 JsonNode svc = objectMapper.readTree(req.getServiceTeacherJson());
-                svcUserid = svc.get("userid").asText();
+                svcUserids.add(svc.get("userid").asText());
                 svcDailyMax = svc.has("serviceDailyMax") ? svc.get("serviceDailyMax").asInt() : 1000;
             }
-            if (svcUserid != null) {
+            int sortOrder = 0;
+            for (String svcUserid : svcUserids) {
                 ensureAgent(svcUserid, "service");
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId)
@@ -549,7 +553,7 @@ public class QrCodeService {
                     .role(QrAgent.AgentRole.service)
                     .dailyMax(svcDailyMax)
                     .serviceDailyMax(svcDailyMax)
-                    .sortOrder(0)
+                    .sortOrder(sortOrder++)
                     .status(QrAgent.AgentStatus.active)
                     .build());
             }

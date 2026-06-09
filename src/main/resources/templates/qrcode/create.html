@@ -2,75 +2,301 @@
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='手动创建活码', content=~{::main})}">
 <main>
-    <div class="card p-4 mx-auto" style="max-width: 800px;">
-        <h5 class="mb-4">手动创建活码</h5>
-        <form method="post" th:action="@{/qrcodes/create}">
-            <div class="row g-3 mb-3">
-                <div class="col-md-6">
-                    <label class="form-label">学校名称 <span class="text-danger">*</span></label>
-                    <input type="text" name="schoolName" class="form-control" required>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">学校ID <span class="text-danger">*</span></label>
-                    <input type="text" name="schoolId" class="form-control" required
-                           placeholder="唯一标识，写入企微 state">
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">市 <span class="text-danger">*</span></label>
-                    <input type="text" name="regionCity" class="form-control" required>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">区 <span class="text-danger">*</span></label>
-                    <input type="text" name="regionDistrict" class="form-control" required>
-                </div>
-                <div class="col-12">
-                    <label class="form-label">备注</label>
-                    <input type="text" name="remark" class="form-control">
-                </div>
+<style>
+/* ── 搜索多选组件 ── */
+.multi-select { position: relative; }
+.multi-select-trigger {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    min-height: 38px; padding: 4px 36px 4px 8px;
+    border: 1px solid #dee2e6; border-radius: 6px;
+    cursor: pointer; background: #fff;
+    align-items: center;
+}
+.multi-select-trigger:focus-within { border-color: #86b7fe; box-shadow: 0 0 0 .25rem rgba(13,110,253,.25); }
+.multi-select-trigger .placeholder { color: #999; }
+.multi-select-trigger .chip {
+    display: inline-flex; align-items: center; gap: 2px;
+    background: #e9ecef; border-radius: 4px; padding: 2px 6px;
+    font-size: 13px; max-width: 180px;
+}
+.multi-select-trigger .chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-select-trigger .chip .remove { cursor: pointer; color: #888; font-weight: bold; margin-left: 2px; }
+.multi-select-trigger .chip .remove:hover { color: #dc3545; }
+.multi-select-trigger .arrow {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    pointer-events: none; color: #888;
+}
+.multi-select-dropdown {
+    display: none; position: absolute; z-index: 1050; top: 100%; left: 0; right: 0;
+    margin-top: 2px; background: #fff; border: 1px solid #dee2e6; border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12); max-height: 280px; overflow: hidden;
+}
+.multi-select-dropdown.open { display: block; }
+.multi-select-dropdown .search-box {
+    padding: 8px; border-bottom: 1px solid #eee;
+    position: sticky; top: 0; background: #fff;
+}
+.multi-select-dropdown .search-box input {
+    width: 100%; border: 1px solid #dee2e6; border-radius: 4px;
+    padding: 6px 10px; font-size: 14px; outline: none;
+}
+.multi-select-dropdown .search-box input:focus { border-color: #86b7fe; }
+.multi-select-dropdown .options {
+    overflow-y: auto; max-height: 210px; padding: 4px 0;
+}
+.multi-select-dropdown .option {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; cursor: pointer; font-size: 14px;
+    transition: background .1s;
+}
+.multi-select-dropdown .option:hover { background: #f0f4ff; }
+.multi-select-dropdown .option.selected { background: #e8f0fe; }
+.multi-select-dropdown .option input[type=checkbox] { pointer-events: none; }
+.multi-select-dropdown .no-result { padding: 12px; text-align: center; color: #999; font-size: 13px; }
+</style>
+
+<div class="card p-4 mx-auto" style="max-width: 800px;">
+    <h5 class="mb-4">手动创建活码</h5>
+    <form method="post" th:action="@{/qrcodes/create}" id="createForm">
+        <div class="row g-3 mb-3">
+            <div class="col-md-6">
+                <label class="form-label">学校名称 <span class="text-danger">*</span></label>
+                <input type="text" name="schoolName" class="form-control" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">学校ID <span class="text-danger">*</span></label>
+                <input type="text" name="schoolId" class="form-control" required
+                       placeholder="唯一标识，写入企微 state">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">市 <span class="text-danger">*</span></label>
+                <input type="text" name="regionCity" class="form-control" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">区 <span class="text-danger">*</span></label>
+                <input type="text" name="regionDistrict" class="form-control" required>
+            </div>
+            <div class="col-12">
+                <label class="form-label">备注</label>
+                <input type="text" name="remark" class="form-control">
+            </div>
+        </div>
+
+        <h6 class="mb-3">员工配置</h6>
+        <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
+
+        <!-- 员工数据（JS 用） -->
+        <script th:inline="javascript">
+            /*<![CDATA[*/
+            window._employeeList = /*[[${userList}]]*/ [];
+            /*]]>*/
+        </script>
+
+        <div class="row g-3 mb-3">
+            <!-- 服务老师（多选 + 搜索） -->
+            <div class="col-md-6">
+                <label class="form-label">服务老师 <span class="text-danger">*</span></label>
+                <div class="multi-select" id="svcMultiSelect"></div>
+                <input type="hidden" name="serviceTeacherUserid" id="svcHidden">
+                <small class="text-muted">活码主联系人，可多选。客户扫码随机分配给其中一人</small>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">服务老师日接上限</label>
+                <input type="number" name="serviceDailyMax" class="form-control" value="1000" min="1" max="5000">
+                <small class="text-muted">每位服务老师共享此日上限。达到后自动激活后备</small>
             </div>
 
-            <h6 class="mb-3">员工配置</h6>
-            <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
-            <div class="row g-3 mb-3">
-                <div class="col-md-6">
-                    <label class="form-label">服务老师 <span class="text-danger">*</span></label>
-                    <select name="serviceTeacherUserid" class="form-select" required>
-                        <option value="">请选择...</option>
-                        <option th:each="u : ${userList}"
-                                th:value="${u.userid}"
-                                th:text="${u.name + ' (' + u.userid + ')'}"></option>
-                    </select>
-                    <small class="text-muted">活码主联系人，客户扫码优先加他。日接上限默认 1000</small>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">服务老师日接上限</label>
-                    <input type="number" name="serviceDailyMax" class="form-control" value="1000" min="1" max="5000">
-                    <small class="text-muted">达到预警阈值后自动激活后备接待员</small>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">后备接待员</label>
-                    <select name="receptionistUserid" class="form-select">
-                        <option value="">无需后备（可多选，逗号分隔输入）</option>
-                        <option th:each="u : ${userList}"
-                                th:value="${u.userid}"
-                                th:text="${u.name + ' (' + u.userid + ')'}"></option>
-                    </select>
-                    <input type="text" name="receptionistUserid" class="form-control form-control-sm mt-1"
-                           placeholder="或手动输入userid，多个用逗号分隔（覆盖下拉选择）">
-                    <small class="text-muted">服务老师满员后再激活这些人。日限默认 200</small>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">欢迎语文案</label>
-                    <textarea name="welcomeText" class="form-control" rows="2"
-                              placeholder="欢迎来到XX书店家校服务！..."></textarea>
-                </div>
+            <!-- 后备接待员（多选 + 搜索） -->
+            <div class="col-md-6">
+                <label class="form-label">后备接待员</label>
+                <div class="multi-select" id="receptionistMultiSelect"></div>
+                <input type="hidden" name="receptionistUserid" id="receptionistHidden">
+                <small class="text-muted">服务老师满员后按顺序激活，日限默认 200</small>
             </div>
+            <div class="col-md-6">
+                <label class="form-label">欢迎语文案</label>
+                <textarea name="welcomeText" class="form-control" rows="2"
+                          placeholder="欢迎来到XX书店家校服务！..."></textarea>
+            </div>
+        </div>
 
-            <div class="d-flex gap-2">
-                <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 创建</button>
-                <a href="/qrcodes" class="btn btn-outline-secondary">取消</a>
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 创建</button>
+            <a href="/qrcodes" class="btn btn-outline-secondary">取消</a>
+        </div>
+    </form>
+</div>
+
+<script>
+/**
+ * 可搜索多选组件
+ * 用法: new MultiSelect(container, options) — options = [{userid, name}, ...]
+ */
+class MultiSelect {
+    constructor(el, items) {
+        this.el = el;
+        this.items = items;                    // [{userid, name}]
+        this.selected = new Map();             // userid → name
+        this.dropdownOpen = false;
+
+        this.render();
+        this.bindEvents();
+    }
+
+    render() {
+        this.el.innerHTML = `
+            <div class="multi-select-trigger">
+                <span class="placeholder">搜索并选择...</span>
+                <span class="arrow">▾</span>
             </div>
-        </form>
-    </div>
+            <div class="multi-select-dropdown">
+                <div class="search-box">
+                    <input type="text" placeholder="输入姓名或账号搜索..." autocomplete="off">
+                </div>
+                <div class="options"></div>
+            </div>`;
+        this.trigger = this.el.querySelector('.multi-select-trigger');
+        this.placeholder = this.el.querySelector('.placeholder');
+        this.dropdown = this.el.querySelector('.multi-select-dropdown');
+        this.searchInput = this.el.querySelector('.search-box input');
+        this.optionsEl = this.el.querySelector('.options');
+
+        this.renderOptions();
+    }
+
+    renderOptions(filter = '') {
+        const q = filter.toLowerCase();
+        const filtered = this.items.filter(it =>
+            it.name.toLowerCase().includes(q) || it.userid.toLowerCase().includes(q)
+        );
+        if (filtered.length === 0) {
+            this.optionsEl.innerHTML = '<div class="no-result">无匹配员工</div>';
+            return;
+        }
+        this.optionsEl.innerHTML = filtered.map(it => {
+            const sel = this.selected.has(it.userid);
+            return `<div class="option${sel ? ' selected' : ''}" data-userid="${it.userid}">
+                <input type="checkbox" ${sel ? 'checked' : ''}>
+                <span>${it.name}</span>
+                <small class="text-muted ms-auto">${it.userid}</small>
+            </div>`;
+        }).join('');
+    }
+
+    bindEvents() {
+        // 打开/关闭
+        this.trigger.addEventListener('click', () => {
+            this.dropdownOpen ? this.close() : this.open();
+        });
+
+        // 搜索
+        this.searchInput.addEventListener('input', () => {
+            this.renderOptions(this.searchInput.value);
+        });
+        // 阻止搜索框点击冒泡（否则会关闭下拉）
+        this.searchInput.addEventListener('click', e => e.stopPropagation());
+
+        // 选项点击
+        this.optionsEl.addEventListener('click', e => {
+            const opt = e.target.closest('.option');
+            if (!opt) return;
+            const userid = opt.dataset.userid;
+            const name = opt.querySelector('span').textContent;
+            this.toggle(userid, name);
+        });
+
+        // 点击外部关闭
+        document.addEventListener('click', e => {
+            if (!this.el.contains(e.target)) this.close();
+        });
+
+        // 键盘：ESC 关闭
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && this.dropdownOpen) this.close();
+        });
+    }
+
+    open() {
+        this.dropdownOpen = true;
+        this.dropdown.classList.add('open');
+        this.searchInput.value = '';
+        this.renderOptions();
+        setTimeout(() => this.searchInput.focus(), 50);
+    }
+
+    close() {
+        this.dropdownOpen = false;
+        this.dropdown.classList.remove('open');
+    }
+
+    toggle(userid, name) {
+        if (this.selected.has(userid)) {
+            this.selected.delete(userid);
+        } else {
+            this.selected.set(userid, name);
+        }
+        this.updateUI();
+        this.renderOptions(this.searchInput.value);
+    }
+
+    remove(userid) {
+        this.selected.delete(userid);
+        this.updateUI();
+        this.renderOptions(this.searchInput.value);
+    }
+
+    updateUI() {
+        const chips = this.trigger.querySelectorAll('.chip');
+        chips.forEach(c => c.remove());
+
+        if (this.selected.size === 0) {
+            this.placeholder.style.display = '';
+            this.trigger.insertBefore(this.placeholder, this.trigger.querySelector('.arrow'));
+        } else {
+            this.placeholder.style.display = 'none';
+            const arrow = this.trigger.querySelector('.arrow');
+            this.selected.forEach((name, userid) => {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.innerHTML = `<span class="name" title="${name} (${userid})">${name}</span>
+                    <span class="remove" data-userid="${userid}">×</span>`;
+                chip.querySelector('.remove').addEventListener('click', e => {
+                    e.stopPropagation();
+                    this.remove(userid);
+                });
+                this.trigger.insertBefore(chip, arrow);
+            });
+        }
+    }
+
+    /** 获取选中的 userid 列表 */
+    getValue() {
+        return Array.from(this.selected.keys());
+    }
+
+    /** 获取逗号分隔字符串 */
+    getValueString() {
+        return this.getValue().join(',');
+    }
+}
+
+// ── 初始化 ──
+document.addEventListener('DOMContentLoaded', () => {
+    const employees = window._employeeList || [];
+    if (employees.length === 0) return;
+
+    // 服务老师多选
+    const svc = new MultiSelect(document.getElementById('svcMultiSelect'), employees);
+
+    // 后备接待员多选
+    const receptionist = new MultiSelect(document.getElementById('receptionistMultiSelect'), employees);
+
+    // 提交前把选中值写入隐藏域
+    document.getElementById('createForm').addEventListener('submit', () => {
+        document.getElementById('svcHidden').value = svc.getValueString();
+        document.getElementById('receptionistHidden').value = receptionist.getValueString();
+    });
+});
+</script>
 </main>
 </html>
