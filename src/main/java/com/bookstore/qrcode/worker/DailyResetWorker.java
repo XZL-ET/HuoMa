@@ -2,6 +2,7 @@ package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.QrCodeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.Set;
 
 /**
@@ -30,6 +32,7 @@ public class DailyResetWorker {
     private final CustomerRepository customerRepo;
     private final AgentAlertRepository alertRepo;
     private final CustomerTransferRepository transferRepo;
+    private final QrCodeService qrCodeService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -70,10 +73,11 @@ public class DailyResetWorker {
     }
 
     /**
-     * 恢复 full 状态的接待员（排除被封/熔断的）。
+     * 恢复 full 状态的员工（排除被封/熔断的），并重新同步活码到企微。
      */
     private void recoverFullAgents() {
         var fullAgents = qrAgentRepo.findByStatus(QrAgent.AgentStatus.full);
+        Set<Long> affectedQrIds = new HashSet<>();
         for (var qa : fullAgents) {
             var agent = agentRepo.findById(qa.getAgentUserid()).orElse(null);
             if (agent != null
@@ -83,9 +87,19 @@ public class DailyResetWorker {
                 qa.setDailyCurrent(0);
                 qa.setLastResetAt(LocalDateTime.now());
                 qrAgentRepo.save(qa);
+                affectedQrIds.add(qa.getQrCodeId());
             }
         }
-        log.info("已恢复 {} 个 full 员工", fullAgents.size());
+        log.info("已恢复 {} 个 full 员工，涉及 {} 个活码", fullAgents.size(), affectedQrIds.size());
+
+        // 重新同步受影响的活码到企微（让恢复的员工重新出现在活码上）
+        for (Long qrId : affectedQrIds) {
+            try {
+                qrCodeService.syncQrUsersToWechat(qrId);
+            } catch (Exception e) {
+                log.error("日重置后同步活码失败: qrId={}", qrId, e);
+            }
+        }
     }
 
     /**

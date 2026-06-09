@@ -12,12 +12,15 @@ import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -30,6 +33,7 @@ public class QrCodeService {
     private final AgentRepository agentRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+    private final StringRedisTemplate redisTemplate;
 
     // ==================== 查询 ====================
 
@@ -95,13 +99,38 @@ public class QrCodeService {
 
     // ==================== 批量导入 ====================
 
-    @Transactional
-    public Map<String, Object> batchImport(MultipartFile file) {
+    /**
+     * 异步批量导入，进度通过 Redis Hash 跟踪。
+     * @return taskId
+     */
+    public String asyncBatchImport(MultipartFile file) {
         List<Map<String, String>> rawItems = parseExcel(file);
-        List<Map<String, Object>> results = new ArrayList<>();
-        int success = 0, fail = 0;
+        String taskId = UUID.randomUUID().toString().substring(0, 8);
+        String progressKey = "batch:import:" + taskId;
 
-        for (Map<String, String> item : rawItems) {
+        // 初始化进度
+        Map<String, String> init = new LinkedHashMap<>();
+        init.put("total", String.valueOf(rawItems.size()));
+        init.put("success", "0");
+        init.put("fail", "0");
+        init.put("status", "processing");
+        redisTemplate.opsForHash().putAll(progressKey, init);
+        redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);
+
+        // 异步执行
+        executeBatchImport(taskId, rawItems);
+
+        return taskId;
+    }
+
+    @Async("taskExecutor")
+    public void executeBatchImport(String taskId, List<Map<String, String>> rawItems) {
+        String progressKey = "batch:import:" + taskId;
+        int success = 0, fail = 0;
+        int total = rawItems.size();
+
+        for (int i = 0; i < rawItems.size(); i++) {
+            Map<String, String> item = rawItems.get(i);
             try {
                 QrCodeCreateRequest req = new QrCodeCreateRequest();
                 req.setSchoolName(item.get("schoolName"));
@@ -110,17 +139,36 @@ public class QrCodeService {
                 req.setRegionDistrict(item.get("regionDistrict"));
                 req.setRemark(item.getOrDefault("remark", ""));
                 create(req);
-                results.add(Map.of("row", item.get("row"), "status", "ok",
-                    "school", item.get("schoolName")));
                 success++;
             } catch (Exception e) {
-                results.add(Map.of("row", item.get("row"), "status", "fail",
-                    "school", item.get("schoolName"), "reason", e.getMessage()));
                 fail++;
+                // 记录失败详情
+                String detailKey = progressKey + ":fail:" + fail;
+                redisTemplate.opsForValue().set(detailKey,
+                    item.get("row") + "|" + item.get("schoolName") + "|" + e.getMessage(),
+                    30, TimeUnit.MINUTES);
             }
+
+            // 更新进度
+            Map<String, String> progress = new LinkedHashMap<>();
+            progress.put("total", String.valueOf(total));
+            progress.put("success", String.valueOf(success));
+            progress.put("fail", String.valueOf(fail));
+            progress.put("processed", String.valueOf(i + 1));
+            progress.put("status", "processing");
+            redisTemplate.opsForHash().putAll(progressKey, progress);
         }
-        return Map.of("total", rawItems.size(), "success", success,
-            "fail", fail, "details", results);
+
+        // 完成
+        redisTemplate.opsForHash().put(progressKey, "status", "done");
+        log.info("批量导入完成: taskId={}, total={}, success={}, fail={}", taskId, total, success, fail);
+    }
+
+    /**
+     * 获取批量导入进度。
+     */
+    public Map<Object, Object> getBatchImportProgress(String taskId) {
+        return redisTemplate.opsForHash().entries("batch:import:" + taskId);
     }
 
     // ==================== 删除 ====================
@@ -140,7 +188,7 @@ public class QrCodeService {
     // ==================== 同步企微活码 ====================
 
     /**
-     * 手动同步活码用户列表到企微 — 只把 active 员工放上活码。
+     * 手动同步活码用户列表到企微 — 服务老师始终保留，接待员只上 active。
      */
     public void syncQrUsersToWechat(Long qrCodeId) {
         QrCode qr = getById(qrCodeId);
@@ -148,17 +196,28 @@ public class QrCodeService {
             throw new RuntimeException("活码未关联企微 config_id");
         }
 
-        List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(
-            qrCodeId, QrAgent.AgentStatus.active);
-        List<String> userIds = activeAgents.stream()
-            .map(QrAgent::getAgentUserid)
-            .distinct()
-            .toList();
+        List<QrAgent> allAgents = qrAgentRepo.findByQrCodeId(qrCodeId);
+        Set<String> userIds = new LinkedHashSet<>();
+
+        // 服务老师只在 active 状态时上活码（满了就暂时下码）
+        for (QrAgent a : allAgents) {
+            if (a.getRole() == QrAgent.AgentRole.service
+                && a.getStatus() == QrAgent.AgentStatus.active) {
+                userIds.add(a.getAgentUserid());
+            }
+        }
+        // 接待员只上 active
+        for (QrAgent a : allAgents) {
+            if (a.getRole() != QrAgent.AgentRole.service
+                && a.getStatus() == QrAgent.AgentStatus.active) {
+                userIds.add(a.getAgentUserid());
+            }
+        }
 
         try {
             Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("config_id", qr.getQrConfigId());
-            body.put("user", userIds);
+            body.put("user", new ArrayList<>(userIds));
             String json = objectMapper.writeValueAsString(body);
             wecomApi.updateContactWay(json);
             log.info("手动同步企微活码: config_id={}, users={}", qr.getQrConfigId(), userIds);
@@ -332,6 +391,55 @@ public class QrCodeService {
         qrCodeRepo.save(qr);
     }
 
+    @Transactional
+    public void updateThresholds(Long qrCodeId, int warnRatio, int urgentRatio) {
+        if (warnRatio < 1 || warnRatio > 100 || urgentRatio < 1 || urgentRatio > 100) {
+            throw new RuntimeException("阈值必须在 1-100 之间");
+        }
+        if (warnRatio >= urgentRatio) {
+            throw new RuntimeException("预警阈值必须小于紧急阈值");
+        }
+        QrCode qr = getById(qrCodeId);
+        qr.setWarnRatio(warnRatio);
+        qr.setUrgentRatio(urgentRatio);
+        qrCodeRepo.save(qr);
+    }
+
+    @Transactional
+    public int batchUpdateRotateMode(List<Long> ids, QrCode.RotateMode mode) {
+        int count = 0;
+        for (Long id : ids) {
+            try {
+                QrCode qr = qrCodeRepo.findById(id).orElse(null);
+                if (qr != null) {
+                    qr.setRotateMode(mode);
+                    qrCodeRepo.save(qr);
+                    count++;
+                }
+            } catch (Exception e) {
+                log.warn("批量切换轮换模式失败: id={}", id, e);
+            }
+        }
+        return count;
+    }
+
+    @Transactional
+    public void updateStyle(Long qrCodeId, String theme, String guideText,
+                            Boolean showSchoolName, String logoPath) {
+        QrCode qr = getById(qrCodeId);
+        try {
+            Map<String, Object> style = new LinkedHashMap<>();
+            if (logoPath != null) style.put("logo_path", logoPath);
+            style.put("theme", theme != null ? theme : "blue");
+            if (guideText != null) style.put("guide_text", guideText);
+            style.put("show_school_name", showSchoolName != null ? showSchoolName : true);
+            qr.setStyleConfig(objectMapper.writeValueAsString(style));
+            qrCodeRepo.save(qr);
+        } catch (Exception e) {
+            throw new RuntimeException("保存样式配置失败", e);
+        }
+    }
+
     // ==================== 内部工具 ====================
 
     private String buildContactWayJson(QrCodeCreateRequest req) {
@@ -494,9 +602,25 @@ public class QrCodeService {
 
     private void ensureAgent(String userid, String role) {
         if (!agentRepo.existsById(userid)) {
+            // 尝试从企微 API 获取真实姓名
+            String name = userid; // fallback
+            try {
+                JsonNode result = wecomApi.getUserSimplelist();
+                if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                    for (JsonNode u : result.get("userlist")) {
+                        if (userid.equals(u.get("userid").asText())) {
+                            name = u.get("name").asText();
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
+            }
+
             agentRepo.save(Agent.builder()
                 .userid(userid)
-                .name(userid)
+                .name(name)
                 .role(Agent.AgentRole.valueOf(role))
                 .dailyTotalCap(500)
                 .build());

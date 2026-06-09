@@ -28,6 +28,7 @@ public class AgentBindService {
     private final QrBackupPoolRepository backupPoolRepo;
     private final QrCodeRepository qrCodeRepo;
     private final AgentRepository agentRepo;
+    private final QrRotateLogRepository rotateLogRepo;
     private final StringRedisTemplate redisTemplate;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
@@ -96,8 +97,8 @@ public class AgentBindService {
     }
 
     /**
-     * 扩容活码 — 从后备池激活接待员，加入企微活码用户列表。
-     * 服务老师不替换，新接待员追加到活码。
+     * 扩容活码 — 从后备池激活接待员加入企微活码，满员员工暂时下码。
+     * 日重置后满员员工自动恢复并重新上码。
      */
     @Transactional
     public void expandQrCodeUsers(Long qrCodeId, String fullUserId, QrCode qr, QrAgent fullAgent) {
@@ -143,7 +144,8 @@ public class AgentBindService {
                 .build();
             qrAgentRepo.save(newAgent);
 
-            // ③ 标记满员的服务老师（保留在活码上，不替换）
+            // ③ 满员员工标记为 full（包括服务老师），从企微活码移除
+            //    日重置后会恢复为 active 并重新上活码
             fullAgent.setStatus(QrAgent.AgentStatus.full);
             fullAgent.setReplacedBy(backupUserid);
             fullAgent.setUpdatedAt(LocalDateTime.now());
@@ -151,6 +153,13 @@ public class AgentBindService {
 
             // ④ 更新企微活码 — 把新接待员加入用户列表
             syncQrUsersToWechat(qr, fullUserId, backupUserid);
+
+            // ⑤ 写轮换日志
+            rotateLogRepo.save(QrRotateLog.builder()
+                .qrCodeId(qrCodeId)
+                .toUserid(backupUserid)
+                .reason("日限到达 — 自动扩容")
+                .build());
 
             log.info("扩容完成: 活码 {} 服务老师 {} 满了，激活后备 {}",
                 qrCodeId, fullUserId, backupUserid);
@@ -209,6 +218,13 @@ public class AgentBindService {
                 syncQrUsersToWechat(qr, svcUserid, backupUserid);
             }
 
+            // 写轮换日志
+            rotateLogRepo.save(QrRotateLog.builder()
+                .qrCodeId(qrCodeId)
+                .toUserid(backupUserid)
+                .reason("紧急阈值触发 — 提前激活后备")
+                .build());
+
             log.info("提前激活后备: 活码 {} 加入接待员 {}", qrCodeId, backupUserid);
         } finally {
             redisTemplate.delete(lockKey);
@@ -217,20 +233,28 @@ public class AgentBindService {
 
     /**
      * 同步活码用户列表到企微。
-     * 只包含 active 状态的员工（full 的不上活码）。
+     * 服务老师始终保留；接待员只上 active 状态的。
      */
     private void syncQrUsersToWechat(QrCode qr, String fullUserId, String newUserId) {
         try {
             Set<String> userIds = new LinkedHashSet<>();
-            List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(
-                qr.getId(), QrAgent.AgentStatus.active);
-            for (QrAgent a : activeAgents) {
-                userIds.add(a.getAgentUserid());
+
+            // 服务老师只在 active 状态时上活码（满了就暂时下码）
+            List<QrAgent> allAgents = qrAgentRepo.findByQrCodeId(qr.getId());
+            for (QrAgent a : allAgents) {
+                if (a.getRole() == QrAgent.AgentRole.service
+                    && a.getStatus() == QrAgent.AgentStatus.active) {
+                    userIds.add(a.getAgentUserid());
+                }
             }
 
-            // 满员的不放活码上（如果 sync 是因为扩容，fullUserId 应该已经被标记为 full 了，
-            // 不会被 activeAgents 查出来，所以不会出现在列表里）
-            // 新激活的已经在 activeAgents 中
+            // 接待员只取 active 状态
+            for (QrAgent a : allAgents) {
+                if (a.getRole() != QrAgent.AgentRole.service
+                    && a.getStatus() == QrAgent.AgentStatus.active) {
+                    userIds.add(a.getAgentUserid());
+                }
+            }
 
             if (userIds.isEmpty()) {
                 log.warn("活码 {} 无可用联系人，跳过同步", qr.getQrConfigId());
