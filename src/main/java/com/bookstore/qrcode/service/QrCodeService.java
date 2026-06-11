@@ -22,6 +22,43 @@ import java.io.InputStream;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * <h2>活码核心服务</h2>
+ *
+ * <p>活码（企业微信「联系我」二维码）的全生命周期管理服务，是系统中最核心的业务模块。
+ * 活码将学校的服务老师和后备接待员绑定到一枚企微二维码上，客户扫码后由企微自动分配接待员工，
+ * 从而实现客户分流与会话承接。</p>
+ *
+ * <h3>主要职责</h3>
+ * <ul>
+ *   <li><b>查询</b> — 分页搜索、按 ID 查询、获取绑定员工列表、获取后备池列表</li>
+ *   <li><b>手动创建</b> — 调用企微 API 创建「联系我」二维码 → 写入 DB → 绑定服务老师与接待员</li>
+ *   <li><b>批量导入</b> — 异步解析 Excel，逐行创建活码，进度通过 Redis Hash 实时跟踪</li>
+ *   <li><b>删除</b> — 级联删除企微端活码、联系人关联、后备池、轮换日志</li>
+ *   <li><b>企微同步</b> — 将本地联系人状态（active 的服务老师 + 接待员）推送到企微</li>
+ *   <li><b>后备池管理</b> — 添加/移除/排序后备接待员，为轮换引擎提供候选池</li>
+ *   <li><b>联系人管理</b> — 添加/移除/更新活码下的接待员与日接上限</li>
+ *   <li><b>状态与配置</b> — 活码启用/停用、轮换模式切换、阈值配置、样式配置</li>
+ * </ul>
+ *
+ * <h3>核心实体关系</h3>
+ * <pre>
+ *   QrCode (活码主表)
+ *     ├── QrAgent (活码联系人：服务老师 + 接待员)
+ *     ├── QrBackupPool (后备池：按序轮换的候选接待员)
+ *     └── QrRotateLog (轮换日志：记录上下线操作)
+ *   Agent (全局员工表，独立于活码)
+ * </pre>
+ *
+ * @author Bookstore Dev
+ * @since 1.0
+ * @see QrCode
+ * @see QrAgent
+ * @see QrBackupPool
+ * @see QrRotateLog
+ * @see Agent
+ * @see WecomApiClient
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -38,20 +75,58 @@ public class QrCodeService {
 
     // ==================== 查询 ====================
 
+    /**
+     * 分页搜索活码。
+     *
+     * <p>支持按学校名称/ID模糊匹配（keyword）、按城市/区县精确筛选、
+     * 按活码状态过滤。底层委托给 {@link QrCodeRepository#search} 的 JPA Specification 查询。</p>
+     *
+     * @param keyword  搜索关键词（匹配学校名称或学校ID），可为 {@code null}
+     * @param city     城市精确筛选，可为 {@code null}
+     * @param district 区县精确筛选，可为 {@code null}
+     * @param status   活码状态筛选（{@code active / inactive}），可为 {@code null} 表示全部
+     * @param pageable 分页参数（页码、每页条数、排序）
+     * @return 活码分页结果
+     */
     public Page<QrCode> search(String keyword, String city, String district,
                                 QrCode.QrCodeStatus status, Pageable pageable) {
         return qrCodeRepo.search(keyword, city, district, status, pageable);
     }
 
+    /**
+     * 根据主键 ID 获取活码。
+     *
+     * @param id 活码主键 ID
+     * @return 活码实体
+     * @throws RuntimeException 活码不存在时抛出
+     */
     public QrCode getById(Long id) {
         return qrCodeRepo.findById(id)
             .orElseThrow(() -> new RuntimeException("活码不存在: " + id));
     }
 
+    /**
+     * 获取活码下所有联系人（服务老师 + 接待员），按排序号升序排列。
+     *
+     * <p>返回结果包含所有状态的记录（active / inactive / removed），
+     * 调用方按需过滤。排序号决定企微分配时的优先顺序。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @return 联系人列表，按 {@code sortOrder} 升序
+     */
     public List<QrAgent> getAgents(Long qrCodeId) {
         return qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId);
     }
 
+    /**
+     * 获取活码后备池中处于「待命」状态的接待员列表，按排序号升序排列。
+     *
+     * <p>只返回 {@link QrBackupPool.PoolStatus#standby} 状态的记录，
+     * 已上线的接待员不在此列表中。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @return 后备接待员列表
+     */
     public List<QrBackupPool> getBackups(Long qrCodeId) {
         return backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(
             qrCodeId, QrBackupPool.PoolStatus.standby);
@@ -59,8 +134,30 @@ public class QrCodeService {
 
     // ==================== 手动创建 ====================
 
+    /**
+     * 手动创建活码（完整流程：企微 API → DB 写入 → 绑定员工）。
+     *
+     * <h3>执行流程</h3>
+     * <ol>
+     *   <li>校验学校 ID 唯一性：一个学校 ID 最多创建一个活码</li>
+     *   <li>构造企微「联系我」二维码参数，调用 {@link WecomApiClient#createContactWay(String)}
+     *       在企微端创建活码，获取 {@code config_id} 和 {@code qr_code} URL</li>
+     *   <li>写入 {@link QrCode} 主表记录</li>
+     *   <li>将服务老师写入 {@link QrAgent} 表，将接待员写入 {@link QrBackupPool} 后备池</li>
+     * </ol>
+     *
+     * <p>步骤 1 的企微 API 调用在事务中执行：如果企微创建失败则抛出异常回滚事务，
+     * 保证企微端与 DB 的一致性。如果企微调用成功但后续 DB 操作失败，
+     * 则会产生一个孤儿活码在企微端——这是权衡后的设计，因为企微不提供事务性回滚。</p>
+     *
+     * @param req 创建请求 DTO，包含学校信息、服务老师、接待员、欢迎语等配置
+     * @return 持久化后的 {@link QrCode} 实体
+     * @throws RuntimeException 学校 ID 已存在、企微 API 调用失败、员工绑定失败时抛出
+     * @see QrCodeCreateRequest
+     */
     @Transactional
     public QrCode create(QrCodeCreateRequest req) {
+        // 校验学校 ID 唯一性：活码与学校一一对应，防止重复创建
         if (qrCodeRepo.existsBySchoolId(req.getSchoolId())) {
             throw new RuntimeException("学校ID已存在: " + req.getSchoolId());
         }
@@ -68,15 +165,19 @@ public class QrCodeService {
         // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败不影响事务）
         String qrRequestJson = buildContactWayJson(req);
         JsonNode result = wecomApi.createContactWay(qrRequestJson);
+        // 企微 API errcode=0 表示成功，非 0 表示业务错误
         int errcode = result.has("errcode") ? result.get("errcode").asInt() : 0;
         if (errcode != 0) {
             String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
             throw new RuntimeException("创建企微活码失败 [" + errcode + "]: " + errmsg);
         }
+        // config_id 是企微端活码的唯一标识，后续更新/删除都依赖它
         String configId = result.get("config_id").asText();
+        // qr_code 是活码图片的 URL，前端直接展示
         String qrUrl = result.get("qr_code").asText();
 
-        // 2. 保存活码
+        // 2. 保存活码主表记录
+        // createMode 标记为 manual 以区别于批量导入（batch）
         QrCode qr = QrCode.builder()
             .schoolName(req.getSchoolName())
             .schoolId(req.getSchoolId())
@@ -85,15 +186,15 @@ public class QrCodeService {
             .qrConfigId(configId)
             .qrUrl(qrUrl)
             .welcomeConfig(buildWelcomeConfig(req))
-            .status(QrCode.QrCodeStatus.active)
-            .rotateMode(QrCode.RotateMode.auto)
-            .createMode(QrCode.CreateMode.manual)
+            .status(QrCode.QrCodeStatus.active)       // 新创建默认启用
+            .rotateMode(QrCode.RotateMode.auto)       // 默认自动轮换模式
+            .createMode(QrCode.CreateMode.manual)      // 标记为手动创建
             .remark(req.getRemark())
-            .customTags(req.getCustomTags())
+            .customTags(req.getCustomTags())            // 客户扫码后自动打标签
             .build();
         qr = qrCodeRepo.save(qr);
 
-        // 3. 绑定员工
+        // 3. 绑定员工：服务老师 → QrAgent，接待员 → QrBackupPool
         bindAgents(qr.getId(), req);
 
         return qr;
@@ -102,29 +203,54 @@ public class QrCodeService {
     // ==================== 批量导入 ====================
 
     /**
-     * 异步批量导入，进度通过 Redis Hash 跟踪。
-     * @return taskId
+     * 异步批量导入活码。
+     *
+     * <p>上传 Excel 文件后，由该方法启动异步导入任务。导入进度通过 Redis Hash 实时跟踪，
+     * 前端可轮询 {@link #getBatchImportProgress(String)} 获取进度。</p>
+     *
+     * <h3>Redis 进度数据结构</h3>
+     * <pre>
+     *   Key: batch:import:{taskId}
+     *   Fields: total, success, fail, processed, status
+     *   Status: processing → done
+     *   失败详情: batch:import:{taskId}:fail:{N} (每个失败行一条)
+     * </pre>
+     *
+     * @param file 上传的 Excel 文件（MultipartFile）
+     * @return taskId 任务标识，用于查询进度
      */
     public String asyncBatchImport(MultipartFile file) {
+        // 同步解析 Excel 为内存列表（解析本身很快，无需异步）
         List<Map<String, String>> rawItems = parseExcel(file);
+        // 生成 8 位短 taskId，兼顾唯一性和可读性
         String taskId = UUID.randomUUID().toString().substring(0, 8);
         String progressKey = "batch:import:" + taskId;
 
-        // 初始化进度
+        // 初始化 Redis 进度 Hash
         Map<String, String> init = new LinkedHashMap<>();
         init.put("total", String.valueOf(rawItems.size()));
         init.put("success", "0");
         init.put("fail", "0");
         init.put("status", "processing");
         redisTemplate.opsForHash().putAll(progressKey, init);
-        redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);
+        redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);  // 30 分钟自动过期，防止 Redis 内存泄漏
 
-        // 异步执行
+        // 启动异步执行（通过 Spring @Async 注解的 taskExecutor 线程池）
         executeBatchImport(taskId, rawItems);
 
         return taskId;
     }
 
+    /**
+     * 异步批量导入的实际执行方法。
+     *
+     * <p>通过 {@link Async @Async} 注解在独立线程池中执行，不阻塞 HTTP 请求线程。
+     * 逐行调用 {@link #create(QrCodeCreateRequest)} 创建活码，
+     * 每条创建失败不影响后续行，失败详情写入 Redis。</p>
+     *
+     * @param taskId   任务标识
+     * @param rawItems Excel 解析后的行数据列表
+     */
     @Async("taskExecutor")
     public void executeBatchImport(String taskId, List<Map<String, String>> rawItems) {
         String progressKey = "batch:import:" + taskId;
@@ -134,24 +260,26 @@ public class QrCodeService {
         for (int i = 0; i < rawItems.size(); i++) {
             Map<String, String> item = rawItems.get(i);
             try {
+                // 将 Excel 行数据映射为创建请求 DTO
                 QrCodeCreateRequest req = new QrCodeCreateRequest();
                 req.setSchoolName(item.get("schoolName"));
                 req.setSchoolId(item.get("schoolId"));
                 req.setRegionCity(item.get("regionCity"));
                 req.setRegionDistrict(item.get("regionDistrict"));
                 req.setRemark(item.getOrDefault("remark", ""));
+                // 直接复用手动创建流程（含企微 API 调用）
                 create(req);
                 success++;
             } catch (Exception e) {
                 fail++;
-                // 记录失败详情
+                // 记录失败详情到独立 Redis Key，方便前端展示失败原因
                 String detailKey = progressKey + ":fail:" + fail;
                 redisTemplate.opsForValue().set(detailKey,
                     item.get("row") + "|" + item.get("schoolName") + "|" + e.getMessage(),
                     30, TimeUnit.MINUTES);
             }
 
-            // 更新进度
+            // 每处理完一行就更新进度 Hash，实现实时进度展示
             Map<String, String> progress = new LinkedHashMap<>();
             progress.put("total", String.valueOf(total));
             progress.put("success", String.valueOf(success));
@@ -161,13 +289,20 @@ public class QrCodeService {
             redisTemplate.opsForHash().putAll(progressKey, progress);
         }
 
-        // 完成
+        // 全部处理完毕，标记状态为 done
         redisTemplate.opsForHash().put(progressKey, "status", "done");
         log.info("批量导入完成: taskId={}, total={}, success={}, fail={}", taskId, total, success, fail);
     }
 
     /**
-     * 获取批量导入进度。
+     * 获取批量导入的实时进度。
+     *
+     * <p>从 Redis 读取进度 Hash 的所有字段，返回给前端用于进度条展示。
+     * 返回的 Map 包含以下 key：total（总数）、success（成功数）、fail（失败数）、
+     * processed（已处理数）、status（processing / done）。</p>
+     *
+     * @param taskId 任务标识（由 {@link #asyncBatchImport(MultipartFile)} 返回）
+     * @return Redis Hash 的所有 entries，为空 Map 表示任务不存在或已过期
      */
     public Map<Object, Object> getBatchImportProgress(String taskId) {
         return redisTemplate.opsForHash().entries("batch:import:" + taskId);
@@ -175,23 +310,59 @@ public class QrCodeService {
 
     // ==================== 删除 ====================
 
+    /**
+     * 删除活码及其所有关联数据（级联删除）。
+     *
+     * <h3>删除顺序（按依赖关系反向）</h3>
+     * <ol>
+     *   <li>调用企微 API 删除企微端的「联系我」二维码</li>
+     *   <li>删除所有活码联系人（{@link QrAgent}）</li>
+     *   <li>删除后备池记录（{@link QrBackupPool}）</li>
+     *   <li>删除轮换日志（{@link QrRotateLog}）</li>
+     *   <li>删除活码主记录（{@link QrCode}）</li>
+     * </ol>
+     *
+     * <p>只要活码有关联的 {@code config_id}，就会调用企微删除 API——即使该调用失败，
+     * DB 侧的删除仍会继续（避免 DB 残留孤儿数据）。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @throws RuntimeException 活码不存在时抛出
+     */
     @Transactional
     public void delete(Long qrCodeId) {
         QrCode qr = getById(qrCodeId);
+        // 先删企微端的活码（如果有 config_id）
         if (qr.getQrConfigId() != null) {
             wecomApi.deleteContactWay(qr.getQrConfigId());
         }
+        // 级联删除活码下的联系人关联
         qrAgentRepo.findByQrCodeId(qrCodeId).forEach(qa -> qrAgentRepo.delete(qa));
+        // 级联删除后备池记录
         backupRepo.findByQrCodeId(qrCodeId).forEach(bp -> backupRepo.delete(bp));
+        // 级联删除轮换日志（不限制分页大小，全部删除）
         rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(qrCodeId, Pageable.unpaged())
             .forEach(rl -> rotateLogRepo.delete(rl));
+        // 最后删除活码主记录
         qrCodeRepo.delete(qr);
     }
 
     // ==================== 同步企微活码 ====================
 
     /**
-     * 手动同步活码用户列表到企微 — 服务老师始终保留，接待员只上 active。
+     * 手动将活码的联系人列表同步到企微端。
+     *
+     * <h3>同步策略</h3>
+     * <ul>
+     *   <li><b>服务老师</b>：只上 {@link QrAgent.AgentStatus#active} 状态的，
+     *       当服务老师日接量满后被标记为 inactive，此时自动下码</li>
+     *   <li><b>接待员</b>：只上 active 状态的，非 active 不上码</li>
+     * </ul>
+     *
+     * <p>服务老师始终排在接待员之前（通过 LinkedHashSet 保证插入顺序），
+     * 企微在分配客户时会优先尝试排在前面的员工。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @throws RuntimeException 活码不存在、未关联企微 config_id、企微 API 调用失败时抛出
      */
     public void syncQrUsersToWechat(Long qrCodeId) {
         QrCode qr = getById(qrCodeId);
@@ -200,16 +371,21 @@ public class QrCodeService {
         }
 
         List<QrAgent> allAgents = qrAgentRepo.findByQrCodeId(qrCodeId);
+        // 使用 LinkedHashSet 保证去重的同时保持插入顺序：
+        // 服务老师先入队，接待员后入队，企微按此顺序分配客户
         Set<String> userIds = new LinkedHashSet<>();
 
-        // 服务老师只在 active 状态时上活码（满了就暂时下码）
+        // 服务老师只在 active 状态时上活码：
+        // 当自动轮换检测到某服务老师日接待量达到上限时，其状态会被标记为 inactive，
+        // 此时需要下码让企微不再分配客户给该老师
         for (QrAgent a : allAgents) {
             if (a.getRole() == QrAgent.AgentRole.service
                 && a.getStatus() == QrAgent.AgentStatus.active) {
                 userIds.add(a.getAgentUserid());
             }
         }
-        // 接待员只上 active
+        // 接待员只上 active 状态：
+        // removed 的接待员已从活码移除，inactive 的接待员可能是日接量耗尽或手动停用
         for (QrAgent a : allAgents) {
             if (a.getRole() != QrAgent.AgentRole.service
                 && a.getStatus() == QrAgent.AgentStatus.active) {
@@ -218,6 +394,7 @@ public class QrCodeService {
         }
 
         try {
+            // 构造企微「更新联系我」API 请求体
             Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("config_id", qr.getQrConfigId());
             body.put("user", new ArrayList<>(userIds));
@@ -231,11 +408,30 @@ public class QrCodeService {
 
     // ==================== 后备池管理 ====================
 
+    /**
+     * 向活码后备池添加新接待员。
+     *
+     * <p>后备池是轮换引擎的候选池。当服务老师日接待量接近上限时，
+     * 系统从后备池按 {@code sortOrder} 顺序取出接待员上线轮换。
+     * 新添加的接待员排到当前最大排序号之后。</p>
+     *
+     * <h3>处理逻辑</h3>
+     * <ol>
+     *   <li>校验该员工是否已在后备池中（防重复添加）</li>
+     *   <li>确保 {@link Agent} 全局表中存在该员工（不存在则创建）</li>
+     *   <li>计算排序号 = 当前最大排序号 + 1</li>
+     *   <li>写入 {@link QrBackupPool} 表，状态为 standby</li>
+     * </ol>
+     *
+     * @param qrCodeId    活码主键 ID
+     * @param agentUserid 企微员工 userid
+     * @throws RuntimeException 活码不存在、员工已在后备池中时抛出
+     */
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
         QrCode qr = getById(qrCodeId);
 
-        // 检查是否已在后备池中
+        // 检查是否已在后备池中：同一个员工在一个活码的后备池中只能出现一次
         List<QrBackupPool> existing = backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(
             qrCodeId, QrBackupPool.PoolStatus.standby);
         boolean alreadyExists = existing.stream()
@@ -244,10 +440,11 @@ public class QrCodeService {
             throw new RuntimeException("该员工已在后备池中");
         }
 
-        // 确保 Agent 表中存在
+        // 确保 Agent 全局表中存在该员工记录：
+        // Agent 表独立于活码，存储所有员工的企微账号信息
         ensureAgent(agentUserid, "receptionist");
 
-        // 确定排序号
+        // 确定排序号：新员工排到末尾，保证轮换时的 FIFO 语义
         int maxOrder = existing.stream()
             .mapToInt(QrBackupPool::getSortOrder)
             .max().orElse(-1);
@@ -257,7 +454,7 @@ public class QrCodeService {
             .agentUserid(agentUserid)
             .role(QrBackupPool.PoolRole.receptionist)
             .sortOrder(maxOrder + 1)
-            .status(QrBackupPool.PoolStatus.standby)
+            .status(QrBackupPool.PoolStatus.standby) // 初始为待命状态，等待被轮换引擎上线
             .build();
         backupRepo.save(backup);
 
@@ -266,11 +463,23 @@ public class QrCodeService {
 
     // ==================== 活码联系人管理 ====================
 
+    /**
+     * 向活码添加接待员联系人。
+     *
+     * <p>与 {@link #addBackup(Long, String)} 不同，这里直接将接待员加入 {@link QrAgent} 表
+     * （而非后备池），使接待员立即出现在活码的联系人列表中。
+     * 适用于需要直接添加接待员而不经过后备池轮换的场景。</p>
+     *
+     * @param qrCodeId    活码主键 ID
+     * @param agentUserid 企微员工 userid
+     * @throws RuntimeException 活码不存在、员工已在联系人中时抛出
+     */
     @Transactional
     public void addAgent(Long qrCodeId, String agentUserid) {
         getById(qrCodeId);
 
-        // 检查是否已在联系人中（排除已移除的）
+        // 检查是否已在联系人中（排除已移除的 status=removed）：
+        // removed 状态的员工可以重新添加（相当于重新激活）
         List<QrAgent> existing = qrAgentRepo.findByQrCodeId(qrCodeId);
         boolean duplicate = existing.stream()
             .anyMatch(a -> a.getAgentUserid().equals(agentUserid)
@@ -288,15 +497,25 @@ public class QrCodeService {
         qrAgentRepo.save(QrAgent.builder()
             .qrCodeId(qrCodeId)
             .agentUserid(agentUserid)
-            .role(QrAgent.AgentRole.receptionist)
-            .dailyMax(200)
+            .role(QrAgent.AgentRole.receptionist)   // 手动添加的默认为接待员角色
+            .dailyMax(200)                            // 默认日接待上限 200 人
             .sortOrder(maxOrder + 1)
-            .status(QrAgent.AgentStatus.active)
+            .status(QrAgent.AgentStatus.active)       // 添加即启用
             .build());
 
         log.info("联系人已添加: qrCodeId={}, agentUserid={}", qrCodeId, agentUserid);
     }
 
+    /**
+     * 移除活码联系人（软删除：标记为 removed 状态）。
+     *
+     * <p>不移除服务老师角色（{@link QrAgent.AgentRole#service}），
+     * 因为服务老师是活码的核心配置，需要通过更换流程来替换。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param agentId  联系人记录 ID（QrAgent 主键）
+     * @throws RuntimeException 联系人不存在、不属于该活码、或尝试移除服务老师时抛出
+     */
     @Transactional
     public void removeAgent(Long qrCodeId, Long agentId) {
         QrAgent agent = qrAgentRepo.findById(agentId)
@@ -304,14 +523,30 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
+        // 服务老师不允许直接移除：必须先指定新的服务老师，通过更换流程替换
+        // 这是为了防止活码失去服务老师导致客户无人接待
         if (agent.getRole() == QrAgent.AgentRole.service) {
             throw new RuntimeException("服务老师不能移除，请先更换服务老师");
         }
+        // 软删除：标记为 removed 而非物理删除，保留历史记录
         agent.setStatus(QrAgent.AgentStatus.removed);
         qrAgentRepo.save(agent);
         log.info("联系人已移除: qrCodeId={}, agentUserid={}", qrCodeId, agent.getAgentUserid());
     }
 
+    /**
+     * 更新活码联系人的配置（日接上限、角色、排序号）。
+     *
+     * <p>参数为 {@code null} 的字段表示不更新，保持原值。
+     * 角色字段如果传入无效值，会被静默忽略（{@code IllegalArgumentException} 被捕获）。</p>
+     *
+     * @param qrCodeId  活码主键 ID
+     * @param agentId   联系人记录 ID
+     * @param dailyMax  日接上限（人/天），为 {@code null} 或 ≤0 时不更新
+     * @param role      角色（"service" 或 "receptionist"），为 {@code null} 或无效值时不变
+     * @param sortOrder 排序号，为 {@code null} 时不更新
+     * @throws RuntimeException 联系人不存在或不属于该活码时抛出
+     */
     @Transactional
     public void updateAgent(Long qrCodeId, Long agentId,
                             Integer dailyMax, String role, Integer sortOrder) {
@@ -320,11 +555,14 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
+        // 逐字段判断 null，实现部分更新
         if (dailyMax != null && dailyMax > 0) agent.setDailyMax(dailyMax);
         if (role != null) {
             try {
                 agent.setRole(QrAgent.AgentRole.valueOf(role));
-            } catch (IllegalArgumentException ignored) {}
+            } catch (IllegalArgumentException ignored) {
+                // 无效角色值被静默忽略，避免前端误传导致 500
+            }
         }
         if (sortOrder != null) agent.setSortOrder(sortOrder);
         qrAgentRepo.save(agent);
@@ -333,6 +571,16 @@ public class QrCodeService {
 
     // ==================== 后备池管理（续） ====================
 
+    /**
+     * 从后备池中移除接待员（物理删除）。
+     *
+     * <p>与联系人移除不同，后备池记录直接物理删除，因为后备池仅表示候选关系，
+     * 不需要保留历史。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param backupId 后备池记录 ID（QrBackupPool 主键）
+     * @throws RuntimeException 后备接待员不存在或不属于该活码时抛出
+     */
     @Transactional
     public void removeBackup(Long qrCodeId, Long backupId) {
         QrBackupPool backup = backupRepo.findById(backupId)
@@ -344,6 +592,25 @@ public class QrCodeService {
         log.info("后备接待员已移除: qrCodeId={}, agentUserid={}", qrCodeId, backup.getAgentUserid());
     }
 
+    /**
+     * 上下移动后备池中接待员的排序位置。
+     *
+     * <p>通过交换两个相邻记录的 {@code sortOrder} 值来实现移动。
+     * 排序号决定了轮换引擎从后备池中取出接待员的优先级：
+     * 排序号越小，越先被轮换上线。</p>
+     *
+     * <h3>边界处理</h3>
+     * <ul>
+     *   <li>已是第一个且方向为 "up"：无操作</li>
+     *   <li>已是最后一个且方向为 "down"：无操作</li>
+     *   <li>记录不在后备池列表中：无操作（防御性处理）</li>
+     * </ul>
+     *
+     * @param qrCodeId  活码主键 ID
+     * @param backupId  后备池记录 ID
+     * @param direction 移动方向："up" 表示上移（排序号变小），"down" 表示下移（排序号变大）
+     * @throws RuntimeException 后备接待员不存在或不属于该活码时抛出
+     */
     @Transactional
     public void moveBackup(Long qrCodeId, Long backupId, String direction) {
         QrBackupPool backup = backupRepo.findById(backupId)
@@ -352,15 +619,18 @@ public class QrCodeService {
             throw new RuntimeException("后备接待员不属于该活码");
         }
 
+        // 获取当前后备池中所有 standby 记录，按 sortOrder 排序
         List<QrBackupPool> all = backupRepo
             .findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId, QrBackupPool.PoolStatus.standby);
 
+        // 定位当前记录在排序列表中的位置
         int idx = -1;
         for (int i = 0; i < all.size(); i++) {
             if (all.get(i).getId().equals(backupId)) { idx = i; break; }
         }
-        if (idx < 0) return;
+        if (idx < 0) return;   // 防御：记录不在列表中
 
+        // 与相邻记录交换 sortOrder 值实现位置互换
         if ("up".equals(direction) && idx > 0) {
             QrBackupPool other = all.get(idx - 1);
             int tmp = backup.getSortOrder();
@@ -380,6 +650,15 @@ public class QrCodeService {
 
     // ==================== 状态更新 ====================
 
+    /**
+     * 更新活码启用/停用状态。
+     *
+     * <p>将活码设为 inactive 后，客户扫码将不再分配员工（企微侧该活码等效于停用）。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param status   目标状态（{@link QrCode.QrCodeStatus#active} 或 {@link QrCode.QrCodeStatus#inactive}）
+     * @throws RuntimeException 活码不存在时抛出
+     */
     @Transactional
     public void updateStatus(Long qrCodeId, QrCode.QrCodeStatus status) {
         QrCode qr = getById(qrCodeId);
@@ -387,6 +666,19 @@ public class QrCodeService {
         qrCodeRepo.save(qr);
     }
 
+    /**
+     * 更新活码轮换模式。
+     *
+     * <p>两种模式：
+     * <ul>
+     *   <li>{@link QrCode.RotateMode#auto} — 自动轮换：系统根据服务老师日接量自动上下线接待员</li>
+     *   <li>{@link QrCode.RotateMode#manual} — 手动轮换：由管理员手动决定谁上线</li>
+     * </ul>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param mode     目标轮换模式
+     * @throws RuntimeException 活码不存在时抛出
+     */
     @Transactional
     public void updateRotateMode(Long qrCodeId, QrCode.RotateMode mode) {
         QrCode qr = getById(qrCodeId);
@@ -394,11 +686,29 @@ public class QrCodeService {
         qrCodeRepo.save(qr);
     }
 
+    /**
+     * 更新活码的接待量阈值配置。
+     *
+     * <p>阈值用于轮换引擎判断何时触发接待员上下线：
+     * <ul>
+     *   <li><b>警告阈值（warnRatio）</b>：服务老师当前接待量 / 日接上限 ≥ 此百分比时，
+     *       发出预警，准备从后备池上线接待员</li>
+     *   <li><b>紧急阈值（urgentRatio）</b>：达到此百分比时，触发紧急轮换</li>
+     * </ul>
+     * 二者必须在 1-100 之间，且 warnRatio 必须小于 urgentRatio。</p>
+     *
+     * @param qrCodeId   活码主键 ID
+     * @param warnRatio  警告阈值（百分比，如 70 表示 70%）
+     * @param urgentRatio 紧急阈值（百分比，如 90 表示 90%）
+     * @throws RuntimeException 活码不存在、阈值范围非法、或 warnRatio >= urgentRatio 时抛出
+     */
     @Transactional
     public void updateThresholds(Long qrCodeId, int warnRatio, int urgentRatio) {
+        // 校验阈值范围：百分比必须在 1-100 之间
         if (warnRatio < 1 || warnRatio > 100 || urgentRatio < 1 || urgentRatio > 100) {
             throw new RuntimeException("阈值必须在 1-100 之间");
         }
+        // 警告阈值必须小于紧急阈值，确保两级预警的阶梯逻辑有效
         if (warnRatio >= urgentRatio) {
             throw new RuntimeException("预警阈值必须小于紧急阈值");
         }
@@ -408,6 +718,16 @@ public class QrCodeService {
         qrCodeRepo.save(qr);
     }
 
+    /**
+     * 批量切换活码的轮换模式。
+     *
+     * <p>遍历 ID 列表逐个更新，单条失败不中断整体操作（仅记录 warn 日志）。
+     * 返回成功更新的数量。</p>
+     *
+     * @param ids  活码主键 ID 列表
+     * @param mode 目标轮换模式
+     * @return 成功更新的活码数量
+     */
     @Transactional
     public int batchUpdateRotateMode(List<Long> ids, QrCode.RotateMode mode) {
         int count = 0;
@@ -420,22 +740,42 @@ public class QrCodeService {
                     count++;
                 }
             } catch (Exception e) {
+                // 单条失败不中断批量操作：记录日志后继续处理下一条
                 log.warn("批量切换轮换模式失败: id={}", id, e);
             }
         }
         return count;
     }
 
+    /**
+     * 更新活码的样式配置（主题色、引导文案、是否显示校名、Logo 路径）。
+     *
+     * <p>样式配置以 JSON 字符串形式存储在 {@link QrCode#styleConfig} 字段中。
+     * 传入参数为 {@code null} 的字段使用默认值：
+     * <ul>
+     *   <li>theme 默认 "blue"</li>
+     *   <li>showSchoolName 默认 true</li>
+     * </ul>
+     *
+     * @param qrCodeId      活码主键 ID
+     * @param theme         主题色名称，为 {@code null} 时默认 "blue"
+     * @param guideText     扫码引导文案，为 {@code null} 时不设置
+     * @param showSchoolName 是否显示学校名称，为 {@code null} 时默认 true
+     * @param logoPath      自定义 Logo 图片路径，为 {@code null} 时不设置
+     * @throws RuntimeException 活码不存在或 JSON 序列化失败时抛出
+     */
     @Transactional
     public void updateStyle(Long qrCodeId, String theme, String guideText,
                             Boolean showSchoolName, String logoPath) {
         QrCode qr = getById(qrCodeId);
         try {
+            // 构造样式 JSON 对象，null 字段使用默认值
             Map<String, Object> style = new LinkedHashMap<>();
             if (logoPath != null) style.put("logo_path", logoPath);
             style.put("theme", theme != null ? theme : "blue");
             if (guideText != null) style.put("guide_text", guideText);
             style.put("show_school_name", showSchoolName != null ? showSchoolName : true);
+            // 序列化为 JSON 字符串存入 DB
             qr.setStyleConfig(objectMapper.writeValueAsString(style));
             qrCodeRepo.save(qr);
         } catch (Exception e) {
@@ -445,24 +785,49 @@ public class QrCodeService {
 
     // ==================== 内部工具 ====================
 
+    /**
+     * 构造企微「创建联系我」API 的请求体 JSON。
+     *
+     * <h3>参数来源优先级（从高到低）</h3>
+     * <ol>
+     *   <li>服务老师 JSON 数组（{@code serviceTeacherJson}）— 支持每人独立日限</li>
+     *   <li>服务老师逗号分隔字符串（{@code serviceTeacherUserid}）— 兼容旧格式</li>
+     *   <li>接待员 JSON 数组（{@code agentsJson}）— 当无服务老师时回退</li>
+     *   <li>接待员逗号分隔字符串（{@code receptionistUserid}）— 旧格式回退</li>
+     * </ol>
+     *
+     * <p>企微 API 参数说明：
+     * <ul>
+     *   <li>{@code type=2} — 多人模式（多个员工共享一个二维码）</li>
+     *   <li>{@code scene=2} — 二维码场景</li>
+     *   <li>{@code state} — 企业自定义参数，此处填入 schoolId 用于回调识别</li>
+     * </ul>
+     *
+     * @param req 创建请求 DTO
+     * @return 序列化后的 JSON 字符串
+     * @throws RuntimeException 未提供任何员工账号、或 JSON 构造失败时抛出
+     */
     private String buildContactWayJson(QrCodeCreateRequest req) {
         try {
             List<String> userIds = new ArrayList<>();
 
             // ① 服务老师（JSON 数组优先，回退逗号分隔）
+            // JSON 格式优先：支持每人独立的 dailyMax 配置
             if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
                 JsonNode arr = objectMapper.readTree(req.getServiceTeacherJson());
                 for (JsonNode svc : arr) {
                     if (svc.has("userid")) userIds.add(svc.get("userid").asText());
                 }
             } else if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+                // 逗号分隔字符串：兼容旧版前端（不支持每人独立日限）
                 for (String uid : req.getServiceTeacherUserid().split(",")) {
                     String trimmed = uid.trim();
                     if (!trimmed.isEmpty()) userIds.add(trimmed);
                 }
             }
 
-            // ② 如果没有服务老师，退回到接待员
+            // ② 如果没有服务老师，退回到接待员：
+            // 企微联系我二维码至少要有一个 user，否则无法创建
             if (userIds.isEmpty()) {
                 if (req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
                     JsonNode arr = objectMapper.readTree(req.getAgentsJson());
@@ -481,29 +846,51 @@ public class QrCodeService {
                 throw new RuntimeException("请填写服务老师或接待员企微账号");
             }
 
+            // 构造企微 API 请求体
             Map<String, Object> body = new LinkedHashMap<>();
-            body.put("type", 2);    // 多人
-            body.put("scene", 2);   // 二维码
-            body.put("style", 1);
-            body.put("state", req.getSchoolId());
+            body.put("type", 2);    // 多人模式
+            body.put("scene", 2);   // 二维码场景
+            body.put("style", 1);   // 样式（1=默认）
+            body.put("state", req.getSchoolId()); // 回调识别参数：通过 schoolId 区分不同活码
             body.put("user", userIds);
             return objectMapper.writeValueAsString(body);
         } catch (RuntimeException e) {
-            throw e;
+            throw e;  // 业务异常直接透传，不包装
         } catch (Exception e) {
             throw new RuntimeException("构造活码参数失败: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * 构造活码的欢迎语/接待配置 JSON。
+     *
+     * <p>欢迎语配置包含以下要素：
+     * <ul>
+     *   <li><b>text</b> — 默认欢迎语文本</li>
+     *   <li><b>collect_form</b> — 收集表单配置（年级、班级、孩子姓名），
+     *       支持自定义或使用系统默认表单</li>
+     *   <li><b>form_callback_tag</b> — 表单回传标签，客户填表后自动打上对应标签</li>
+     *   <li><b>transfer_greeting</b> — 转接问候语模板，支持变量替换
+     *       （如 {{school_name}}、{{teacher_name}}、{{parent_name}}）</li>
+     * </ul>
+     *
+     * <p>收集表单默认包含三个字段：年级（下拉选择，含小学+初中+高中共12个年级）、
+     * 班级（下拉选择，1-20班）、孩子姓名（文本输入，非必填）。</p>
+     *
+     * @param req 创建请求 DTO
+     * @return 序列化后的 JSON 字符串，异常时返回空 JSON "{}"（降级处理，不影响活码创建）
+     */
     private String buildWelcomeConfig(QrCodeCreateRequest req) {
         try {
             Map<String, Object> config = new LinkedHashMap<>();
+            // 欢迎语文本：优先使用自定义文案，否则使用默认文案
             config.put("text", req.getWelcomeText() != null ? req.getWelcomeText()
                 : "欢迎来到XX书店家校服务！");
+            // 收集表单：优先使用自定义表单 JSON，否则使用系统默认表单
             if (req.getCollectFormJson() != null && !req.getCollectFormJson().isEmpty()) {
                 config.put("collect_form", objectMapper.readTree(req.getCollectFormJson()));
             } else {
-                // 默认收集表单
+                // 默认收集表单：年级（12个学段可选）+ 班级（1-20班）+ 孩子姓名（非必填）
                 config.put("collect_form", List.of(
                     Map.of("name", "grade", "label", "孩子年级", "type", "select",
                         "options", List.of("一年级","二年级","三年级","四年级","五年级","六年级",
@@ -514,20 +901,50 @@ public class QrCodeService {
                     Map.of("name", "child_name", "label", "孩子姓名", "type", "text", "required", false)
                 ));
             }
+            // 表单回传：客户填写收集表单后，自动将表单信息以标签形式回传给接待员工
             config.put("form_callback_tag", true);
+            // 转接问候：启用后客户添加员工时会自动发送个性化问候语
             config.put("transfer_greeting_enabled", true);
+            // 转接附注：客户信息摘要，使用 {{}} 模板变量在服务端替换
             config.put("transfer_filled_note",
                 "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}");
+            // 已填表客户的问候语模板
             config.put("transfer_filled_greeting",
                 "{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚");
+            // 未填表客户的问候语模板（引导客户先填写信息）
             config.put("transfer_unfilled_greeting",
                 "{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}");
             return objectMapper.writeValueAsString(config);
         } catch (Exception e) {
+            // 欢迎语配置构造失败不阻断活码创建，返回空 JSON
             return "{}";
         }
     }
 
+    /**
+     * 将请求中的员工信息绑定到活码。
+     *
+     * <h3>绑定策略</h3>
+     * <ul>
+     *   <li><b>服务老师</b>（{@code serviceTeacherJson} / {@code serviceTeacherUserid}）：
+     *       写入 {@link QrAgent} 表，role=service。支持 JSON 格式传入每人独立的 dailyMax。
+     *       默认日接上限 1000 人（服务老师承接能力更强）</li>
+     *   <li><b>接待员</b>（{@code agentsJson} / {@code receptionistUserid}）：
+     *       写入 {@link QrBackupPool} 后备池表，role=receptionist，status=standby。
+     *       默认日接上限 200 人</li>
+     *   <li><b>额外后备</b>（{@code backupsJson}）：
+     *       纯 userid 数组，同样写入后备池，日限默认 200</li>
+     * </ul>
+     *
+     * <h3>设计原因</h3>
+     * <p>服务老师直接进入 QrAgent（活码联系人），接待员进入后备池而非直接上线：
+     * 这样设计可以让轮换引擎按序从后备池中取出接待员，避免一次性将所有接待员暴露给企微
+     * 导致客户分配不可控。服务老师作为核心接待人员，始终在线。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param req      创建请求 DTO
+     * @throws RuntimeException 员工绑定过程中任何异常均抛出（事务回滚）
+     */
     private void bindAgents(Long qrCodeId, QrCodeCreateRequest req) {
         try {
             // ① 服务老师 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
@@ -536,19 +953,21 @@ public class QrCodeService {
 
             if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
                 // JSON 格式: [{"userid":"xx","dailyMax":500}, ...]
+                // 支持每个服务老师独立设置日接上限，不满足于全局默认值
                 JsonNode arr = objectMapper.readTree(req.getServiceTeacherJson());
                 for (JsonNode svc : arr) {
                     String uid = svc.get("userid").asText();
                     int dm = svc.has("dailyMax") ? svc.get("dailyMax").asInt() : defaultSvcDailyMax;
-                    ensureAgent(uid, "service");
+                    ensureAgent(uid, "service");  // 确保 Agent 全局表中有该员工
                     qrAgentRepo.save(QrAgent.builder()
                         .qrCodeId(qrCodeId).agentUserid(uid)
                         .role(QrAgent.AgentRole.service)
-                        .dailyMax(dm).serviceDailyMax(dm)
+                        .dailyMax(dm).serviceDailyMax(dm)  // serviceDailyMax 记录服务老师特有的日限
                         .sortOrder(sortOrder++).status(QrAgent.AgentStatus.active)
                         .build());
                 }
             } else if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+                // 逗号分隔字符串：所有服务老师共享同一个默认日限
                 for (String uid : req.getServiceTeacherUserid().split(",")) {
                     String trimmed = uid.trim();
                     if (trimmed.isEmpty()) continue;
@@ -563,6 +982,8 @@ public class QrCodeService {
             }
 
             // ② 接待员 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
+            // 接待员进入后备池（QrBackupPool）而非直接在活码上线
+            // 原因：由轮换引擎按需从后备池取出上线，避免一次性全量上码
             int order = 0;
             if (req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
                 // JSON 格式: [{"userid":"xx","dailyMax":150}, ...]
@@ -591,9 +1012,11 @@ public class QrCodeService {
             }
 
             // ③ 额外后备员工（纯 userid 数组，日限默认 200）
+            // backupsJson 与 agentsJson 独立，允许分别管理「直接接待员」和「额外后备」
             if (req.getBackupsJson() != null && !req.getBackupsJson().isEmpty()) {
                 JsonNode backups = objectMapper.readTree(req.getBackupsJson());
                 for (JsonNode b : backups) {
+                    // 支持两种格式：字符串 "userid" 或对象 {"userid":"xx","dailyMax":200}
                     String uid = b.isObject() ? b.get("userid").asText() : b.asText();
                     int dm = b.isObject() && b.has("dailyMax") ? b.get("dailyMax").asInt() : 200;
                     ensureAgent(uid, "receptionist");
@@ -610,12 +1033,24 @@ public class QrCodeService {
         }
     }
 
+    /**
+     * 确保指定 userid 的员工存在于 {@link Agent} 全局表中，不存在则自动创建。
+     *
+     * <p>这是员工账户的「懒初始化」机制：
+     * 当用户将某个企微 userid 添加为活码服务老师或接待员时，
+     * 系统自动检查 Agent 表，若不存在则尝试从企微 API 获取真实姓名后创建。
+     * 如果企微 API 调用失败，使用 userid 作为 name 的降级值。</p>
+     *
+     * @param userid 企微员工 userid
+     * @param role   员工角色（"service" 或 "receptionist"），用于初始化 {@link Agent.AgentRole}
+     */
     private void ensureAgent(String userid, String role) {
         if (!agentRepo.existsById(userid)) {
-            // 尝试从企微 API 获取真实姓名
-            String name = userid; // fallback
+            // 尝试从企微 API 获取真实姓名，失败时用 userid 作为降级方案
+            String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
             try {
                 JsonNode result = wecomApi.getUserSimplelist();
+                // 企微成员列表 API：errcode=0 表示成功，非 0 或字段缺失则跳过
                 if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
                     for (JsonNode u : result.get("userlist")) {
                         if (userid.equals(u.get("userid").asText())) {
@@ -625,9 +1060,11 @@ public class QrCodeService {
                     }
                 }
             } catch (Exception e) {
+                // 获取员工姓名失败不阻断流程，使用 userid 作为 name 降级
                 log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
             }
 
+            // 创建 Agent 记录，默认日总接待上限 500（适用于未单独配置的员工）
             agentRepo.save(Agent.builder()
                 .userid(userid)
                 .name(name)
@@ -637,22 +1074,44 @@ public class QrCodeService {
         }
     }
 
+    /**
+     * 解析上传的 Excel 文件，提取活码导入数据。
+     *
+     * <h3>Excel 列映射（第 0 行为表头，从第 1 行开始读取）</h3>
+     * <table>
+     *   <tr><th>列号</th><th>字段</th><th>说明</th></tr>
+     *   <tr><td>A (0)</td><td>schoolName</td><td>学校名称</td></tr>
+     *   <tr><td>B (1)</td><td>schoolId</td><td>学校 ID（唯一标识）</td></tr>
+     *   <tr><td>C (2)</td><td>regionCity</td><td>所在城市</td></tr>
+     *   <tr><td>D (3)</td><td>regionDistrict</td><td>所在区县</td></tr>
+     *   <tr><td>E (4)</td><td>remark</td><td>备注</td></tr>
+     * </table>
+     *
+     * <p>仅当 schoolName 和 schoolId 均非空时才将该行加入结果列表，
+     * 跳过空行和不完整的行。</p>
+     *
+     * @param file 上传的 Excel 文件（.xlsx 格式）
+     * @return 行数据列表，每行为一个 Map，包含 row（Excel 行号）、schoolName、schoolId 等字段
+     * @throws RuntimeException Excel 解析失败时抛出
+     */
     @SuppressWarnings("unchecked")
     private List<Map<String, String>> parseExcel(MultipartFile file) {
         List<Map<String, String>> items = new ArrayList<>();
         try (InputStream is = file.getInputStream();
-             Workbook wb = new XSSFWorkbook(is)) {
-            Sheet sheet = wb.getSheetAt(0);
+             Workbook wb = new XSSFWorkbook(is)) {  // 使用 XSSFWorkbook 支持 .xlsx 格式
+            Sheet sheet = wb.getSheetAt(0);          // 只读第一个工作表
+            // i=1 从第 2 行开始（第 1 行是表头）
             for (int i = 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
-                if (row == null) continue;
+                if (row == null) continue;           // 跳过空行
                 Map<String, String> item = new LinkedHashMap<>();
-                item.put("row", String.valueOf(i + 1));
+                item.put("row", String.valueOf(i + 1));  // 行号从 1 开始（给人看的行号）
                 item.put("schoolName", getCellString(row, 0));
                 item.put("schoolId", getCellString(row, 1));
                 item.put("regionCity", getCellString(row, 2));
                 item.put("regionDistrict", getCellString(row, 3));
                 item.put("remark", getCellString(row, 4));
+                // 学校名称和学校 ID 都非空才视为有效行
                 if (!item.get("schoolName").isEmpty() && !item.get("schoolId").isEmpty()) {
                     items.add(item);
                 }
@@ -663,9 +1122,20 @@ public class QrCodeService {
         return items;
     }
 
+    /**
+     * 安全读取 Excel 单元格的字符串值。
+     *
+     * <p>处理 null 单元格，并强制将单元格类型设为 STRING 以避免数字单元格
+     * （如学校 ID "1001"）被 POI 解析为数值类型导致精度丢失或格式异常。</p>
+     *
+     * @param row Excel 行对象
+     * @param col 列索引（从 0 开始）
+     * @return 单元格字符串值（trim 后），单元格为 null 时返回空字符串 ""
+     */
     private String getCellString(Row row, int col) {
         Cell cell = row.getCell(col);
         if (cell == null) return "";
+        // 强制设为 STRING 类型：防止纯数字的学校 ID 被当作数值解析
         cell.setCellType(CellType.STRING);
         return cell.getStringCellValue().trim();
     }
