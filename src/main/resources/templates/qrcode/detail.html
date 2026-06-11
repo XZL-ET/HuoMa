@@ -168,8 +168,12 @@
                             <td th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid)}"></td>
                             <!-- 按 sortOrder 排序的优先级标识 -->
                             <td><span class="badge bg-light text-dark" th:text="'#' + ${b.sortOrder}"></span></td>
-                            <td>200</td>
-                            <td><span class="badge bg-info">待命</span></td>
+                            <td th:text="${b.dailyMax}">200</td>
+                            <td>
+                                <span class="badge bg-info" th:if="${b.status.name() == 'standby'}">待命</span>
+                                <span class="badge bg-warning" th:if="${b.status.name() == 'full'}">已满</span>
+                                <span class="badge bg-danger" th:if="${b.status.name() == 'blocked'}">暂停</span>
+                            </td>
                             <td class="text-nowrap">
                                 <!-- 上移按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
