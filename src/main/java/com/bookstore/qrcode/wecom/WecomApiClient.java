@@ -13,7 +13,28 @@ import java.util.List;
 
 /**
  * 企业微信 API 客户端。
- * 封装 access_token 管理 + 活码/标签/继承相关 API。
+ * <p>
+ * 封装 access_token 自动管理及企微服务端 API 调用，涵盖以下模块：
+ * <ul>
+ *   <li><b>access_token</b> — 自动获取/缓存/刷新，线程安全</li>
+ *   <li><b>活码（联系我）</b> — 创建/更新/删除「联系我」二维码</li>
+ *   <li><b>标签</b> — 创建企业标签（含标签组）、获取标签列表、客户打标签</li>
+ *   <li><b>在职继承</b> — 发起客户转移、查询转移结果</li>
+ *   <li><b>客户</b> — 获取客户详情/列表</li>
+ *   <li><b>部门成员</b> — 递归获取部门成员</li>
+ *   <li><b>消息</b> — 发送文本消息给客户</li>
+ * </ul>
+ * <p>
+ * <b>API 调用规范：</b><br>
+ * 所有 API 调用使用 {@link RestTemplate}（HTTP POST/GET），
+ * 请求时自动拼接 access_token 参数（通过 {@link #getAccessToken()}），
+ * 响应统一经 {@link #parseOrThrow(String, String)} 解析，
+ * 非零 errcode 记录日志但不抛异常（由调用方按错误码分类处理）。
+ * <p>
+ * 参考企微文档：<a href="https://developer.work.weixin.qq.com/document/path/90600">服务端 API 文档</a>
+ *
+ * @author bookstore
+ * @since 1.0.0
  */
 @Slf4j
 @Component
@@ -24,16 +45,39 @@ public class WecomApiClient {
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** access_token 获取接口: GET https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ID&corpsecret=SECRET */
     private static final String TOKEN_URL =
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s";
+    /** 企微 API 基础路径 */
     private static final String BASE_URL = "https://qyapi.weixin.qq.com/cgi-bin";
 
-    // ==================== access_token ====================
+    // ========================================================================
+    //  access_token 管理
+    //  文档: https://developer.work.weixin.qq.com/document/path/91039
+    // ========================================================================
 
     /**
-     * 获取 access_token，带缓存。线程安全。
+     * 获取 access_token（自动缓存与刷新，线程安全）。
+     * <p>
+     * 首次调用或 token 即将过期时自动向企微服务器请求新 token。
+     * 缓存提前 200 秒过期，为网络延迟和时钟偏差留出缓冲。
+     * <p>
+     * <b>企微接口：</b>{@code GET /cgi-bin/gettoken?corpid=ID&corpsecret=SECRET}
+     * <pre>
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "access_token": "xxxxxx",
+     *   "expires_in": 7200
+     * }
+     * </pre>
+     *
+     * @return 有效的 access_token 字符串
+     * @throws RuntimeException 获取失败时抛出（网络超时、corpid/corpsecret 无效等）
      */
     public synchronized String getAccessToken() {
+        // 缓存命中判断：token 非空且未到过期时间
         if (config.getAccessToken() != null
                 && Instant.now().getEpochSecond() < config.getAccessTokenExpireAt()) {
             return config.getAccessToken();
@@ -50,9 +94,11 @@ public class WecomApiClient {
             }
 
             String token = node.get("access_token").asText();
-            long expiresIn = node.get("expires_in").asLong(); // 默认 7200
+            long expiresIn = node.get("expires_in").asLong(); // 企微默认 7200 秒
+
+            // 写入配置缓存
             config.setAccessToken(token);
-            // 提前 200 秒过期，留缓冲
+            // 提前 200 秒过期，留缓冲防止在过期边缘因时钟偏差导致 42001 错误
             config.setAccessTokenExpireAt(Instant.now().getEpochSecond() + expiresIn - 200);
             log.info("access_token 已刷新，过期时间: {}", config.getAccessTokenExpireAt());
             return token;
@@ -62,12 +108,35 @@ public class WecomApiClient {
         }
     }
 
-    // ==================== 活码（联系我） ====================
+    // ========================================================================
+    //  活码（联系我）
+    //  文档: https://developer.work.weixin.qq.com/document/path/92228
+    // ========================================================================
 
     /**
-     * 创建「联系我」二维码。
-     * @param requestJson JSON 参数字符串
-     * @return {config_id, qr_code}
+     * 创建「联系我」二维码（活码）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/add_contact_way}
+     * <pre>
+     * 请求参数示例:
+     * {
+     *   "type": 1,
+     *   "scene": 2,
+     *   "user": ["zhangsan"],
+     *   "state": "activity_001"
+     * }
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "config_id": "a7f0b...",
+     *   "qr_code": "https://open.work.weixin.qq.com/...",
+     *   "qr_code_base64": "base64..."
+     * }
+     * </pre>
+     *
+     * @param requestJson 完整的请求 body JSON 字符串（由上层组装，含 type/scene/user/state 等）
+     * @return JsonNode 包含 {@code config_id}（活码配置ID）和 {@code qr_code}（二维码图片URL）
      */
     public JsonNode createContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/add_contact_way?access_token=" + getAccessToken();
@@ -77,6 +146,15 @@ public class WecomApiClient {
 
     /**
      * 更新活码配置。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/update_contact_way}
+     * <br>
+     * 用于修改活码的接待人员、欢迎语、备注等信息。
+     * <br>
+     * <b>注意：</b>更新后已生成的二维码图片 URL 不变，但扫码后的行为会立即生效。
+     *
+     * @param requestJson 包含 {@code config_id} 及待更新字段的 JSON 字符串
+     * @return JsonNode {@code {errcode, errmsg}}
      */
     public JsonNode updateContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/update_contact_way?access_token=" + getAccessToken();
@@ -85,7 +163,13 @@ public class WecomApiClient {
     }
 
     /**
-     * 删除活码。
+     * 删除活码配置。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/del_contact_way}
+     * <br>
+     * 删除后该活码失效，客户扫码将提示「该二维码已过期」。
+     *
+     * @param configId 活码配置 ID（创建时返回的 config_id）
      */
     public void deleteContactWay(String configId) {
         String url = BASE_URL + "/externalcontact/del_contact_way?access_token=" + getAccessToken();
@@ -94,13 +178,29 @@ public class WecomApiClient {
         parseOrThrow(resp, "删除活码");
     }
 
-    // ==================== 标签 ====================
+    // ========================================================================
+    //  企业标签
+    //  文档: https://developer.work.weixin.qq.com/document/path/92121
+    // ========================================================================
 
     /**
-     * 创建企业标签（或标签组下的标签）。
-     * @param tagName 标签名称
-     * @param groupId 标签组 ID（可为 null，则创建到默认组或作为根标签）
-     * @return {errcode, errmsg, tagid} — tagid 是 WeCom 标签 ID
+     * 创建企业标签（可指定标签组或自动归入默认组）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/add_corp_tag}
+     * <pre>
+     * 请求（指定 group_id）:
+     *   {"group_id":"xxx","tag":[{"name":"VIP客户"}]}
+     * 请求（不指定组）:
+     *   {"tag":[{"name":"VIP客户"}]}
+     * 响应:
+     *   {"errcode":0,"errmsg":"ok","tag_id":"tag_id_value"}
+     * </pre>
+     *
+     * @param tagName 标签名称，如 "VIP客户"、"已到店"
+     * @param groupId 标签组 ID。非 null 时在指定组下创建标签；
+     *                null 或空字符串则创建到默认组或不指定组（由企微自动分配）
+     * @return JsonNode 包含 {@code tag_id}（新标签的企微 ID）
+     * @throws RuntimeException 创建失败时抛出
      */
     public JsonNode addCorpTag(String tagName, String groupId) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
@@ -122,10 +222,23 @@ public class WecomApiClient {
     }
 
     /**
-     * 创建企业标签（带 group_name，用于首次创建组和标签）。
-     * @param tagName 标签名称
-     * @param groupName 标签组名称
-     * @return {errcode, errmsg, tag_group: {group_id, group_name, tag: [{id, name}]}}
+     * 创建企业标签组及其下的标签（用于首次创建组和标签的场景）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/add_corp_tag}
+     * <pre>
+     * 请求:
+     *   {"group_name":"客户等级","tag":[{"name":"VIP客户"}]}
+     * 响应:
+     *   {"errcode":0,"errmsg":"ok","tag_group":{"group_id":"xxx","group_name":"客户等级","tag":[{"id":"yyy","name":"VIP客户"}]}}
+     * </pre>
+     * <b>与 {@link #addCorpTag(String, String)} 的区别：</b><br>
+     * 此方法使用 {@code group_name} 参数（而非已有组的 {@code group_id}），
+     * 企微会自动创建新的标签组或将标签追加到同名组中。
+     *
+     * @param tagName   标签名称
+     * @param groupName 标签组名称（如果该组名已存在则追加到该组，否则新建组）
+     * @return JsonNode 包含 {@code tag_group} 对象，内含新创建的 {@code group_id} 和 {@code tag.id}
+     * @throws RuntimeException 创建失败时抛出
      */
     public JsonNode addCorpTagWithGroup(String tagName, String groupName) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
@@ -141,12 +254,34 @@ public class WecomApiClient {
     }
 
     /**
-     * 获取企业标签列表。
-     * @return {errcode, errmsg, tag_group: [{group_id, group_name, tag: [{id, name}]}]}
+     * 获取企业标签列表（所有标签组及其下的标签）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/get_corp_tag_list}
+     * <pre>
+     * 响应结构:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "tag_group": [
+     *     {
+     *       "group_id": "etgxxx",
+     *       "group_name": "客户等级",
+     *       "create_time": 1234567890,
+     *       "tag": [
+     *         {"id": "etxxx", "name": "VIP客户", "create_time": 1234567890}
+     *       ]
+     *     }
+     *   ]
+     * }
+     * </pre>
+     *
+     * @return JsonNode 包含 {@code tag_group} 数组，每个元素含标签组信息和 {@code tag} 子数组
+     * @throws RuntimeException 获取失败时抛出
      */
     public JsonNode getCorpTagList() {
         String url = BASE_URL + "/externalcontact/get_corp_tag_list?access_token=" + getAccessToken();
         try {
+            // 请求体传空 JSON 对象，不传参数时获取全部标签
             String body = "{}";
             String resp = restTemplate.postForObject(url, body, String.class);
             return parseOrThrow(resp, "获取标签列表");
@@ -156,7 +291,25 @@ public class WecomApiClient {
     }
 
     /**
-     * 为客户打标签。
+     * 为客户打标签（添加标签）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/mark_tag}
+     * <pre>
+     * 请求:
+     *   {
+     *     "userid": "zhangsan",
+     *     "external_userid": "wmxxx",
+     *     "add_tag": ["etxxx", "etyyy"]
+     *   }
+     * 响应:
+     *   {"errcode": 0, "errmsg": "ok"}
+     * </pre>
+     * <b>注意：</b>目前仅支持「添加标签」操作，暂不支持移除标签（需调用时传 del_tag 参数）。
+     *
+     * @param externalUserId 外部联系人（客户）的 UserID
+     * @param userId         企业成员（服务人员）的 UserID
+     * @param tagIds         要添加的标签 ID 列表（企微标签 ID，非名称）
+     * @throws RuntimeException 打标签失败时抛出（如标签不存在、客户已删除等）
      */
     public void markTag(String externalUserId, String userId, List<String> tagIds) {
         String url = BASE_URL + "/externalcontact/mark_tag?access_token=" + getAccessToken();
@@ -172,11 +325,33 @@ public class WecomApiClient {
         }
     }
 
-    // ==================== 在职继承 ====================
+    // ========================================================================
+    //  在职继承
+    //  文档: https://developer.work.weixin.qq.com/document/path/92124
+    // ========================================================================
 
     /**
-     * 在职继承 — 发起客户转移。
-     * @return {errcode, errmsg}
+     * 发起客户在职继承（客户转移）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/transfer_customer}
+     * <br>
+     * 员工的客户关系从一个服务人员（原添加人）转移给另一个服务人员。
+     * 仅支持在职员工之间的转移。转移成功后，客户会收到一条转移通知。
+     * <pre>
+     * 请求:
+     *   {
+     *     "handover_userid": "zhangsan",    // 原添加人
+     *     "takeover_userid": "lisi",        // 接替人
+     *     "external_userid": ["wmxxxxxx"]   // 待转移的客户列表
+     *   }
+     * 响应:
+     *   {"errcode":0,"errmsg":"ok"}
+     * </pre>
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 待转移客户的 external_userid
+     * @return JsonNode {@code {errcode, errmsg}}
      */
     public JsonNode transferCustomer(String handoverUserid, String takeoverUserid,
                                       String externalUserid) {
@@ -189,7 +364,33 @@ public class WecomApiClient {
     }
 
     /**
-     * 查询继承结果。
+     * 查询客户转移结果。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/get_transfer_result}
+     * <br>
+     * 在调用 {@link #transferCustomer} 后，通过此接口查询转移状态。
+     * 企微转移是异步的，需要轮询此接口确认是否成功。
+     * <pre>
+     * 请求:
+     *   {
+     *     "handover_userid": "zhangsan",
+     *     "takeover_userid": "lisi",
+     *     "external_userid": "wmxxxxxx"
+     *   }
+     * 响应:
+     *   {
+     *     "errcode": 0,
+     *     "errmsg": "ok",
+     *     "customer": [
+     *       {"external_userid": "wmxxx", "status": 1}  // 1=成功 2=失败
+     *     ]
+     *   }
+     * </pre>
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 要查询的客户 external_userid
+     * @return JsonNode 包含 {@code customer} 数组，每个元素含 {@code external_userid} 和 {@code status}
      */
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
                                        String externalUserid) {
@@ -201,10 +402,41 @@ public class WecomApiClient {
         return parseOrThrow(resp, "查询继承结果");
     }
 
-    // ==================== 客户 ====================
+    // ========================================================================
+    //  客户管理
+    //  文档: https://developer.work.weixin.qq.com/document/path/92114
+    // ========================================================================
 
     /**
-     * 获取客户详情。
+     * 获取客户详细信息。
+     * <p>
+     * <b>企微接口：</b>{@code GET /cgi-bin/externalcontact/get?external_userid=xxx}
+     * <pre>
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "external_contact": {
+     *     "external_userid": "wmxxx",
+     *     "name": "张三",
+     *     "avatar": "https://...",
+     *     "type": 1,
+     *     "gender": 1,
+     *     "corp_name": "某某公司",
+     *     ...
+     *   },
+     *   "follow_info": {
+     *     "userid": "zhangsan",
+     *     "remark": "客户备注",
+     *     "description": "客户描述",
+     *     "createtime": 1234567890,
+     *     "tags": [...]
+     *   }
+     * }
+     * </pre>
+     *
+     * @param externalUserid 外部联系人（客户）的 UserID
+     * @return JsonNode 包含 {@code external_contact}（客户基本信息）和 {@code follow_info}（跟进信息）
      */
     public JsonNode getExternalContact(String externalUserid) {
         String url = BASE_URL + "/externalcontact/get?access_token=" + getAccessToken()
@@ -214,7 +446,22 @@ public class WecomApiClient {
     }
 
     /**
-     * 获取客户列表。
+     * 获取指定员工的外部联系人（客户）列表。
+     * <p>
+     * <b>企微接口：</b>{@code GET /cgi-bin/externalcontact/list?userid=xxx}
+     * <pre>
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "external_userid": ["wmxxx", "wmyyy", ...]
+     * }
+     * </pre>
+     * 注意：此接口只返回客户 ID 列表，不包含详细信息。
+     * 需要详细信息请结合 {@link #getExternalContact(String)} 逐个获取。
+     *
+     * @param userid 企业成员（服务人员）的 UserID
+     * @return JsonNode 包含 {@code external_userid} 数组
      */
     public JsonNode getExternalContactList(String userid) {
         String url = BASE_URL + "/externalcontact/list?access_token=" + getAccessToken()
@@ -224,7 +471,27 @@ public class WecomApiClient {
     }
 
     /**
-     * 获取部门成员（递归），用于下拉框选择接待员。
+     * 获取部门成员列表（递归），用于前端下拉框选择接待员。
+     * <p>
+     * <b>企微接口：</b>{@code GET /cgi-bin/user/simplelist?department_id=1&fetch_child=1}
+     * <pre>
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "userlist": [
+     *     {"userid": "zhangsan", "name": "张三"},
+     *     {"userid": "lisi", "name": "李四"}
+     *   ]
+     * }
+     * </pre>
+     * <b>固定参数：</b>
+     * <ul>
+     *   <li>department_id=1 — 根部门（企业全部成员）</li>
+     *   <li>fetch_child=1 — 递归获取子部门成员</li>
+     * </ul>
+     *
+     * @return JsonNode 包含 {@code userlist} 数组，每项含 {@code userid} 和 {@code name}
      */
     public JsonNode getUserSimplelist() {
         String url = BASE_URL + "/user/simplelist?access_token=" + getAccessToken()
@@ -233,12 +500,42 @@ public class WecomApiClient {
         return parseOrThrow(resp, "获取成员列表");
     }
 
+    // ========================================================================
+    //  消息推送
+    //  文档: https://developer.work.weixin.qq.com/document/path/92123
+    // ========================================================================
+
     /**
-     * 发送消息给客户（文本）。
+     * 向客户发送文本消息（主动推送）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/message/send}
+     * <pre>
+     * 请求:
+     *   {
+     *     "sender": "zhangsan",              // 发送人（企业成员 userid）
+     *     "external_userid": "wmxxx",        // 客户 external_userid
+     *     "msgtype": "text",                 // 消息类型
+     *     "text": {"content": "您好，很高兴为您服务"}
+     *   }
+     * 响应:
+     *   {"errcode": 0, "errmsg": "ok"}
+     * </pre>
+     * <b>限制与说明：</b>
+     * <ul>
+     *   <li>每个客户每天最多接收 1 条主动推送</li>
+     *   <li>客户在 48 小时内主动发消息后，推送额度扩展</li>
+     *   <li>文本消息长度不超过 2048 字节</li>
+     * </ul>
+     *
+     * @param sender         发送消息的企业成员 userid
+     * @param externalUserid 接收消息的客户 external_userid
+     * @param text           消息文本内容
+     * @throws RuntimeException 发送失败时抛出（如客户已删除员工、被拉黑等）
      */
     public void sendMessage(String sender, String externalUserid, String text) {
         String url = BASE_URL + "/externalcontact/message/send?access_token=" + getAccessToken();
         try {
+            // 使用 ObjectMapper 对文本进行 JSON 转义，避免特殊字符破坏 JSON 结构
             String escapedText = objectMapper.writeValueAsString(text);
             String body = String.format(
                 "{\"sender\":\"%s\",\"external_userid\":\"%s\",\"msgtype\":\"text\",\"text\":{\"content\":%s}}",
@@ -250,8 +547,29 @@ public class WecomApiClient {
         }
     }
 
-    // ==================== 内部工具 ====================
+    // ========================================================================
+    //  内部工具方法
+    // ========================================================================
 
+    /**
+     * 解析企微 API 响应并校验错误码。
+     * <p>
+     * 响应被解析为 {@link JsonNode} 后，检查 {@code errcode} 字段：
+     * <ul>
+     *   <li>{@code errcode == 0 || errcode 不存在} — 视为成功，返回节点</li>
+     *   <li>{@code errcode != 0} — 记录错误日志，但<b>不抛异常</b>，
+     *       将原始节点返回给调用方，由调用方根据 errcode 做分类处理
+     *       （如 {@link WecomErrorCodes#RATE_LIMITED} 触发熔断）</li>
+     *   <li>JSON 解析失败 — 直接抛出 {@link RuntimeException}</li>
+     * </ul>
+     * <p>
+     * 这种设计使得调用方可以统一处理企微的错误码，而不是在每个 API 方法中重复 try-catch。
+     *
+     * @param resp   企微返回的原始 JSON 字符串
+     * @param action 当前操作名称（仅用于日志，如 "创建活码"、"打标签"）
+     * @return 解析后的 JsonNode 对象
+     * @throws RuntimeException JSON 解析失败或网络响应异常时抛出
+     */
     private JsonNode parseOrThrow(String resp, String action) {
         try {
             JsonNode node = objectMapper.readTree(resp);
@@ -259,7 +577,7 @@ public class WecomApiClient {
             if (code != 0) {
                 String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "";
                 log.error("{} 失败: errcode={} errmsg={}", action, code, errmsg);
-                // 返回原始 node，让调用方根据 errcode 做分类处理
+                // 不抛异常，返回原始节点让调用方根据 errcode 做分类处理
             }
             return node;
         } catch (Exception e) {
