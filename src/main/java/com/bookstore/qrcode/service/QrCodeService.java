@@ -44,8 +44,8 @@ import java.util.concurrent.TimeUnit;
  * <h3>核心实体关系</h3>
  * <pre>
  *   QrCode (活码主表)
- *     ├── QrAgent (活码联系人：服务老师 + 接待员)
- *     ├── QrBackupPool (后备池：按序轮换的候选接待员)
+ *     ├── QrAgent (活码联系人：全部为 receptionist)
+ *     ├── GlobalAgentPool (全局员工池：所有可用员工的统一池)
  *     └── QrRotateLog (轮换日志：记录上下线操作)
  *   Agent (全局员工表，独立于活码)
  * </pre>
@@ -54,7 +54,7 @@ import java.util.concurrent.TimeUnit;
  * @since 1.0
  * @see QrCode
  * @see QrAgent
- * @see QrBackupPool
+ * @see GlobalAgentPool
  * @see QrRotateLog
  * @see Agent
  * @see WecomApiClient
@@ -66,12 +66,13 @@ public class QrCodeService {
 
     private final QrCodeRepository qrCodeRepo;
     private final QrAgentRepository qrAgentRepo;
-    private final QrBackupPoolRepository backupRepo;
     private final QrRotateLogRepository rotateLogRepo;
     private final AgentRepository agentRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redisTemplate;
+    private final GlobalAgentPoolRepository poolRepo;
+    private final GlobalAgentPoolService poolService;
 
     // ==================== 查询 ====================
 
@@ -119,17 +120,16 @@ public class QrCodeService {
     }
 
     /**
-     * 获取活码后备池中处于「待命」状态的接待员列表，按排序号升序排列。
+     * 获取全局池中所有 standby 员工列表（不再按活码过滤）。
      *
-     * <p>只返回 {@link QrBackupPool.PoolStatus#standby} 状态的记录，
-     * 已上线的接待员不在此列表中。</p>
+     * <p>重构后后备池升级为全局员工池，所有活码共享同一后备池。
+     * 按优先级排序返回。</p>
      *
-     * @param qrCodeId 活码主键 ID
-     * @return 后备接待员列表
+     * @param qrCodeId 活码主键 ID（保留参数兼容性，实际不区分活码）
+     * @return 全局 standby 员工列表
      */
-    public List<QrBackupPool> getBackups(Long qrCodeId) {
-        return backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(
-            qrCodeId, QrBackupPool.PoolStatus.standby);
+    public List<GlobalAgentPool> getBackups(Long qrCodeId) {
+        return poolService.listStandby();
     }
 
     // ==================== 手动创建 ====================
@@ -143,7 +143,7 @@ public class QrCodeService {
      *   <li>构造企微「联系我」二维码参数，调用 {@link WecomApiClient#createContactWay(String)}
      *       在企微端创建活码，获取 {@code config_id} 和 {@code qr_code} URL</li>
      *   <li>写入 {@link QrCode} 主表记录</li>
-     *   <li>将服务老师写入 {@link QrAgent} 表，将接待员写入 {@link QrBackupPool} 后备池</li>
+     *   <li>将员工写入 {@link QrAgent} 表并确保在 {@link GlobalAgentPool} 全局池中</li>
      * </ol>
      *
      * <p>步骤 1 的企微 API 调用在事务中执行：如果企微创建失败则抛出异常回滚事务，
@@ -186,15 +186,18 @@ public class QrCodeService {
             .qrConfigId(configId)
             .qrUrl(qrUrl)
             .welcomeConfig(buildWelcomeConfig(req))
-            .status(QrCode.QrCodeStatus.active)       // 新创建默认启用
-            .rotateMode(QrCode.RotateMode.auto)       // 默认自动轮换模式
-            .createMode(QrCode.CreateMode.manual)      // 标记为手动创建
+            .status(QrCode.QrCodeStatus.active)
+            .rotateMode(QrCode.RotateMode.auto)
+            .createMode(QrCode.CreateMode.manual)
             .remark(req.getRemark())
-            .customTags(req.getCustomTags())            // 客户扫码后自动打标签
+            .transferTargetUserid(req.getTransferTargetUserid())
+            .initialAgentCount(req.getInitialAgentCount() != null
+                ? req.getInitialAgentCount() : 1)
+            .customTags(req.getCustomTags())
             .build();
         qr = qrCodeRepo.save(qr);
 
-        // 3. 绑定员工：服务老师 → QrAgent，接待员 → QrBackupPool
+        // 3. 绑定员工：从全局池取人写入 QrAgent
         bindAgents(qr.getId(), req);
 
         return qr;
@@ -337,8 +340,8 @@ public class QrCodeService {
         }
         // 级联删除活码下的联系人关联
         qrAgentRepo.findByQrCodeId(qrCodeId).forEach(qa -> qrAgentRepo.delete(qa));
-        // 级联删除后备池记录
-        backupRepo.findByQrCodeId(qrCodeId).forEach(bp -> backupRepo.delete(bp));
+        // 级联删除后备池记录（全局池不按活码删除，此处不做额外操作；
+        // 员工保留在全局池中供其他活码使用）
         // 级联删除轮换日志（不限制分页大小，全部删除）
         rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(qrCodeId, Pageable.unpaged())
             .forEach(rl -> rotateLogRepo.delete(rl));
@@ -351,15 +354,8 @@ public class QrCodeService {
     /**
      * 手动将活码的联系人列表同步到企微端。
      *
-     * <h3>同步策略</h3>
-     * <ul>
-     *   <li><b>服务老师</b>：只上 {@link QrAgent.AgentStatus#active} 状态的，
-     *       当服务老师日接量满后被标记为 inactive，此时自动下码</li>
-     *   <li><b>接待员</b>：只上 active 状态的，非 active 不上码</li>
-     * </ul>
-     *
-     * <p>服务老师始终排在接待员之前（通过 LinkedHashSet 保证插入顺序），
-     * 企微在分配客户时会优先尝试排在前面的员工。</p>
+     * <p>只上 {@link QrAgent.AgentStatus#active} 状态的员工，
+     * 按 sortOrder 排序决定企微分配优先顺序。</p>
      *
      * @param qrCodeId 活码主键 ID
      * @throws RuntimeException 活码不存在、未关联企微 config_id、企微 API 调用失败时抛出
@@ -371,30 +367,15 @@ public class QrCodeService {
         }
 
         List<QrAgent> allAgents = qrAgentRepo.findByQrCodeId(qrCodeId);
-        // 使用 LinkedHashSet 保证去重的同时保持插入顺序：
-        // 服务老师先入队，接待员后入队，企微按此顺序分配客户
+        // 使用 LinkedHashSet 保证去重并保持 sortOrder 插入顺序
         Set<String> userIds = new LinkedHashSet<>();
-
-        // 服务老师只在 active 状态时上活码：
-        // 当自动轮换检测到某服务老师日接待量达到上限时，其状态会被标记为 inactive，
-        // 此时需要下码让企微不再分配客户给该老师
         for (QrAgent a : allAgents) {
-            if (a.getRole() == QrAgent.AgentRole.service
-                && a.getStatus() == QrAgent.AgentStatus.active) {
-                userIds.add(a.getAgentUserid());
-            }
-        }
-        // 接待员只上 active 状态：
-        // removed 的接待员已从活码移除，inactive 的接待员可能是日接量耗尽或手动停用
-        for (QrAgent a : allAgents) {
-            if (a.getRole() != QrAgent.AgentRole.service
-                && a.getStatus() == QrAgent.AgentStatus.active) {
+            if (a.getStatus() == QrAgent.AgentStatus.active) {
                 userIds.add(a.getAgentUserid());
             }
         }
 
         try {
-            // 构造企微「更新联系我」API 请求体
             Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("config_id", qr.getQrConfigId());
             body.put("user", new ArrayList<>(userIds));
@@ -406,59 +387,23 @@ public class QrCodeService {
         }
     }
 
-    // ==================== 后备池管理 ====================
+    // ==================== 后备池管理（全局池版本） ====================
 
     /**
-     * 向活码后备池添加新接待员。
+     * 向全局池添加新员工。
      *
-     * <p>后备池是轮换引擎的候选池。当服务老师日接待量接近上限时，
-     * 系统从后备池按 {@code sortOrder} 顺序取出接待员上线轮换。
-     * 新添加的接待员排到当前最大排序号之后。</p>
+     * <p>员工加入全局池后，任意活码需要扩容时均可从池中取用。
+     * 如果员工已在池中则不重复添加。</p>
      *
-     * <h3>处理逻辑</h3>
-     * <ol>
-     *   <li>校验该员工是否已在后备池中（防重复添加）</li>
-     *   <li>确保 {@link Agent} 全局表中存在该员工（不存在则创建）</li>
-     *   <li>计算排序号 = 当前最大排序号 + 1</li>
-     *   <li>写入 {@link QrBackupPool} 表，状态为 standby</li>
-     * </ol>
-     *
-     * @param qrCodeId    活码主键 ID
+     * @param qrCodeId    活码主键 ID（仅用于校验存在性）
      * @param agentUserid 企微员工 userid
-     * @throws RuntimeException 活码不存在、员工已在后备池中时抛出
+     * @throws RuntimeException 活码不存在时抛出
      */
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
-        QrCode qr = getById(qrCodeId);
-
-        // 检查是否已在后备池中：同一个员工在一个活码的后备池中只能出现一次
-        List<QrBackupPool> existing = backupRepo.findByQrCodeIdAndStatusOrderBySortOrder(
-            qrCodeId, QrBackupPool.PoolStatus.standby);
-        boolean alreadyExists = existing.stream()
-            .anyMatch(b -> b.getAgentUserid().equals(agentUserid));
-        if (alreadyExists) {
-            throw new RuntimeException("该员工已在后备池中");
-        }
-
-        // 确保 Agent 全局表中存在该员工记录：
-        // Agent 表独立于活码，存储所有员工的企微账号信息
-        ensureAgent(agentUserid, "receptionist");
-
-        // 确定排序号：新员工排到末尾，保证轮换时的 FIFO 语义
-        int maxOrder = existing.stream()
-            .mapToInt(QrBackupPool::getSortOrder)
-            .max().orElse(-1);
-
-        QrBackupPool backup = QrBackupPool.builder()
-            .qrCodeId(qrCodeId)
-            .agentUserid(agentUserid)
-            .role(QrBackupPool.PoolRole.receptionist)
-            .sortOrder(maxOrder + 1)
-            .status(QrBackupPool.PoolStatus.standby) // 初始为待命状态，等待被轮换引擎上线
-            .build();
-        backupRepo.save(backup);
-
-        log.info("后备接待员已添加: qrCodeId={}, agentUserid={}", qrCodeId, agentUserid);
+        getById(qrCodeId); // 校验活码存在
+        poolService.ensureInPool(agentUserid, 200);
+        log.info("全局池员工已添加: userid={}", agentUserid);
     }
 
     // ==================== 活码联系人管理 ====================
@@ -572,79 +517,58 @@ public class QrCodeService {
     // ==================== 后备池管理（续） ====================
 
     /**
-     * 从后备池中移除接待员（物理删除）。
+     * 从全局池中移除员工（物理删除）。
      *
-     * <p>与联系人移除不同，后备池记录直接物理删除，因为后备池仅表示候选关系，
-     * 不需要保留历史。</p>
-     *
-     * @param qrCodeId 活码主键 ID
-     * @param backupId 后备池记录 ID（QrBackupPool 主键）
-     * @throws RuntimeException 后备接待员不存在或不属于该活码时抛出
+     * @param qrCodeId 活码主键 ID（仅用于权限校验）
+     * @param backupId 全局池记录 ID（GlobalAgentPool 主键）
+     * @throws RuntimeException 记录不存在时抛出
      */
     @Transactional
     public void removeBackup(Long qrCodeId, Long backupId) {
-        QrBackupPool backup = backupRepo.findById(backupId)
-            .orElseThrow(() -> new RuntimeException("后备接待员不存在"));
-        if (!backup.getQrCodeId().equals(qrCodeId)) {
-            throw new RuntimeException("后备接待员不属于该活码");
-        }
-        backupRepo.delete(backup);
-        log.info("后备接待员已移除: qrCodeId={}, agentUserid={}", qrCodeId, backup.getAgentUserid());
+        // backupId 在全局池语境下是 GlobalAgentPool 的 ID
+        poolRepo.findById(backupId).ifPresent(p -> {
+            log.info("全局池员工已移除: userid={}", p.getAgentUserid());
+            poolRepo.delete(p);
+        });
     }
 
     /**
-     * 上下移动后备池中接待员的排序位置。
+     * 调整全局池中员工的排序优先级。
      *
      * <p>通过交换两个相邻记录的 {@code sortOrder} 值来实现移动。
-     * 排序号决定了轮换引擎从后备池中取出接待员的优先级：
-     * 排序号越小，越先被轮换上线。</p>
+     * 仅在 standby 状态的员工之间调整顺序。</p>
      *
-     * <h3>边界处理</h3>
-     * <ul>
-     *   <li>已是第一个且方向为 "up"：无操作</li>
-     *   <li>已是最后一个且方向为 "down"：无操作</li>
-     *   <li>记录不在后备池列表中：无操作（防御性处理）</li>
-     * </ul>
-     *
-     * @param qrCodeId  活码主键 ID
-     * @param backupId  后备池记录 ID
-     * @param direction 移动方向："up" 表示上移（排序号变小），"down" 表示下移（排序号变大）
-     * @throws RuntimeException 后备接待员不存在或不属于该活码时抛出
+     * @param qrCodeId  活码主键 ID（全局池调整不依赖此参数，保留兼容）
+     * @param backupId  全局池记录 ID
+     * @param direction 移动方向："up" / "down"
      */
     @Transactional
     public void moveBackup(Long qrCodeId, Long backupId, String direction) {
-        QrBackupPool backup = backupRepo.findById(backupId)
-            .orElseThrow(() -> new RuntimeException("后备接待员不存在"));
-        if (!backup.getQrCodeId().equals(qrCodeId)) {
-            throw new RuntimeException("后备接待员不属于该活码");
-        }
+        GlobalAgentPool target = poolRepo.findById(backupId).orElse(null);
+        if (target == null) return;
 
-        // 获取当前后备池中所有 standby 记录，按 sortOrder 排序
-        List<QrBackupPool> all = backupRepo
-            .findByQrCodeIdAndStatusOrderBySortOrder(qrCodeId, QrBackupPool.PoolStatus.standby);
-
-        // 定位当前记录在排序列表中的位置
+        List<GlobalAgentPool> all = poolRepo
+            .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.standby);
         int idx = -1;
         for (int i = 0; i < all.size(); i++) {
             if (all.get(i).getId().equals(backupId)) { idx = i; break; }
         }
-        if (idx < 0) return;   // 防御：记录不在列表中
+        if (idx < 0) return;
 
-        // 与相邻记录交换 sortOrder 值实现位置互换
         if ("up".equals(direction) && idx > 0) {
-            QrBackupPool other = all.get(idx - 1);
-            int tmp = backup.getSortOrder();
-            backup.setSortOrder(other.getSortOrder());
+            GlobalAgentPool other = all.get(idx - 1);
+            int tmp = target.getSortOrder();
+            target.setSortOrder(other.getSortOrder());
             other.setSortOrder(tmp);
-            backupRepo.save(backup);
-            backupRepo.save(other);
+            poolRepo.save(target);
+            poolRepo.save(other);
         } else if ("down".equals(direction) && idx < all.size() - 1) {
-            QrBackupPool other = all.get(idx + 1);
-            int tmp = backup.getSortOrder();
-            backup.setSortOrder(other.getSortOrder());
+            GlobalAgentPool other = all.get(idx + 1);
+            int tmp = target.getSortOrder();
+            target.setSortOrder(other.getSortOrder());
             other.setSortOrder(tmp);
-            backupRepo.save(backup);
-            backupRepo.save(other);
+            poolRepo.save(target);
+            poolRepo.save(other);
         }
     }
 
@@ -922,24 +846,16 @@ public class QrCodeService {
     }
 
     /**
-     * 将请求中的员工信息绑定到活码。
+     * 将请求中的员工信息绑定到活码 — 支持多员工初始上码。
      *
      * <h3>绑定策略</h3>
      * <ul>
-     *   <li><b>服务老师</b>（{@code serviceTeacherJson} / {@code serviceTeacherUserid}）：
-     *       写入 {@link QrAgent} 表，role=service。支持 JSON 格式传入每人独立的 dailyMax。
-     *       默认日接上限 1000 人（服务老师承接能力更强）</li>
-     *   <li><b>接待员</b>（{@code agentsJson} / {@code receptionistUserid}）：
-     *       写入 {@link QrBackupPool} 后备池表，role=receptionist，status=standby。
-     *       默认日接上限 200 人</li>
-     *   <li><b>额外后备</b>（{@code backupsJson}）：
-     *       纯 userid 数组，同样写入后备池，日限默认 200</li>
+     *   <li>优先使用 {@code initialAgentUserids}（逗号分隔的 userid 列表）</li>
+     *   <li>若无，则兼容旧格式 serviceTeacherUserid + receptionistUserid</li>
+     *   <li>仍不足 initialAgentCount 时，从全局池自动取 standby 员工补齐</li>
+     *   <li>在职继承目标员工同步确保在全局池中</li>
+     *   <li>所有员工角色统一为 receptionist</li>
      * </ul>
-     *
-     * <h3>设计原因</h3>
-     * <p>服务老师直接进入 QrAgent（活码联系人），接待员进入后备池而非直接上线：
-     * 这样设计可以让轮换引擎按序从后备池中取出接待员，避免一次性将所有接待员暴露给企微
-     * 导致客户分配不可控。服务老师作为核心接待人员，始终在线。</p>
      *
      * @param qrCodeId 活码主键 ID
      * @param req      创建请求 DTO
@@ -947,86 +863,68 @@ public class QrCodeService {
      */
     private void bindAgents(Long qrCodeId, QrCodeCreateRequest req) {
         try {
-            // ① 服务老师 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
-            int defaultSvcDailyMax = req.getServiceDailyMax() != null ? req.getServiceDailyMax() : 1000;
             int sortOrder = 0;
 
-            if (req.getServiceTeacherJson() != null && !req.getServiceTeacherJson().isBlank()) {
-                // JSON 格式: [{"userid":"xx","dailyMax":500}, ...]
-                // 支持每个服务老师独立设置日接上限，不满足于全局默认值
-                JsonNode arr = objectMapper.readTree(req.getServiceTeacherJson());
-                for (JsonNode svc : arr) {
-                    String uid = svc.get("userid").asText();
-                    int dm = svc.has("dailyMax") ? svc.get("dailyMax").asInt() : defaultSvcDailyMax;
-                    ensureAgent(uid, "service");  // 确保 Agent 全局表中有该员工
-                    qrAgentRepo.save(QrAgent.builder()
-                        .qrCodeId(qrCodeId).agentUserid(uid)
-                        .role(QrAgent.AgentRole.service)
-                        .dailyMax(dm).serviceDailyMax(dm)  // serviceDailyMax 记录服务老师特有的日限
-                        .sortOrder(sortOrder++).status(QrAgent.AgentStatus.active)
-                        .build());
-                }
-            } else if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
-                // 逗号分隔字符串：所有服务老师共享同一个默认日限
-                for (String uid : req.getServiceTeacherUserid().split(",")) {
+            // ① 确保在职继承目标在全局池中
+            if (req.getTransferTargetUserid() != null && !req.getTransferTargetUserid().isBlank()) {
+                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 200);
+            }
+
+            // ② 初始上码员工：优先使用 initialAgentUserids 列表
+            //    其次从 serviceTeacherUserid / receptionistUserid 兼容旧格式
+            //    最后从全局池自动取人
+            List<String> initialUserids = new ArrayList<>();
+            if (req.getInitialAgentUserids() != null && !req.getInitialAgentUserids().isBlank()) {
+                for (String uid : req.getInitialAgentUserids().split(",")) {
                     String trimmed = uid.trim();
-                    if (trimmed.isEmpty()) continue;
-                    ensureAgent(trimmed, "service");
-                    qrAgentRepo.save(QrAgent.builder()
-                        .qrCodeId(qrCodeId).agentUserid(trimmed)
-                        .role(QrAgent.AgentRole.service)
-                        .dailyMax(defaultSvcDailyMax).serviceDailyMax(defaultSvcDailyMax)
-                        .sortOrder(sortOrder++).status(QrAgent.AgentStatus.active)
-                        .build());
+                    if (!trimmed.isEmpty()) initialUserids.add(trimmed);
+                }
+            } else {
+                // 兼容旧格式：服务老师 + 接待员都作为初始上码员工
+                if (req.getServiceTeacherUserid() != null && !req.getServiceTeacherUserid().isBlank()) {
+                    for (String uid : req.getServiceTeacherUserid().split(",")) {
+                        String t = uid.trim();
+                        if (!t.isEmpty()) initialUserids.add(t);
+                    }
+                }
+                if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
+                    for (String uid : req.getReceptionistUserid().split(",")) {
+                        String t = uid.trim();
+                        if (!t.isEmpty() && !initialUserids.contains(t)) initialUserids.add(t);
+                    }
                 }
             }
 
-            // ② 接待员 — 优先解析 JSON（每人独立日限），回退到逗号分隔字符串
-            // 接待员进入后备池（QrBackupPool）而非直接在活码上线
-            // 原因：由轮换引擎按需从后备池取出上线，避免一次性全量上码
-            int order = 0;
-            if (req.getAgentsJson() != null && !req.getAgentsJson().isBlank()) {
-                // JSON 格式: [{"userid":"xx","dailyMax":150}, ...]
-                JsonNode arr = objectMapper.readTree(req.getAgentsJson());
-                for (JsonNode a : arr) {
-                    String uid = a.get("userid").asText();
-                    int dm = a.has("dailyMax") ? a.get("dailyMax").asInt() : 200;
-                    ensureAgent(uid, "receptionist");
-                    backupRepo.save(QrBackupPool.builder()
-                        .qrCodeId(qrCodeId).agentUserid(uid)
-                        .role(QrBackupPool.PoolRole.receptionist)
-                        .dailyMax(dm).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
-                        .build());
-                }
-            } else if (req.getReceptionistUserid() != null && !req.getReceptionistUserid().isBlank()) {
-                for (String uid : req.getReceptionistUserid().split(",")) {
-                    String trimmed = uid.trim();
-                    if (trimmed.isEmpty()) continue;
-                    ensureAgent(trimmed, "receptionist");
-                    backupRepo.save(QrBackupPool.builder()
-                        .qrCodeId(qrCodeId).agentUserid(trimmed)
-                        .role(QrBackupPool.PoolRole.receptionist)
-                        .dailyMax(200).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
-                        .build());
-                }
+            int needCount = req.getInitialAgentCount() != null
+                ? req.getInitialAgentCount() : 1;
+
+            // 确保指定员工在全局池中，并写入 QrAgent
+            int defaultDailyMax = req.getServiceDailyMax() != null
+                ? req.getServiceDailyMax() : 200;
+            for (String uid : initialUserids) {
+                poolService.ensureInPool(uid, defaultDailyMax);
+                qrAgentRepo.save(QrAgent.builder()
+                    .qrCodeId(qrCodeId).agentUserid(uid)
+                    .role(QrAgent.AgentRole.receptionist)
+                    .dailyMax(defaultDailyMax)
+                    .sortOrder(sortOrder++)
+                    .status(QrAgent.AgentStatus.active).build());
+                needCount--;
             }
 
-            // ③ 额外后备员工（纯 userid 数组，日限默认 200）
-            // backupsJson 与 agentsJson 独立，允许分别管理「直接接待员」和「额外后备」
-            if (req.getBackupsJson() != null && !req.getBackupsJson().isEmpty()) {
-                JsonNode backups = objectMapper.readTree(req.getBackupsJson());
-                for (JsonNode b : backups) {
-                    // 支持两种格式：字符串 "userid" 或对象 {"userid":"xx","dailyMax":200}
-                    String uid = b.isObject() ? b.get("userid").asText() : b.asText();
-                    int dm = b.isObject() && b.has("dailyMax") ? b.get("dailyMax").asInt() : 200;
-                    ensureAgent(uid, "receptionist");
-                    backupRepo.save(QrBackupPool.builder()
-                        .qrCodeId(qrCodeId).agentUserid(uid)
-                        .role(QrBackupPool.PoolRole.receptionist)
-                        .dailyMax(dm).sortOrder(order++).status(QrBackupPool.PoolStatus.standby)
-                        .build());
-                }
+            // 不够数，从全局池自动补
+            while (needCount > 0) {
+                GlobalAgentPool next = poolService.takeStandby();
+                if (next == null) break;
+                qrAgentRepo.save(QrAgent.builder()
+                    .qrCodeId(qrCodeId).agentUserid(next.getAgentUserid())
+                    .role(QrAgent.AgentRole.receptionist)
+                    .dailyMax(next.getDailyMax())
+                    .sortOrder(sortOrder++)
+                    .status(QrAgent.AgentStatus.active).build());
+                needCount--;
             }
+
         } catch (Exception e) {
             log.error("绑定员工失败", e);
             throw new RuntimeException("绑定员工失败: " + e.getMessage(), e);

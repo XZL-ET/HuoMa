@@ -2,11 +2,11 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.QrAgent;
-import com.bookstore.qrcode.entity.QrBackupPool;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.CustomerRepository;
+import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
-import com.bookstore.qrcode.repository.QrBackupPoolRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.QrRotateLogRepository;
 import com.bookstore.qrcode.service.QrCodeService;
@@ -46,7 +46,7 @@ import java.util.zip.ZipOutputStream;
  *   <li>{@link QrImageService} —— 活码二维码图片生成</li>
  *   <li>{@link WecomApiClient} —— 企业微信 API 调用（获取成员列表等）</li>
  *   <li>{@link QrAgentRepository} —— 活码联系人数据访问</li>
- *   <li>{@link QrBackupPoolRepository} —— 后备池数据访问</li>
+ *   <li>{@link GlobalAgentPoolRepository} —— 全局池数据访问</li>
  *   <li>{@link CustomerRepository} —— 客户数据访问（今日新增统计）</li>
  *   <li>{@link QrCodeRepository} —— 活码数据访问（城市/区县去重列表）</li>
  *   <li>{@link QrRotateLogRepository} —— 轮换日志数据访问</li>
@@ -64,7 +64,7 @@ public class QrCodeController {
     private final QrCodeService qrCodeService;
     private final WecomApiClient wecomApiClient;
     private final QrAgentRepository qrAgentRepo;
-    private final QrBackupPoolRepository backupPoolRepo;
+    private final GlobalAgentPoolRepository poolRepo;
     private final CustomerRepository customerRepo;
     private final QrCodeRepository qrCodeRepo;
     private final QrRotateLogRepository rotateLogRepo;
@@ -128,10 +128,10 @@ public class QrCodeController {
             // 4a. 值守数 = 该活码下状态为 active 的联系人数量
             long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(
                 qr.getId(), QrAgent.AgentStatus.active).size();
-            // 4b. 后备数 = 该活码下后备池中状态为 standby 的接待员数量
-            long backupCount = backupPoolRepo.countByQrCodeIdAndStatus(
-                qr.getId(), QrBackupPool.PoolStatus.standby);
-            // 4c. 组装展示字符串："值守数/后备数"
+            // 4b. 后备数 = 全局池中 standby 员工数量（所有活码共享）
+            long backupCount = poolRepo.countByStatus(
+                GlobalAgentPool.PoolStatus.standby);
+            // 4c. 组装展示字符串："值守数/全局后备数"
             agentCountMap.put(qr.getId(), activeCount + "/" + backupCount);
 
             // 4d. 查询该活码在今日时间窗口内新增的客户数
@@ -301,7 +301,7 @@ public class QrCodeController {
      *   <li>活码基本信息（{@link QrCode}）</li>
      *   <li>接待员列表（role 为 receptionist 或 dual 的联系人）</li>
      *   <li>服务老师列表（role 为 service 的联系人）</li>
-     *   <li>后备接待员列表（{@link QrBackupPool}）</li>
+     *   <li>后备接待员列表（{@link GlobalAgentPool}）</li>
      *   <li>企业微信全员列表（用于后备新增/联系人新增弹窗的下拉选择）</li>
      *   <li>已在活码中的联系人 userid 集合（用于前端过滤已添加用户）</li>
      *   <li>最近 20 条轮换日志</li>
@@ -339,8 +339,8 @@ public class QrCodeController {
         model.addAttribute("services",
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
 
-        // ---- 3. 获取后备接待员池 ----
-        List<QrBackupPool> backups = qrCodeService.getBackups(id);
+        // ---- 3. 获取全局后备池 ----
+        List<GlobalAgentPool> backups = qrCodeService.getBackups(id);
         model.addAttribute("backups", backups);
 
         // ---- 4. 加载企业微信全员列表（供前端"新增联系人"/"新增后备"弹窗使用） ----
@@ -508,11 +508,11 @@ public class QrCodeController {
     /**
      * 移除后备接待员。
      *
-     * <p>POST /qrcodes/{id}/backups/{backupId}/remove —— 从后备池中删除指定接待员记录。
+     * <p>POST /qrcodes/{id}/backups/{backupId}/remove —— 从全局池中删除指定员工记录。
      * 委托 {@link QrCodeService#removeBackup(Long, Long)} 处理。
      *
      * @param id       活码 ID
-     * @param backupId 后备记录 ID（{@link QrBackupPool#getId()}）
+     * @param backupId 全局池记录 ID（{@link GlobalAgentPool#getId()}）
      * @param redirect {@link RedirectAttributes}
      *                 <ul>
      *                   <li>{@code message} —— 成功提示</li>
