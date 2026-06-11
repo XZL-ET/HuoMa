@@ -915,10 +915,12 @@ public class QrCodeService {
                 needCount--;
             }
 
-            // 不够数，从全局池自动补
+            // 不够数，从全局池自动补（排除已绑定员工，避免重复）
+            Set<String> boundUserids = new HashSet<>(initialUserids);
             while (needCount > 0) {
-                GlobalAgentPool next = poolService.takeStandby();
+                GlobalAgentPool next = poolService.takeStandby(boundUserids);
                 if (next == null) break;
+                boundUserids.add(next.getAgentUserid());
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(next.getAgentUserid())
                     .role(QrAgent.AgentRole.receptionist)

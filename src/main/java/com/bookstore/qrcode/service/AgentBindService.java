@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>自动轮换：</b>员工满员后标记为 {@link QrAgent.AgentStatus#full}，从企微活码暂时移除</li>
  *   <li><b>全局池扩容：</b>从 {@link GlobalAgentPool} 全局池中取待命的接待员加入活码，分担流量</li>
  *   <li><b>企微同步：</b>通过 {@link com.bookstore.qrcode.wecom.WecomApiClient} 同步活码用户列表到企业微信</li>
- *   <li><b>每日重置：</b>凌晨 00:00 全局池 full→standby，所有 full 员工恢复为 active，清零日计数，重新上活码</li>
+ *   <li><b>每日重置：</b>由 {@link com.bookstore.qrcode.worker.DailyResetWorker} 凌晨 00:00 执行全局池 full→standby 恢复及活码重同步</li>
  * </ul>
  *
  * <p>轮换模式支持两种：自动模式({@link QrCode.RotateMode#auto})和人工审核模式({@link QrCode.RotateMode#manual})，
@@ -54,6 +54,7 @@ public class AgentBindService {
     private final ObjectMapper objectMapper;
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
+    private final AlertService alertService;
     /** 自身代理引用 — 确保 @Async 通过 Spring AOP 代理生效 */
     private final AgentBindService self;
 
@@ -179,22 +180,21 @@ public class AgentBindService {
                 return;
             }
 
-            // 从全局池取人
-            GlobalAgentPool backup = poolService.takeStandby();
+            // 构建排除列表：已在活码上的员工（排除 removed 状态）
+            Set<String> excludeUserids = new HashSet<>();
+            qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+                .map(QrAgent::getAgentUserid)
+                .forEach(excludeUserids::add);
+
+            // 从全局池取人（自动跳过已在活码上的员工）
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
             if (backup == null) {
                 log.error("全局池枯竭！活码 {} 无法扩容", qrCodeId);
+                alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
                 return;
             }
             String backupUserid = backup.getAgentUserid();
-
-            // 去重：已在活码上的员工不再重复添加
-            boolean alreadyOnCode = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
-                .anyMatch(a -> a.getAgentUserid().equals(backupUserid)
-                    && a.getStatus() != QrAgent.AgentStatus.removed);
-            if (alreadyOnCode) {
-                log.info("员工 {} 已在活码 {} 上，跳过扩容", backupUserid, qrCodeId);
-                return;
-            }
 
             // 创建接待员 QrAgent 记录
             QrAgent newAgent = QrAgent.builder()
@@ -257,21 +257,20 @@ public class AgentBindService {
         try {
             if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
 
-            GlobalAgentPool backup = poolService.takeStandby();
+            // 构建排除列表：已在活码上的员工
+            Set<String> excludeUserids = new HashSet<>();
+            qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+                .map(QrAgent::getAgentUserid)
+                .forEach(excludeUserids::add);
+
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
             if (backup == null) {
                 log.warn("全局池无 standby，活码 {} 无法预激活", qrCodeId);
+                alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
                 return;
             }
             String backupUserid = backup.getAgentUserid();
-
-            // 去重：已在活码上的员工不再重复添加
-            boolean alreadyOnCode = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
-                .anyMatch(a -> a.getAgentUserid().equals(backupUserid)
-                    && a.getStatus() != QrAgent.AgentStatus.removed);
-            if (alreadyOnCode) {
-                log.info("员工 {} 已在活码 {} 上，跳过预激活", backupUserid, qrCodeId);
-                return;
-            }
 
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId).agentUserid(backupUserid)
@@ -343,49 +342,6 @@ public class AgentBindService {
         } catch (Exception e) {
             log.error("异步同步企微活码失败: config_id={}", qr.getQrConfigId(), e);
         }
-    }
-
-    // ==================== 每日重置 ====================
-
-    /**
-     * 每日 00:00 重置所有员工的每日计数，恢复过期绑定关系。
-     *
-     * <p>每日重置是轮换机制的闭环操作：</p>
-     * <ol>
-     *   <li>全局池恢复：将所有 full 员工恢复为 standby，清零日计数</li>
-     *   <li>QrAgent 恢复：将所有 full 状态员工恢复为 active，清零日计数</li>
-     *   <li>异步同步所有受影响的活码到企微</li>
-     * </ol>
-     *
-     * <p>由 {@link com.bookstore.qrcode.worker.DailyResetWorker} 定时调度执行。</p>
-     */
-    @Transactional
-    public void dailyReset() {
-        // 全局池恢复 full → standby
-        poolService.dailyReset();
-
-        // QrAgent 恢复 full → active
-        List<QrAgent> fullAgents = qrAgentRepo.findByStatus(QrAgent.AgentStatus.full);
-        for (QrAgent qa : fullAgents) {
-            qa.setStatus(QrAgent.AgentStatus.active);
-            qa.setDailyCurrent(0);
-            qa.setLastResetAt(LocalDateTime.now());
-            qrAgentRepo.save(qa);
-        }
-        log.info("每日重置: 恢复 {} 个 full 员工", fullAgents.size());
-
-        // 同步所有受影响的活码
-        fullAgents.stream()
-            .map(QrAgent::getQrCodeId)
-            .distinct()
-            .forEach(qrCodeId ->
-                TransactionSynchronizationManager.registerSynchronization(
-                    new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            self.syncQrCodeToWechatAsync(qrCodeId);
-                        }
-                    }));
     }
 
     /**

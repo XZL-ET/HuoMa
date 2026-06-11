@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 全局员工池服务 — 替代每码独立后备池。
@@ -41,19 +42,30 @@ public class GlobalAgentPoolService {
     private final WecomApiClient wecomApi;
 
     /**
-     * 从全局池取优先级最高（sortOrder 最小）的 standby 员工。
+     * 从全局池取优先级最高（sortOrder 最小）的 standby 员工，排除指定 userid 集合。
      *
-     * @return 池中优先级最高的 standby 员工，池空时返回 {@code null}
+     * <p>排除列表用于防止取到已在目标活码上的员工（同一员工可服务于多个活码，
+     * 但不能在同一活码上重复添加）。按 sortOrder 升序遍历，返回第一个不在排除列表中的 standby。</p>
+     *
+     * @param excludeUserids 需要排除的企微 userid 集合，可为 {@code null} 或空集
+     * @return 池中优先级最高的可用 standby 员工，池空或全部被排除时返回 {@code null}
      */
     @Transactional
-    public GlobalAgentPool takeStandby() {
+    public GlobalAgentPool takeStandby(Set<String> excludeUserids) {
         List<GlobalAgentPool> standbys = poolRepo
             .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.standby);
         if (standbys.isEmpty()) {
             log.warn("全局员工池无 standby 员工可用！");
             return null;
         }
-        return standbys.get(0);
+        for (GlobalAgentPool p : standbys) {
+            if (excludeUserids == null || !excludeUserids.contains(p.getAgentUserid())) {
+                return p;
+            }
+        }
+        log.warn("全局员工池所有 standby 均在排除列表中（排除 {} 人），无可用员工",
+            excludeUserids != null ? excludeUserids.size() : 0);
+        return null;
     }
 
     /**
