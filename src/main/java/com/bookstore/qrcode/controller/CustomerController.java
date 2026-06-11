@@ -23,6 +23,17 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 客户管理页面控制器。
+ * <p>
+ * 处理客户列表、客户详情、数据修复、员工名称同步以及测试客户创建等页面的请求。
+ * 依赖 {@link CustomerService} 进行核心业务操作，通过 {@link WecomApiClient} 调用企业微信 API
+ * 获取员工信息，并结合 {@link AgentBindService} 完成客户分配与日接计数更新。
+ * </p>
+ *
+ * @author Bookstore Dev
+ * @since 1.0.0
+ */
 @Controller
 @RequestMapping("/customers")
 @RequiredArgsConstructor
@@ -35,6 +46,30 @@ public class CustomerController {
     private final TagRepository tagRepo;
     private final WecomApiClient wecomApiClient;
 
+    /**
+     * GET {@code /customers}
+     * <p>
+     * 客户列表页。支持按关键字、学校、当前接待员工、客户状态以及时间范围进行筛选。
+     * 同时向视图传递以下辅助数据以供前台渲染：
+     * </p>
+     * <ul>
+     *   <li>客户分页结果集</li>
+     *   <li>所有员工列表及 userid→姓名 映射（优先从企微 API 获取，失败时回退到本地表）</li>
+     *   <li>schoolId→学校名称 映射</li>
+     *   <li>客户总量和今日新增计数</li>
+     * </ul>
+     *
+     * @param keyword      搜索关键字（客户名称 / 手机号等，模糊匹配）
+     * @param schoolId     学校 ID，按学校筛选
+     * @param currentAgent 当前接待员工 userid
+     * @param status       客户状态字符串，对应 {@link Customer.CustomerStatus} 枚举名
+     * @param startTime    创建时间区间起始（ISO 日期时间格式）
+     * @param endTime      创建时间区间结束（ISO 日期时间格式）
+     * @param page         页码，从 0 开始
+     * @param size         每页条数，默认 20
+     * @param model        Spring MVC 模型
+     * @return 视图路径 {@code customer/list}
+     */
     @GetMapping
     public String list(@RequestParam(required = false) String keyword,
                        @RequestParam(required = false) String schoolId,
@@ -47,12 +82,15 @@ public class CustomerController {
                        @RequestParam(defaultValue = "0") int page,
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
+        // ---- 状态参数解析 ----
+        // 将前端传入的字符串（如 "ASSIGNED"）转换为枚举，非法值忽略为 null
         Customer.CustomerStatus cs = null;
         if (status != null && !status.isEmpty()) {
             try { cs = Customer.CustomerStatus.valueOf(status); }
             catch (IllegalArgumentException ignored) {}
         }
 
+        // ---- 执行分页搜索 ----
         Page<Customer> customers = customerService.search(
             keyword, schoolId, currentAgent, cs,
             startTime, endTime, PageRequest.of(page, size));
@@ -61,12 +99,18 @@ public class CustomerController {
         model.addAttribute("schoolId", schoolId);
         model.addAttribute("currentAgent", currentAgent);
         model.addAttribute("status", status);
+
+        // ---- 统计数据 ----
         model.addAttribute("total", customerService.countTotal());
         model.addAttribute("todayCount", customerService.countToday());
+
+        // ---- 员工列表（用于下拉筛选） ----
         model.addAttribute("agents", agentRepo.findAll());
+        // 活码列表（用于下拉筛选）
         model.addAttribute("qrCodes", qrCodeRepo.findAll());
 
-        // 构建 userid → 姓名 映射
+        // ---- 构建 userid → 姓名 映射 ----
+        // 优先从企业微信 API 获取员工姓名，确保名称与企微一致
         Map<String, String> agentNameMap = new HashMap<>();
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
@@ -75,14 +119,17 @@ public class CustomerController {
                     agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
                 }
             }
-        } catch (Exception ignored) {}
-        // fallback: 从 Agent 表补充
+        } catch (Exception ignored) {
+            // API 调用失败（网络/超时/权限），静默处理
+        }
+        // fallback：企微 API 未返回的员工，从本地 Agent 表补充
         for (Agent a : agentRepo.findAll()) {
             agentNameMap.putIfAbsent(a.getUserid(), a.getName());
         }
         model.addAttribute("agentNameMap", agentNameMap);
 
-        // 构建 schoolId → 学校名 映射
+        // ---- 构建 schoolId → 学校名 映射 ----
+        // 用于在列表中展示学校名称而非 ID
         Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
             .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
         model.addAttribute("schoolNameMap", schoolNameMap);
@@ -90,13 +137,26 @@ public class CustomerController {
         return "customer/list";
     }
 
+    /**
+     * GET {@code /customers/{id}}
+     * <p>
+     * 客户详情页。展示指定客户的基本信息及已打标签。
+     * 同时构建 tagId→标签名 映射以便前台展示。
+     * </p>
+     *
+     * @param id    客户 ID（主键）
+     * @param model Spring MVC 模型
+     * @return 视图路径 {@code customer/detail}
+     * @see CustomerService#getById(Long)
+     * @see CustomerService#getTags(Long)
+     */
     @GetMapping("/{id}")
     public String detail(@PathVariable Long id, Model model) {
         Customer customer = customerService.getById(id);
         model.addAttribute("customer", customer);
         model.addAttribute("tags", customerService.getTags(id));
 
-        // 构建 tagId → 标签名 映射
+        // 构建 tagId → 标签名 映射，用于在详情页显示标签名称
         Map<Long, String> tagNameMap = new HashMap<>();
         for (Tag t : tagRepo.findAll()) {
             tagNameMap.put(t.getId(), t.getName());
@@ -107,7 +167,14 @@ public class CustomerController {
     }
 
     /**
-     * 修复存量客户缺失数据（unionid / avatar / name）。
+     * POST {@code /customers/repair-data}
+     * <p>
+     * 修复存量客户缺失的数据字段（unionid / avatar / name）。
+     * 遍历所有缺失数据的客户记录，尝试从企业微信 API 补全。
+     * </p>
+     *
+     * @return 重定向到客户列表页
+     * @see CustomerService#repairCustomerData()
      */
     @PostMapping("/repair-data")
     public String repairCustomerData() {
@@ -116,7 +183,14 @@ public class CustomerController {
     }
 
     /**
-     * 从企微 API 同步员工姓名到本地 Agent 表。
+     * POST {@code /customers/sync-agent-names}
+     * <p>
+     * 从企业微信 API 同步员工姓名到本地 {@link Agent} 表。
+     * 仅当本地姓名字段与 userid 相同时视为未设置，才进行覆盖更新，避免覆盖已手动修改的名称。
+     * </p>
+     *
+     * @return 重定向到客户列表页
+     * @see WecomApiClient#getUserSimplelist()
      */
     @PostMapping("/sync-agent-names")
     public String syncAgentNames() {
@@ -127,6 +201,7 @@ public class CustomerController {
                     String userid = u.get("userid").asText();
                     String name = u.get("name").asText();
                     agentRepo.findById(userid).ifPresent(agent -> {
+                        // 仅当本地 name 仍为 userid（未设置）时更新，不覆盖已手动配置的名称
                         if (userid.equals(agent.getName())) {
                             agent.setName(name);
                             agentRepo.save(agent);
@@ -140,11 +215,29 @@ public class CustomerController {
         return "redirect:/customers";
     }
 
+    /**
+     * POST {@code /customers/create-test}
+     * <p>
+     * 创建一条测试客户记录（用于开发调试），并同步更新对应员工的日接待计数。
+     * 测试客户的外部 ID 以 {@code test_} 前缀加时间戳生成，避免与真实客户冲突。
+     * 如果指定了活码，则自动从中解析出学校 ID；相关逻辑与真实客户扫码进线流程保持一致。
+     * </p>
+     *
+     * @param agentUserid 分配的接待员工 userid（必填）
+     * @param qrCodeId    活码 ID（可选），用于关联学校
+     * @param name        客户名称，默认为 "测试客户"
+     * @return 重定向到客户列表页
+     * @see CustomerService#createManual(String, String, String, String, Long)
+     * @see AgentBindService#incrementDailyCount(String, String)
+     */
     @PostMapping("/create-test")
     public String createTest(@RequestParam String agentUserid,
                              @RequestParam(required = false) String qrCodeId,
                              @RequestParam(defaultValue = "测试客户") String name) {
+        // 生成唯一的外部 ID，以 "test_" 前缀标记为测试数据
         String externalId = "test_" + System.currentTimeMillis();
+
+        // 根据活码 ID 解析学校 ID
         String schoolId = null;
         Long qrId = null;
         if (qrCodeId != null && !qrCodeId.isBlank()) {
@@ -152,11 +245,15 @@ public class CustomerController {
                 qrId = Long.parseLong(qrCodeId);
                 QrCode qr = qrCodeRepo.findById(qrId).orElse(null);
                 if (qr != null) schoolId = qr.getSchoolId();
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+                // 传入了非数字的 qrCodeId，忽略
+            }
         }
+
+        // 创建客户记录
         customerService.createManual(name, externalId, agentUserid, schoolId, qrId);
 
-        // 同步更新员工日计数 + 触发轮换检查
+        // 同步更新员工日接待计数，触发轮换检查（与真实客户分配后逻辑一致）
         if (schoolId != null) {
             agentBindService.incrementDailyCount(agentUserid, schoolId);
         }
