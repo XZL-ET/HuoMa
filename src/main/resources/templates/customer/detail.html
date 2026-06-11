@@ -1,31 +1,43 @@
 <!DOCTYPE html>
+<!-- 客户详情页面 — 查看单个客户的完整信息，包括基本资料、标签等 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='客户详情', content=~{::main})}">
 <main>
     <div class="card p-4 mx-auto" style="max-width: 800px;">
         <h5>客户详情</h5>
+        <!-- 客户基本资料 -->
         <div class="row g-3 mt-2">
             <div class="col-md-6"><strong>昵称：</strong><span th:text="${customer.name}">-</span></div>
+            <!-- 企微外部联系人 ID（external_userid） -->
             <div class="col-md-6"><strong>企微ID：</strong><code th:text="${customer.externalUserid}">-</code></div>
+            <!-- 客户类型：1=微信，其他=企业微信 -->
             <div class="col-md-6"><strong>类型：</strong><span th:text="${customer.type == 1 ? '微信' : '企业微信'}">-</span></div>
+            <!-- 首次添加时间 -->
             <div class="col-md-6"><strong>首次添加：</strong><span th:text="${customer.addTime != null ? #temporals.format(customer.addTime, 'yyyy-MM-dd HH:mm') : '-'}">-</span></div>
+            <!-- 最初添加该客户的接待员 -->
             <div class="col-md-6"><strong>接待员：</strong><span th:text="${customer.addedAgent ?: '-'}">-</span></div>
+            <!-- 当前服务的老师 -->
             <div class="col-md-6"><strong>服务老师：</strong><span th:text="${customer.currentAgent ?: '-'}">-</span></div>
+            <!-- 所属学校 -->
             <div class="col-md-6"><strong>学校ID：</strong><span th:text="${customer.schoolId ?: '-'}">-</span></div>
+            <!-- 客户状态徽标 -->
             <div class="col-md-6"><strong>状态：</strong>
                 <span class="badge" th:classappend="${customer.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
                       th:text="${customer.status.name()}"></span>
             </div>
         </div>
 
-        <!-- 标签 -->
+        <!-- 标签区块：展示该客户的所有标签，通过 th:each 遍历 tag 列表 -->
         <h6 class="mt-4">标签</h6>
         <div class="d-flex flex-wrap gap-1 mb-3">
+            <!-- th:each 遍历客户关联标签，通过 tagNameMap 将 tagId 转为可读的标签名 -->
             <span th:each="ct : ${tags}" class="badge bg-info"
                   th:text="${tagNameMap.getOrDefault(ct.tagId, ct.tagId.toString())}">标签</span>
+            <!-- 无标签时的占位提示 -->
             <span th:if="${tags.isEmpty()}" class="text-muted">暂无标签</span>
         </div>
 
+        <!-- 返回按钮 -->
         <div class="mt-3">
             <a href="/customers" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
         </div>

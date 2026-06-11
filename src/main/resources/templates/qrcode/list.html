@@ -1,7 +1,9 @@
 <!DOCTYPE html>
+<!-- 活码管理页面 — 展示所有活码列表，支持搜索筛选、批量操作和分页 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='活码管理', content=~{::main})}">
 <main>
+    <!-- 页面标题与创建入口 -->
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0">
             活码管理
@@ -13,13 +15,15 @@
         </div>
     </div>
 
-    <!-- 搜索栏 -->
+    <!-- 搜索筛选栏 -->
     <div class="card p-3 mb-3">
         <form class="row g-2" method="get" th:action="@{/qrcodes}">
+            <!-- 关键词搜索：学校名称或 ID -->
             <div class="col-md-3">
                 <input type="text" name="keyword" class="form-control" placeholder="搜索学校名/ID"
                        th:value="${keyword}">
             </div>
+            <!-- 城市筛选下拉框，th:each 遍历 cities 列表生成选项 -->
             <div class="col-md-2">
                 <select name="city" class="form-select">
                     <option value="">全部城市</option>
@@ -27,6 +31,7 @@
                             th:text="${c}" th:selected="${city == c}"></option>
                 </select>
             </div>
+            <!-- 区县筛选下拉框 -->
             <div class="col-md-2">
                 <select name="district" class="form-select">
                     <option value="">全部区县</option>
@@ -34,6 +39,7 @@
                             th:text="${d}" th:selected="${district == d}"></option>
                 </select>
             </div>
+            <!-- 状态筛选：正常/暂停/满员/无可用 -->
             <div class="col-md-2">
                 <select name="status" class="form-select">
                     <option value="">全部状态</option>
@@ -49,10 +55,11 @@
         </form>
     </div>
 
-    <!-- 表格 -->
+    <!-- 数据表格 -->
     <div class="card p-0">
         <div class="table-responsive">
             <table class="table table-hover mb-0">
+                <!-- 表头 -->
                 <thead class="table-light">
                     <tr>
                         <th style="width:36px;"><input type="checkbox" id="selectAll" onchange="toggleAll(this)" title="全选"></th>
@@ -66,26 +73,32 @@
                         <th>操作</th>
                     </tr>
                 </thead>
+                <!-- 表体：th:each 遍历分页数据 qrCodes.content，每行一个活码 -->
                 <tbody>
                     <tr th:each="qr : ${qrCodes.content}">
                         <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox"></td>
                         <td>
+                            <!-- 点击学校名称跳转活码详情页 -->
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
                         </td>
                         <td th:text="${qr.regionCity}"></td>
                         <td th:text="${qr.regionDistrict}"></td>
+                        <!-- 员工数量（服务老师 + 已激活接待员），通过 agentCountMap 映射 -->
                         <td>
                             <span class="badge bg-info" th:text="${agentCountMap.getOrDefault(qr.id, '-')}">-</span>
                         </td>
+                        <!-- 今日新增客户数 -->
                         <td>
                             <span class="fw-semibold" th:text="${todayCountMap.getOrDefault(qr.id, 0)}">0</span>
                         </td>
+                        <!-- 轮换模式徽标：自动=绿色，人工=黄色 -->
                         <td>
                             <span class="badge"
                                   th:classappend="${qr.rotateMode.name() == 'auto' ? 'bg-success' : 'bg-warning text-dark'}"
                                   th:text="${qr.rotateMode.name() == 'auto' ? '自动' : '人工'}"></span>
                         </td>
+                        <!-- 状态徽标，使用 th:switch 根据枚举值显示不同颜色 -->
                         <td>
                             <span class="badge"
                                   th:classappend="${qr.status.name() == 'active' ? 'bg-success' : (qr.status.name() == 'full' ? 'bg-danger' : 'bg-secondary')}"
@@ -101,6 +114,7 @@
                                class="btn btn-sm btn-outline-secondary">详情</a>
                         </td>
                     </tr>
+                    <!-- 空数据提示 -->
                     <tr th:if="${qrCodes.content.isEmpty()}">
                         <td colspan="9" class="text-center text-muted py-4">
                             暂无活码数据，点击"手动创建"或"批量导入"开始
@@ -111,26 +125,30 @@
         </div>
     </div>
 
-    <!-- 批量操作 -->
+    <!-- 批量操作按钮组，仅在有数据时显示 -->
     <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
+        <!-- 批量切换为自动轮换 -->
         <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchAutoForm">
             <input type="hidden" name="mode" value="auto">
             <div id="batchAutoIds"></div>
         </form>
         <button class="btn btn-sm btn-outline-success" onclick="batchSubmit('auto')">📋 批量切换为自动</button>
 
+        <!-- 批量切换为人工轮换 -->
         <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchManualForm">
             <input type="hidden" name="mode" value="manual">
             <div id="batchManualIds"></div>
         </form>
         <button class="btn btn-sm btn-outline-warning" onclick="batchSubmit('manual')">📋 批量切换为人工</button>
 
+        <!-- 批量下载 72dpi 二维码（适用于线上使用） -->
         <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload72Form">
             <input type="hidden" name="dpi" value="72">
             <div id="batchDownload72Ids"></div>
         </form>
         <button class="btn btn-sm btn-outline-primary" onclick="batchDownload(72)">📥 批量下载 72dpi</button>
 
+        <!-- 批量下载 300dpi 二维码（适用于打印） -->
         <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload300Form">
             <input type="hidden" name="dpi" value="300">
             <div id="batchDownload300Ids"></div>
@@ -138,16 +156,19 @@
         <button class="btn btn-sm btn-outline-secondary" onclick="batchDownload(300)">🖨️ 批量下载 300dpi</button>
     </div>
 
-    <!-- 分页 -->
+    <!-- 分页导航，仅当总页数大于 1 时显示 -->
     <nav th:if="${qrCodes.totalPages > 1}" class="mt-3">
         <ul class="pagination justify-content-center">
+            <!-- 上一页按钮，首页时禁用 -->
             <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
                 <a class="page-link"
                    th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number - 1})}">上一页</a>
             </li>
+            <!-- 页码信息 -->
             <li class="page-item disabled">
                 <span class="page-link" th:text="'第 ' + ${qrCodes.number + 1} + ' / ' + ${qrCodes.totalPages} + ' 页'"></span>
             </li>
+            <!-- 下一页按钮，末页时禁用 -->
             <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
                 <a class="page-link"
                    th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number + 1})}">下一页</a>
@@ -155,11 +176,14 @@
         </ul>
     </nav>
 
+    <!-- 批量操作的 JavaScript 逻辑 -->
     <script>
+        /* 全选/取消全选 */
         function toggleAll(source) {
             document.querySelectorAll('.qr-checkbox').forEach(cb => cb.checked = source.checked);
         }
 
+        /* 批量切换轮换模式：将选中的活码 ID 填入对应表单并提交 */
         function batchSubmit(mode) {
             const checked = document.querySelectorAll('.qr-checkbox:checked');
             if (checked.length === 0) {
@@ -179,6 +203,7 @@
             document.getElementById(formId).submit();
         }
 
+        /* 批量下载二维码：将选中的活码 ID 填入对应表单并提交 */
         function batchDownload(dpi) {
             const checked = document.querySelectorAll('.qr-checkbox:checked');
             if (checked.length === 0) {

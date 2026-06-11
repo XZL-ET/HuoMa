@@ -1,9 +1,10 @@
 <!DOCTYPE html>
+<!-- 手动创建活码页面 — 填写学校信息并选择服务老师和后备接待员，生成新的活码 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='手动创建活码', content=~{::main})}">
 <main>
 <style>
-/* ── 可搜索员工选择面板 ── */
+/* 可搜索员工选择面板样式 */
 .employee-picker {
     border: 1px solid #dee2e6; border-radius: 8px;
     background: #fff; overflow: hidden;
@@ -47,34 +48,42 @@
 <div class="card p-4 mx-auto" style="max-width: 800px;">
     <h5 class="mb-4">手动创建活码</h5>
     <form method="post" th:action="@{/qrcodes/create}" id="createForm">
+        <!-- 基本信息区 -->
         <div class="row g-3 mb-3">
+            <!-- 学校名称（必填） -->
             <div class="col-md-6">
                 <label class="form-label">学校名称 <span class="text-danger">*</span></label>
                 <input type="text" name="schoolName" class="form-control" required>
             </div>
+            <!-- 学校 ID（必填），作为企微 state 参数中的唯一标识 -->
             <div class="col-md-6">
                 <label class="form-label">学校ID <span class="text-danger">*</span></label>
                 <input type="text" name="schoolId" class="form-control" required
                        placeholder="唯一标识，写入企微 state">
             </div>
+            <!-- 所在城市（必填） -->
             <div class="col-md-6">
                 <label class="form-label">市 <span class="text-danger">*</span></label>
                 <input type="text" name="regionCity" class="form-control" required>
             </div>
+            <!-- 所在区县（必填） -->
             <div class="col-md-6">
                 <label class="form-label">区 <span class="text-danger">*</span></label>
                 <input type="text" name="regionDistrict" class="form-control" required>
             </div>
+            <!-- 备注（选填） -->
             <div class="col-12">
                 <label class="form-label">备注</label>
                 <input type="text" name="remark" class="form-control">
             </div>
         </div>
 
+        <!-- 员工配置区 -->
         <h6 class="mb-3">员工配置</h6>
+        <!-- 加载员工数据时的错误提示 -->
         <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
 
-        <!-- 员工数据（JS 用） -->
+        <!-- 将后端 userList 嵌入页面供 JS 使用 -->
         <script th:inline="javascript">
             /*<![CDATA[*/
             window._employeeList = /*[[${userList}]]*/ [];
@@ -82,18 +91,20 @@
         </script>
 
         <div class="row g-3 mb-3">
-            <!-- 服务老师 -->
+            <!-- 服务老师选择器 — 活码主联系人，客户扫码随机分配给其中一人 -->
             <div class="col-12">
                 <label class="form-label">
                     服务老师 <span class="text-danger">*</span>
                     <small class="text-muted fw-normal">— 活码主联系人，客户扫码随机分配给其中一人</small>
                 </label>
                 <div id="svcPicker" class="employee-picker"></div>
+                <!-- 隐藏字段：提交时填入 JSON 格式的服务老师数据 -->
                 <input type="hidden" name="serviceTeacherJson" id="svcJson">
+                <!-- 隐藏字段：逗号分隔的 userid 列表（兼容旧版） -->
                 <input type="hidden" name="serviceTeacherUserid" id="svcFallback">
             </div>
 
-            <!-- 后备接待员 -->
+            <!-- 后备接待员选择器 — 服务老师满员后按顺序激活 -->
             <div class="col-12">
                 <label class="form-label">
                     后备接待员
@@ -103,11 +114,13 @@
                 <input type="hidden" name="agentsJson" id="receptionistJson">
             </div>
 
+            <!-- 欢迎语配置 -->
             <div class="col-md-6">
                 <label class="form-label">欢迎语文案</label>
                 <textarea name="welcomeText" class="form-control" rows="2"
                           placeholder="欢迎来到XX书店家校服务！..."></textarea>
             </div>
+            <!-- 自定义标签，客户扫码后自动打标 -->
             <div class="col-md-6">
                 <label class="form-label">
                     自定义标签
@@ -118,6 +131,7 @@
             </div>
         </div>
 
+        <!-- 提交按钮 -->
         <div class="d-flex gap-2">
             <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> 创建</button>
             <a href="/qrcodes" class="btn btn-outline-secondary">取消</a>
@@ -127,7 +141,7 @@
 
 <script>
 /**
- * EmployeePicker — 可搜索的员工选择面板，每人独立日上限
+ * EmployeePicker — 可搜索的员工选择面板，支持每人独立设置日添加上限
  *
  * 用法: new EmployeePicker(el, {
  *   items: [{userid, name}, ...],
@@ -143,24 +157,27 @@ class EmployeePicker {
         this.items = opts.items || [];
         this.defaultDailyMax = opts.defaultDailyMax || 200;
         this.placeholder = opts.placeholder || '搜索姓名或账号...';
-        this.selected = new Map(); // userid → dailyMax (int)
+        this.selected = new Map(); // key=userid, value=dailyMax
 
         this.render();
         this.bindEvents();
     }
 
+    /** 渲染员工面板，支持按搜索关键词过滤 */
     render(filter = '') {
-        // 保存搜索框焦点和光标位置
+        // 保存搜索框焦点和光标位置，避免输入时失焦
         const oldInput = this.el.querySelector('.search-input');
         const wasFocused = oldInput && document.activeElement === oldInput;
         const cursorPos = wasFocused ? oldInput.selectionStart : 0;
 
         const q = filter.toLowerCase();
+        // 按姓名或账号过滤
         const filtered = this.items.filter(it =>
             it.name.toLowerCase().includes(q) || it.userid.toLowerCase().includes(q)
         );
         const selCount = this.selected.size;
 
+        // 构建面板 HTML
         this.el.innerHTML = `
             <div class="search-bar">
                 <i class="bi bi-search"></i>
@@ -199,25 +216,24 @@ class EmployeePicker {
             }
         }
 
-        // re-bind event listeners
+        // 重新绑定行事件
         this.bindRowEvents();
     }
 
+    /** 绑定搜索输入事件 */
     bindEvents() {
-        // Search input
         this.el.addEventListener('input', e => {
             if (e.target.classList.contains('search-input')) {
                 this.render(e.target.value);
             }
         });
-
-        // Click outside — not needed for this pattern
     }
 
+    /** 绑定每行的复选框和日限输入事件 */
     bindRowEvents() {
         const rows = this.el.querySelectorAll('.row-item');
         rows.forEach(row => {
-            // Checkbox click
+            // 复选框变化：选中/取消选中
             const cb = row.querySelector('.form-check-input');
             cb.addEventListener('change', () => {
                 const userid = row.dataset.userid;
@@ -230,14 +246,14 @@ class EmployeePicker {
                 this.render(this.el.querySelector('.search-input')?.value || '');
             });
 
-            // Click anywhere on row toggles checkbox (but not on input)
+            // 点击行切换复选框（输入框除外）
             row.addEventListener('click', e => {
-                if (e.target.tagName === 'INPUT') return; // let inputs handle themselves
+                if (e.target.tagName === 'INPUT') return; // 输入框自己处理事件
                 cb.checked = !cb.checked;
                 cb.dispatchEvent(new Event('change'));
             });
 
-            // Daily max change
+            // 日上限输入变化时更新
             const limitInput = row.querySelector('.limit-col input');
             limitInput.addEventListener('change', () => {
                 const userid = row.dataset.userid;
@@ -245,11 +261,12 @@ class EmployeePicker {
                     this.selected.set(userid, parseInt(limitInput.value) || this.defaultDailyMax);
                 }
             });
-            // Stop click propagation on the limit input
+            // 阻止点击日限输入框时触发行切换
             limitInput.addEventListener('click', e => e.stopPropagation());
         });
     }
 
+    /** HTML 转义 */
     _escape(s) {
         const div = document.createElement('div');
         div.textContent = s;
@@ -273,34 +290,34 @@ class EmployeePicker {
     }
 }
 
-// ── 初始化 ──
+// ── 页面初始化 ──
 document.addEventListener('DOMContentLoaded', () => {
     const employees = window._employeeList || [];
     if (employees.length === 0) return;
 
-    // 服务老师选择器
+    // 初始化服务老师选择器
     const svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
         items: employees,
         defaultDailyMax: 1000,
         placeholder: '搜索服务老师姓名或账号...'
     });
 
-    // 后备接待员选择器
+    // 初始化后备接待员选择器
     const receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
         items: employees,
         defaultDailyMax: 200,
         placeholder: '搜索后备接待员姓名或账号...'
     });
 
-    // 提交前序列化
+    // 表单提交前将选中员工数据序列化到隐藏字段
     document.getElementById('createForm').addEventListener('submit', () => {
-        // 服务老师 → JSON
+        // 服务老师 → JSON 字符串
         const svc = svcPicker.getSelected();
         document.getElementById('svcJson').value = svc.length > 0 ? JSON.stringify(svc) : '';
-        // 逗号分隔回退（兼容）
+        // 逗号分隔回退（兼容旧版接口）
         document.getElementById('svcFallback').value = svc.map(s => s.userid).join(',');
 
-        // 接待员 → JSON
+        // 接待员 → JSON 字符串
         const receptionist = receptionistPicker.getSelected();
         document.getElementById('receptionistJson').value = receptionist.length > 0
             ? JSON.stringify(receptionist) : '';

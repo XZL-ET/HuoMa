@@ -1,12 +1,14 @@
 <!DOCTYPE html>
+<!-- 活码详情页面 — 查看单个活码的完整信息，包括基本信息、二维码、联系人、后备池、轮换设置和日志 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='活码详情', content=~{::main})}">
 <main>
     <div class="row g-3">
-        <!-- 基础信息 -->
+        <!-- 基础信息卡片 -->
         <div class="col-12">
             <div class="card p-4">
                 <div class="d-flex justify-content-between align-items-start">
+                    <!-- 左侧：学校名称、ID、地区、创建方式 -->
                     <div>
                         <h5 th:text="${qr.schoolName}">学校名</h5>
                         <div class="text-muted small">
@@ -15,6 +17,7 @@
                             创建方式：<span th:text="${qr.createMode.name()}"></span>
                         </div>
                     </div>
+                    <!-- 右侧：状态徽标 + 暂停/启用 + 删除按钮 -->
                     <div class="d-flex gap-2">
                         <span class="badge fs-6"
                               th:classappend="${qr.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
@@ -33,16 +36,18 @@
             </div>
         </div>
 
-        <!-- 二维码 -->
+        <!-- 二维码展示与下载卡片 -->
         <div class="col-12">
             <div class="card p-4 text-center">
                 <h6>活码二维码</h6>
+                <!-- 显示企微活码图片 -->
                 <div th:if="${qr.qrUrl != null}">
                     <img th:src="${qr.qrUrl}" alt="活码二维码" style="max-width: 300px; margin: 0 auto;">
                     <div class="mt-2 small text-muted">
                         企微链接：<code th:text="${qr.qrUrl}"></code>
                     </div>
                 </div>
+                <!-- 下载和操作按钮 -->
                 <div class="mt-3 d-flex gap-2 justify-content-center">
                     <a th:href="@{/qrcodes/{id}/download(id=${qr.id},dpi=72)}"
                        class="btn btn-sm btn-outline-primary">📥 下载 72dpi（线上）</a>
@@ -56,7 +61,7 @@
             </div>
         </div>
 
-        <!-- 活码联系人 -->
+        <!-- 活码联系人列表 -->
         <div class="col-12">
             <div class="card p-4">
                 <h6>
@@ -69,9 +74,10 @@
                 <table class="table table-sm mb-0">
                     <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
                     <tbody>
-                        <!-- 服务老师 -->
+                        <!-- 服务老师行：th:each 遍历 services 列表 -->
                         <tr th:each="a : ${services}">
                             <td>
+                                <!-- 通过 agentNameMap 将 userid 转为可读名称 -->
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
                                 <span class="badge bg-primary ms-1">服务老师</span>
                             </td>
@@ -81,18 +87,20 @@
                                 <span th:text="${a.dailyCurrent}"></span>
                                 <small class="text-muted">/ <span th:text="${a.dailyMax}"></span></small>
                             </td>
+                            <!-- 状态徽标：活跃=绿色，已满=黄色，其他=红色 -->
                             <td>
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : (a.status.name() == 'full' ? 'bg-warning' : 'bg-danger')}"
                                       th:text="${a.status.name() == 'active' ? '接客中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
                             <td class="text-nowrap">
+                                <!-- 编辑按钮，将联系人数据存放在 data-* 属性中供弹窗使用 -->
                                 <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
                                         th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
                                         data-bs-toggle="modal" data-bs-target="#editAgentModal"
                                         title="编辑"><i class="bi bi-pencil"></i></button>
                             </td>
                         </tr>
-                        <!-- 已激活的接待员 -->
+                        <!-- 已激活的接待员行 -->
                         <tr th:each="a : ${receptionists}">
                             <td>
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
@@ -113,6 +121,7 @@
                                         th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
                                         data-bs-toggle="modal" data-bs-target="#editAgentModal"
                                         title="编辑"><i class="bi bi-pencil"></i></button>
+                                <!-- 移除联系人按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('确定要将该联系人从活码中移除吗？')">
@@ -120,16 +129,19 @@
                                 </form>
                             </td>
                         </tr>
+                        <!-- 空数据提示 -->
                         <tr th:if="${services.isEmpty() and receptionists.isEmpty()}">
                             <td colspan="6" class="text-muted text-center">暂未配置联系人</td>
                         </tr>
                     </tbody>
                 </table>
+                <!-- 策略说明 -->
                 <small class="text-muted mt-2 d-block">
                     💡 策略：扫码优先加到<span class="text-primary">服务老师</span>。
                     服务老师日限快满时，自动从后备池激活<span class="text-info">接待员</span>加入活码。
                     满员后<span class="text-danger">切换</span>为仅接待员。
                 </small>
+                <!-- 手动同步到企微按钮 -->
                 <form th:action="@{/qrcodes/{id}/sync(id=${qr.id})}" method="post" class="mt-2">
                     <button class="btn btn-sm btn-outline-secondary" title="将 active 员工同步到企微活码">
                         🔄 手动同步到企微
@@ -138,7 +150,7 @@
             </div>
         </div>
 
-        <!-- 后备接待员 -->
+        <!-- 后备接待员面板 -->
         <div class="col-md-6">
             <div class="card p-4">
                 <h6>
@@ -151,24 +163,29 @@
                 <table class="table table-sm mb-0">
                     <thead><tr><th>姓名</th><th>优先级</th><th>日限</th><th>状态</th><th style="width:120px;">操作</th></tr></thead>
                     <tbody>
+                        <!-- 后备接待员行，th:each 遍历 backups，iter 提供 first/last 判断 -->
                         <tr th:each="b,iter : ${backups}">
                             <td th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid)}"></td>
+                            <!-- 按 sortOrder 排序的优先级标识 -->
                             <td><span class="badge bg-light text-dark" th:text="'#' + ${b.sortOrder}"></span></td>
                             <td>200</td>
                             <td><span class="badge bg-info">待命</span></td>
                             <td class="text-nowrap">
+                                <!-- 上移按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="up">
                                     <button class="btn btn-sm btn-outline-secondary" title="上移"
                                             th:disabled="${iter.first}"><i class="bi bi-chevron-up"></i></button>
                                 </form>
+                                <!-- 下移按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="down">
                                     <button class="btn btn-sm btn-outline-secondary" title="下移"
                                             th:disabled="${iter.last}"><i class="bi bi-chevron-down"></i></button>
                                 </form>
+                                <!-- 移除按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/remove(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('确定要移除该后备接待员吗？')">
@@ -176,6 +193,7 @@
                                 </form>
                             </td>
                         </tr>
+                        <!-- 后备池为空提示 -->
                         <tr th:if="${backups.isEmpty()}">
                             <td colspan="5" class="text-muted text-center">
                                 后备池为空
@@ -187,10 +205,11 @@
             </div>
         </div>
 
-        <!-- 轮换设置 -->
+        <!-- 轮换设置面板 -->
         <div class="col-md-6">
             <div class="card p-4">
                 <h6>轮换设置</h6>
+                <!-- 预警/紧急阈值配置 -->
                 <form th:action="@{/qrcodes/{id}/thresholds(id=${qr.id})}" method="post"
                       class="row g-2 align-items-end mb-3">
                     <div class="col-auto">
@@ -207,6 +226,7 @@
                         <button class="btn btn-sm btn-outline-primary">更新阈值</button>
                     </div>
                 </form>
+                <!-- 轮换模式切换（自动/人工） -->
                 <div class="d-flex gap-2">
                     <form th:action="@{/qrcodes/{id}/rotate-mode(id=${qr.id})}" method="post" class="d-flex gap-2 align-items-center">
                         <select name="mode" class="form-select form-select-sm" style="width:auto;">
@@ -231,32 +251,33 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
                 <div class="modal-body">
+                    <!-- 加载错误提示 -->
                     <div th:if="${loadError}" class="alert alert-warning py-1 small" th:text="${loadError}"></div>
-                    <!-- 搜索过滤 -->
+                    <!-- 搜索过滤输入框 -->
                     <div class="mb-3">
                         <input type="text" id="backupSearchInput" class="form-control form-control-sm"
                                placeholder="🔍 搜索姓名或账号..." oninput="filterBackupCandidates()">
                     </div>
-                    <!-- 已加入的提示 -->
+                    <!-- 已加入后备池的员工列表提示 -->
                     <div th:if="${!backups.isEmpty()}" class="alert alert-info py-1 small mb-2">
                         已在后备池：
                         <span th:each="b,stat : ${backups}"
                               th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid) + (stat.last ? '' : '、')}"></span>
                     </div>
-                    <!-- 员工列表 -->
+                    <!-- 所有员工列表，可点击加入后备池 -->
                     <div style="max-height: 400px; overflow-y: auto;">
                         <table class="table table-sm table-hover mb-0" id="backupCandidateTable">
                             <thead class="table-light sticky-top">
                                 <tr><th>姓名</th><th>账号</th><th style="width:100px;"></th></tr>
                             </thead>
                             <tbody>
+                                <!-- th:each 遍历 userList，data-name 属性供前端搜索过滤 -->
                                 <tr th:each="u : ${userList}" class="backup-candidate-row"
                                     th:data-name="${u.name.toLowerCase() + ' ' + u.userid.toLowerCase()}">
-                                    <td>
-                                        <strong th:text="${u.name}"></strong>
-                                    </td>
+                                    <td><strong th:text="${u.name}"></strong></td>
                                     <td><code class="small" th:text="${u.userid}"></code></td>
                                     <td>
+                                        <!-- 加入后备池的表单，已在池中的员工按钮被禁用 -->
                                         <form th:action="@{/qrcodes/{id}/backups(id=${qr.id})}" method="post" class="d-inline">
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success"
@@ -292,15 +313,18 @@
                 </div>
                 <div class="modal-body">
                     <div th:if="${loadError}" class="alert alert-warning py-1 small" th:text="${loadError}"></div>
+                    <!-- 搜索过滤输入框 -->
                     <div class="mb-3">
                         <input type="text" id="agentSearchInput" class="form-control form-control-sm"
                                placeholder="🔍 搜索姓名或账号..." oninput="filterAgentCandidates()">
                     </div>
+                    <!-- 已在联系人中的员工列表提示 -->
                     <div th:if="${!contactUserids.isEmpty()}" class="alert alert-info py-1 small mb-2">
                         已在联系人中：
                         <span th:each="uid,stat : ${contactUserids}"
                               th:text="${agentNameMap.getOrDefault(uid, uid) + (stat.last ? '' : '、')}"></span>
                     </div>
+                    <!-- 所有员工列表，th:if 排除已在联系人中的员工 -->
                     <div style="max-height: 400px; overflow-y: auto;">
                         <table class="table table-sm table-hover mb-0" id="agentCandidateTable">
                             <thead class="table-light sticky-top">
@@ -313,6 +337,7 @@
                                     <td><strong th:text="${u.name}"></strong></td>
                                     <td><code class="small" th:text="${u.userid}"></code></td>
                                     <td>
+                                        <!-- 加入联系人的表单 -->
                                         <form th:action="@{/qrcodes/{id}/agents(id=${qr.id})}" method="post" class="d-inline">
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success">
@@ -347,11 +372,13 @@
                 </div>
                 <form method="post" id="editAgentForm">
                     <div class="modal-body">
+                        <!-- 字段：日添加上限 -->
                         <div class="mb-3">
                             <label class="form-label small">日添加上限</label>
                             <input type="number" name="dailyMax" class="form-control form-control-sm"
                                    min="1" max="9999" required>
                         </div>
+                        <!-- 字段：角色（服务老师/接待员/双角色） -->
                         <div class="mb-3">
                             <label class="form-label small">角色</label>
                             <select name="role" class="form-select form-select-sm">
@@ -360,6 +387,7 @@
                                 <option value="dual">双角色</option>
                             </select>
                         </div>
+                        <!-- 字段：优先级排序 -->
                         <div class="mb-3">
                             <label class="form-label small">优先级（sortOrder）</label>
                             <input type="number" name="sortOrder" class="form-control form-control-sm"
@@ -385,6 +413,7 @@
                 </div>
                 <form th:action="@{/qrcodes/{id}/style(id=${qr.id})}" method="post">
                     <div class="modal-body">
+                        <!-- 字段：主题色 -->
                         <div class="mb-3">
                             <label class="form-label">主题色</label>
                             <select name="theme" class="form-select">
@@ -396,11 +425,13 @@
                                 <option value="gray">⚫ 灰色</option>
                             </select>
                         </div>
+                        <!-- 字段：引导文案 -->
                         <div class="mb-3">
                             <label class="form-label">引导文案（每行一条）</label>
                             <textarea name="guideText" class="form-control" rows="3"
                                       placeholder="XX书店·家校服务\nXX第一小学专属通道\n扫码添加 领取购书优惠"></textarea>
                         </div>
+                        <!-- 字段：是否显示学校名称 -->
                         <div class="form-check">
                             <input type="checkbox" name="showSchoolName" value="true" class="form-check-input" checked>
                             <label class="form-check-label">在二维码下方显示学校名称</label>
@@ -416,7 +447,7 @@
         </div>
     </div>
 
-    <!-- 轮换日志 -->
+    <!-- 轮换日志表格 -->
     <div class="col-12 mt-3" th:if="${!rotateLogs.isEmpty()}">
         <div class="card p-4">
             <h6>📋 轮换日志</h6>
@@ -435,13 +466,17 @@
         </div>
     </div>
 
+    <!-- 返回列表按钮 -->
     <div class="mt-3">
         <a href="/qrcodes" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
     </div>
 
+    <!-- 前端交互逻辑 -->
     <script th:inline="javascript">
+        /* 将活码 ID 嵌入 JS */
         const qrId = /*[[ ${qr.id} ]]*/ 0;
 
+        /* 后备候选人搜索过滤 */
         function filterBackupCandidates() {
             const input = document.getElementById('backupSearchInput');
             const filter = input.value.toLowerCase().trim();
@@ -452,6 +487,7 @@
             });
         }
 
+        /* 联系人候选人搜索过滤 */
         function filterAgentCandidates() {
             const input = document.getElementById('agentSearchInput');
             const filter = input.value.toLowerCase().trim();
@@ -462,7 +498,7 @@
             });
         }
 
-        // 编辑联系人弹窗：点击编辑按钮时填充表单
+        /* 编辑联系人弹窗：点击编辑按钮时从 data-* 属性读取数据并填充表单 */
         document.querySelectorAll('.edit-agent-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 const d = this.dataset;
