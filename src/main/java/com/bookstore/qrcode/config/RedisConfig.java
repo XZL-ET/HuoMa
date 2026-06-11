@@ -7,6 +7,8 @@ import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+import java.util.Map;
+
 /**
  * Redis 配置类。
  * <p>
@@ -32,6 +34,17 @@ public class RedisConfig {
     public static final String CALLBACK_CONSUMER_GROUP = "callback-worker-group";
     /** Consumer 名称：当前实例的消费者标识 */
     public static final String CALLBACK_CONSUMER_NAME = "worker-1";
+    /** Stream 最大长度（近似），超出后自动删除旧消息，防止内存无限增长 */
+    public static final long STREAM_MAXLEN = 10000;
+
+    // ==================== 标签自动打标 Stream 相关常量 ====================
+
+    /** Redis Stream Key：自动打标事件流，TagWorker 从此消费打标事件 */
+    public static final String TAG_STREAM_KEY = "wecom:tag:stream";
+    /** Consumer Group 名称：标签打标 Worker 消费组 */
+    public static final String TAG_CONSUMER_GROUP = "tag-worker-group";
+    /** Consumer 名称：当前实例的标签消费者标识 */
+    public static final String TAG_CONSUMER_NAME = "tag-worker-1";
 
     // ==================== 业务 Key 前缀常量 ====================
 
@@ -121,5 +134,33 @@ public class RedisConfig {
             // 消费组已存在时抛出 RedisCommandExecutionException，属于正常情况，忽略即可
         }
         return CALLBACK_CONSUMER_GROUP;
+    }
+
+    /**
+     * 应用启动时自动创建标签打标 Redis Stream Consumer Group。
+     * <p>
+     * 首次启动时创建消费组 {@value #TAG_CONSUMER_GROUP}，
+     * 绑定到 Stream {@value #TAG_STREAM_KEY}，从最早消息（0-0）开始消费。
+     * 若消费组已存在则静默忽略异常，保证重启不报错。
+     * </p>
+     *
+     * @param redisTemplate 已注入的 StringRedisTemplate
+     * @return 消费组名称，供 TagWorker 引用
+     */
+    @Bean
+    public String tagConsumerGroup(StringRedisTemplate redisTemplate) {
+        try {
+            // 先 XADD 一条占位消息确保 Stream 存在（XADD 会自动创建不存在的 Stream），
+            // 否则后续 XGROUP CREATE 会因 Stream 不存在而报 NOGROUP 错误
+            redisTemplate.opsForStream()
+                .add(TAG_STREAM_KEY, Map.of("_init", "1"));
+            redisTemplate.opsForStream().createGroup(TAG_STREAM_KEY,
+                ReadOffset.from("0-0"), TAG_CONSUMER_GROUP);
+            // 用 trim 清理占位消息（XDEL API 存在兼容性问题，改用 trim 近似清理）
+            redisTemplate.opsForStream().trim(TAG_STREAM_KEY, 0, true);
+        } catch (Exception e) {
+            // 消费组已存在时属于正常情况（非首次启动），忽略即可
+        }
+        return TAG_CONSUMER_GROUP;
     }
 }

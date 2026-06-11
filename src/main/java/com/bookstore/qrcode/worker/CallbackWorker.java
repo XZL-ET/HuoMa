@@ -29,7 +29,9 @@ import java.util.concurrent.Executor;
  * 解析后根据 {@code event_type} 字段分发到对应的处理方法：</p>
  * <ul>
  *   <li>{@code change_external_contact} —— 进一步解析 XML 中的 ChangeType 子路由；</li>
- *   <li>{@code add_external_contact} —— 客户添加成功，执行打标、计数、继承等 5 步；</li>
+ *   <li>{@code add_external_contact} —— 客户添加成功，执行速率检测、客户入库、日计数 3 步；
+ *       自动打标以事件形式发布到独立 Stream 供 {@link TagWorker} 异步消费；
+ *       在职继承改为管理员手动触发；</li>
  *   <li>{@code add_fail} —— 添加失败告警；</li>
  *   <li>{@code del_external_contact} —— 客户删除员工；</li>
  *   <li>{@code greeting_fail} —— 欢迎语发送失败告警。</li>
@@ -54,10 +56,8 @@ import java.util.concurrent.Executor;
 public class CallbackWorker {
 
     private final StringRedisTemplate redisTemplate;
-    private final TagService tagService;
     private final CustomerService customerService;
     private final AgentBindService agentBindService;
-    private final TransferService transferService;
     private final AlertService alertService;
     private final RateLimiterService rateLimiterService;
     private final ObjectMapper objectMapper;
@@ -221,22 +221,21 @@ public class CallbackWorker {
     }
 
     /**
-     * 处理客户添加成功事件，执行完整的 5 步处理流程。
+     * 处理客户添加成功事件，执行精简的 3 步流程 + 打标事件发布。
      *
      * <p><b>执行顺序（每一步均有独立 try-catch，单步失败不影响后续）：</b>
      * <ol>
-     *   <li><b>速率检测</b> —— 调用 {@link RateLimiterService#recordAdd} 记录本次添加，
-     *       用于员工级别的频率控制，防止触发企业微信风控；</li>
+     *   <li><b>速率检测</b> —— 调用 {@link RateLimiterService#recordAdd} 记录本次添加；</li>
      *   <li><b>记录/更新客户信息</b> —— 调用 {@link CustomerService#upsertFromCallback}
-     *       将客户信息写入数据库（必须在打标之前执行，因为自动打标依赖客户记录）；</li>
-     *   <li><b>自动打标</b> —— 通过场景值 {@code state} 解析市/区/学校标签，
-     *       调用 {@link TagService#autoTag} 为客户打上标签；</li>
+     *       将客户信息写入数据库；</li>
+     *   <li><b>发布打标事件</b> —— 将打标所需数据以 XADD 方式发布到
+     *       {@link RedisConfig#TAG_STREAM_KEY}，由 {@link TagWorker} 异步消费；</li>
      *   <li><b>员工日计数 +1</b> —— 调用 {@link AgentBindService#incrementDailyCount}
-     *       累加该员工今日接待量，为日上限检测提供数据；</li>
-     *   <li><b>触发在职继承</b> —— 如果客户记录已成功创建，调用
-     *       {@link TransferService#initiate} 发起在职继承流程。</li>
+     *       累加该员工今日全局接待量，触发阈值检查与自动轮换。</li>
      * </ol>
      * </p>
+     *
+     * <p>在职继承已改为管理员手动触发，不再由回调自动执行。</p>
      *
      * @param event 添加成功事件的 JSON 节点，需包含 {@code external_userid}、
      *              {@code userid} 和 {@code state} 字段
@@ -258,7 +257,7 @@ public class CallbackWorker {
             log.error("速率检测失败: userid={}", userId, e);
         }
 
-        // ② 记录/更新客户信息（必须在打标之前，autoTag 依赖客户记录）
+        // ② 记录/更新客户信息
         Long customerId = null;
         try {
             customerId = customerService.upsertFromCallback(externalUserId, userId, state);
@@ -266,12 +265,23 @@ public class CallbackWorker {
             log.error("记录客户失败（非阻塞）: external={}", externalUserId, e);
         }
 
-        // ③ 自动打标（市/区/学校）— 失败不阻塞后续
+        // ③ 发布自动打标事件 → TagWorker 异步消费
+        // 改为 XADD 而非直接调用 TagService.autoTag()，
+        // 避免打标过程中的企微 API 调用拖慢回调主消费线程
         if (state != null) {
             try {
-                tagService.autoTag(externalUserId, userId, state);
+                Map<String, Object> tagEvent = new java.util.LinkedHashMap<>();
+                tagEvent.put("external_userid", externalUserId);
+                tagEvent.put("userid", userId);
+                tagEvent.put("state", state);
+                redisTemplate.opsForStream().add(
+                    RedisConfig.TAG_STREAM_KEY,
+                    Map.of("event", objectMapper.writeValueAsString(tagEvent)));
+                // 近似裁剪到 MAXLEN，O(1) 操作，防止 Stream 历史消息无限增长
+                redisTemplate.opsForStream().trim(RedisConfig.TAG_STREAM_KEY,
+                    RedisConfig.STREAM_MAXLEN, true);
             } catch (Exception e) {
-                log.error("自动打标失败（非阻塞）: external={}, state={}", externalUserId, state, e);
+                log.error("发布打标事件失败: external={}", externalUserId, e);
             }
         }
 
@@ -280,15 +290,6 @@ public class CallbackWorker {
             agentBindService.incrementDailyCount(userId, state);
         } catch (Exception e) {
             log.error("日计数失败: userid={}, state={}", userId, state, e);
-        }
-
-        // ⑤ 触发在职继承
-        if (customerId != null) {
-            try {
-                transferService.initiate(customerId, userId, externalUserId, state);
-            } catch (Exception e) {
-                log.error("在职继承失败（非阻塞）: customerId={}", customerId, e);
-            }
         }
 
         log.info("添加成功处理完成: external={}, userid={}, state={}, customerId={}",

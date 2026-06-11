@@ -14,6 +14,13 @@ import java.util.concurrent.ThreadPoolExecutor;
  * 包括回调事件消费线程池和通用异步任务线程池。
  * 每个线程池独立配置核心线程数、最大线程数、队列容量、线程名前缀及拒绝策略，
  * 以隔离不同业务场景的资源占用，防止相互影响。
+ * <p>
+ * <b>线程池分配：</b>
+ * <ul>
+ *   <li>{@code callbackExecutor} — {@link com.bookstore.qrcode.worker.CallbackWorker}</li>
+ *   <li>{@code taskExecutor} — {@link com.bookstore.qrcode.worker.TagWorker}、
+ *       {@link com.bookstore.qrcode.worker.TransferWorker}、批量导入等通用异步任务</li>
+ * </ul>
  * </p>
  *
  * @author Bookstore Dev Team
@@ -53,11 +60,11 @@ public class AsyncConfig {
     }
 
     /**
-     * 通用异步任务线程池 — 用于批量导⼊、后台数据同步、报表生成等非回调类任务。
+     * 通用异步任务线程池 — 用于 TagWorker、TransferWorker、批量导入、后台数据同步等非回调类任务。
      * <p>
      * <b>线程池参数说明：</b>
      * <ul>
-     *   <li>corePoolSize = 2  &mdash; 核心线程数，通用任务不频繁，2 个常驻线程足够</li>
+     *   <li>corePoolSize = 2  &mdash; 核心线程数，TagWorker 和 TransferWorker 各占一个常驻线程</li>
      *   <li>maxPoolSize = 4  &mdash; 最大线程数，允许少量并发提升吞吐</li>
      *   <li>queueCapacity = 1000  &mdash; 队列容量适中，避免任务堆积过多消耗内存</li>
      *   <li>threadNamePrefix = "async-"  &mdash; 线程名前缀，便于区分日志来源</li>

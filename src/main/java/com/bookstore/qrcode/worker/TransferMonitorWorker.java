@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>调度说明：</b>
  * <ul>
- *   <li>追踪任务：{@code cron = "0 */10 * * * *"}，每 10 分钟一次；</li>
+ *   <li>追踪任务：{@code cron = "0 *&#47;10 * * * *"}，每 10 分钟一次；</li>
  *   <li>清理任务：{@code cron = "0 0 12 * * *"}，每天中午 12:00 执行。</li>
  * </ul>
  * </p>
