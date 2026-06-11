@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS qr_code (
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码表';
 
+-- qr_code 新增字段（全局员工池重构）
+ALTER TABLE qr_code
+    ADD COLUMN IF NOT EXISTS transfer_target_userid VARCHAR(100) COMMENT '在职继承目标员工',
+    ADD COLUMN IF NOT EXISTS initial_agent_count INT DEFAULT 1 COMMENT '活码创建时初始上码人数',
+    ADD COLUMN IF NOT EXISTS custom_tags VARCHAR(500) COMMENT '客户扫码后自动打标的自定义标签';
+
 -- agent：员工
 -- 员工表
 CREATE TABLE IF NOT EXISTS agent (
@@ -89,6 +95,22 @@ CREATE TABLE IF NOT EXISTS qr_backup_pool (
     FOREIGN KEY (agent_userid) REFERENCES agent(userid),
     INDEX idx_qr_pool (qr_code_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码后备员工表';
+
+-- global_agent_pool：全局员工池（替代 qr_backup_pool）
+CREATE TABLE IF NOT EXISTS global_agent_pool (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    agent_userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微员工UserID',
+    daily_max INT NOT NULL DEFAULT 200 COMMENT '全局日接待上限',
+    daily_current INT NOT NULL DEFAULT 0 COMMENT '今日已接待（所有活码合计）',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT '分配优先级，越小越先被分配',
+    status VARCHAR(20) NOT NULL DEFAULT 'standby' COMMENT 'standby/full/blocked',
+    last_reset_at DATETIME COMMENT '上次日重置时间',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
+    INDEX idx_status (status),
+    INDEX idx_sort (sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全局员工池';
 
 -- customer：客户
 -- 客户表
