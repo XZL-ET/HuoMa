@@ -200,6 +200,9 @@ public class QrCodeService {
         // 3. 绑定员工：从全局池取人写入 QrAgent
         bindAgents(qr.getId(), req);
 
+        // 4. 同步企微活码：确保从池中补齐的员工也出现在企微活码上
+        syncQrUsersToWechat(qr.getId());
+
         return qr;
     }
 

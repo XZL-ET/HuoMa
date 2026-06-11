@@ -2,6 +2,7 @@ package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -24,10 +25,10 @@ import java.util.Set;
  *
  * <p><b>职责与执行步骤：</b>
  * <ol>
- *   <li><b>清零 Redis 每日计数</b> —— 删除所有 {@code agent:daily:*} 的 Key，重置员工当日累积量；</li>
- *   <li><b>恢复 full 状态员工</b> —— 将前一天因达到日上限而变更为 {@code full} 状态的员工重新置为
- *       {@code active}，清零 {@code dailyCurrent}，并重新同步活码到企业微信，让这些员工恢复接客；</li>
- *   <li><b>生成昨日日报</b> —— 从客户、转移、告警等表中统计昨日数据，写入 {@link DailyReport} 持久化。</li>
+ *   <li><b>清零 Redis 每日计数</b> —— 删除所有 {@code agent:daily:*} 的 Key；</li>
+ *   <li><b>全局池日重置</b> —— 将所有 full 状态员工恢复为 standby，清零日计数；</li>
+ *   <li><b>恢复 full 状态员工</b> —— 将 QrAgent 中 full 状态的员工恢复为 active，重新同步到企微；</li>
+ *   <li><b>生成昨日日报</b> —— 统计昨日数据写入 {@link DailyReport} 持久化。</li>
  * </ol>
  * </p>
  *
@@ -50,6 +51,7 @@ public class DailyResetWorker {
     private final AgentAlertRepository alertRepo;
     private final CustomerTransferRepository transferRepo;
     private final QrCodeService qrCodeService;
+    private final GlobalAgentPoolService poolService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -72,10 +74,17 @@ public class DailyResetWorker {
         // 1. 清零 Redis 每日计数
         clearRedisDailyCounters();
 
-        // 2. 恢复 full 状态的员工（非封号/熔断的）
+        // 2. 全局池日重置：full → standby
+        try {
+            poolService.dailyReset();
+        } catch (Exception e) {
+            log.error("全局池日重置失败", e);
+        }
+
+        // 3. 恢复 full 状态的员工（非封号/熔断的）
         recoverFullAgents();
 
-        // 3. 生成昨日日报
+        // 4. 生成昨日日报
         generateDailyReport(yesterday, today);
 
         log.info("===== 每日重置 + 日报生成完成 =====");

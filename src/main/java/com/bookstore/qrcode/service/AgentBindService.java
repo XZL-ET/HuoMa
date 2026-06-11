@@ -98,7 +98,8 @@ public class AgentBindService {
         poolService.updateDailyCurrent(userId, (int) totalNew);
 
         // 递增后立即检查全局阈值，若达到日限则触发轮换
-        checkAndRotate(qr.getId(), userId, (int) totalNew);
+        // 通过 proxy 调用确保 @Transactional 生效
+        self.checkAndRotate(qr.getId(), userId, (int) totalNew);
     }
 
     // ==================== 日限检查 + 轮换 ====================
@@ -186,6 +187,15 @@ public class AgentBindService {
             }
             String backupUserid = backup.getAgentUserid();
 
+            // 去重：已在活码上的员工不再重复添加
+            boolean alreadyOnCode = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                .anyMatch(a -> a.getAgentUserid().equals(backupUserid)
+                    && a.getStatus() != QrAgent.AgentStatus.removed);
+            if (alreadyOnCode) {
+                log.info("员工 {} 已在活码 {} 上，跳过扩容", backupUserid, qrCodeId);
+                return;
+            }
+
             // 创建接待员 QrAgent 记录
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId).agentUserid(backupUserid)
@@ -247,17 +257,21 @@ public class AgentBindService {
         try {
             if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
 
-            long activeReceptionists = qrAgentRepo
-                .findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active)
-                .stream().filter(a -> a.getRole() == QrAgent.AgentRole.receptionist).count();
-            if (activeReceptionists > 0) return;
-
             GlobalAgentPool backup = poolService.takeStandby();
             if (backup == null) {
                 log.warn("全局池无 standby，活码 {} 无法预激活", qrCodeId);
                 return;
             }
             String backupUserid = backup.getAgentUserid();
+
+            // 去重：已在活码上的员工不再重复添加
+            boolean alreadyOnCode = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                .anyMatch(a -> a.getAgentUserid().equals(backupUserid)
+                    && a.getStatus() != QrAgent.AgentStatus.removed);
+            if (alreadyOnCode) {
+                log.info("员工 {} 已在活码 {} 上，跳过预激活", backupUserid, qrCodeId);
+                return;
+            }
 
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId).agentUserid(backupUserid)
