@@ -120,6 +120,15 @@ public class QrCode {
     @Column(length = 500)
     private String remark;
 
+    /** 在职继承目标员工 userid（手动触发继承时的导入对象） */
+    @Column(name = "transfer_target_userid", length = 100)
+    private String transferTargetUserid;
+
+    /** 活码创建时初始上码人数，默认 1 */
+    @Column(name = "initial_agent_count")
+    @Builder.Default
+    private Integer initialAgentCount = 1;
+
     /** 客户扫码后自动打标的自定义标签列表，多个标签以逗号分隔 */
     @Column(name = "custom_tags", length = 500)
     private String customTags;

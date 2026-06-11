@@ -35,6 +35,15 @@ public class QrCodeCreateRequest {
     /** 备注信息，灵活存储额外描述或内部说明 */
     private String remark;
 
+    /** 在职继承目标员工 userid（手动触发继承时的导入对象） */
+    private String transferTargetUserid;
+
+    /** 初始上码员工数，默认 1 */
+    private Integer initialAgentCount;
+
+    /** 初始上码员工 userid 列表（逗号分隔，如 "zhangsan,lisi"） */
+    private String initialAgentUserids;
+
     // ==================== 服务老师（主联系人）配置 ====================
 
     /**
