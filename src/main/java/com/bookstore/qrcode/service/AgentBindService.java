@@ -7,6 +7,7 @@ import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -55,8 +56,10 @@ public class AgentBindService {
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
-    /** 自身代理引用 — 确保 @Async 通过 Spring AOP 代理生效 */
-    private final AgentBindService self;
+    /** 自身代理引用 — 通过 @Lazy 延迟注入打破循环依赖，确保 @Async/@Transactional 走 AOP 代理 */
+    @Lazy
+    @org.springframework.beans.factory.annotation.Autowired
+    private AgentBindService self;
 
     // ==================== 日计数 ====================
 

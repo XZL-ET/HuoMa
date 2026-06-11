@@ -30,10 +30,27 @@ CREATE TABLE IF NOT EXISTS qr_code (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码表';
 
 -- qr_code 新增字段（全局员工池重构）
-ALTER TABLE qr_code
-    ADD COLUMN IF NOT EXISTS transfer_target_userid VARCHAR(100) COMMENT '在职继承目标员工',
-    ADD COLUMN IF NOT EXISTS initial_agent_count INT DEFAULT 1 COMMENT '活码创建时初始上码人数',
-    ADD COLUMN IF NOT EXISTS custom_tags VARCHAR(500) COMMENT '客户扫码后自动打标的自定义标签';
+-- 使用动态 SQL 检查 INFORMATION_SCHEMA 兼容旧版 MySQL（<8.0.29 不支持 ADD COLUMN IF NOT EXISTS）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_target_userid') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_target_userid VARCHAR(100) COMMENT ''在职继承目标员工''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'initial_agent_count') = 0,
+    'ALTER TABLE qr_code ADD COLUMN initial_agent_count INT DEFAULT 1 COMMENT ''活码创建时初始上码人数''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'custom_tags') = 0,
+    'ALTER TABLE qr_code ADD COLUMN custom_tags VARCHAR(500) COMMENT ''客户扫码后自动打标的自定义标签''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- agent：员工
 -- 员工表
