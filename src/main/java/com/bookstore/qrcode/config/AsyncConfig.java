@@ -19,7 +19,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  * <ul>
  *   <li>{@code callbackExecutor} — {@link com.bookstore.qrcode.worker.CallbackWorker}</li>
  *   <li>{@code taskExecutor} — {@link com.bookstore.qrcode.worker.TagWorker}、
- *       {@link com.bookstore.qrcode.worker.TransferWorker}、批量导入等通用异步任务</li>
+ *       批量导入、企微活码异步同步等通用异步任务</li>
  * </ul>
  * </p>
  *
@@ -60,11 +60,11 @@ public class AsyncConfig {
     }
 
     /**
-     * 通用异步任务线程池 — 用于 TagWorker、TransferWorker、批量导入、后台数据同步等非回调类任务。
+     * 通用异步任务线程池 — 用于 TagWorker、批量导入、企微活码异步同步等非回调类任务。
      * <p>
      * <b>线程池参数说明：</b>
      * <ul>
-     *   <li>corePoolSize = 2  &mdash; 核心线程数，TagWorker 和 TransferWorker 各占一个常驻线程</li>
+     *   <li>corePoolSize = 2  &mdash; 核心线程数，TagWorker 常驻 + 异步同步弹性使用</li>
      *   <li>maxPoolSize = 4  &mdash; 最大线程数，允许少量并发提升吞吐</li>
      *   <li>queueCapacity = 1000  &mdash; 队列容量适中，避免任务堆积过多消耗内存</li>
      *   <li>threadNamePrefix = "async-"  &mdash; 线程名前缀，便于区分日志来源</li>
