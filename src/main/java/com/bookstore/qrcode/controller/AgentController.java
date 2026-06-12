@@ -6,11 +6,14 @@ import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.service.EmployeeSyncService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -32,6 +35,7 @@ public class AgentController {
     private final GlobalAgentPoolRepository poolRepo;
     private final QrAgentRepository qrAgentRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final EmployeeSyncService employeeSyncService;
 
     /**
      * GET {@code /agents} — 全局员工池列表。
@@ -79,5 +83,25 @@ public class AgentController {
 
         model.addAttribute("title", "员工管理");
         return "agent/list";
+    }
+
+    /**
+     * POST {@code /agents/sync} — 手动触发：从企微通讯录同步新员工到全局池。
+     *
+     * <p>已在池中的员工不会重复添加。新员工排在队尾，日上限默认 200。</p>
+     */
+    @PostMapping("/sync")
+    public String syncFromWecom(RedirectAttributes redirect) {
+        try {
+            int added = employeeSyncService.syncToGlobalPool();
+            if (added > 0) {
+                redirect.addFlashAttribute("message", "已从企微同步 " + added + " 名新员工到全局池");
+            } else {
+                redirect.addFlashAttribute("message", "所有企微在职员工已在全局池中，无需同步");
+            }
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", "同步失败: " + e.getMessage());
+        }
+        return "redirect:/agents";
     }
 }

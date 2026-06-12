@@ -5,10 +5,16 @@
 <main>
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4>全局员工池</h4>
-        <div>
+        <div class="d-flex gap-2 align-items-center">
             <span class="badge bg-success fs-6" th:text="'待命 ' + ${standbyCount}"></span>
             <span class="badge bg-warning text-dark fs-6" th:text="'已满 ' + ${fullCount}"></span>
             <span class="badge bg-danger fs-6" th:text="'暂停 ' + ${blockedCount}"></span>
+            <form th:action="@{/agents/sync}" method="post" class="d-inline ms-2"
+                  onsubmit="this.querySelector('button').disabled=true; return true;">
+                <button class="btn btn-sm btn-outline-primary" title="从企微通讯录同步新员工到全局池">
+                    🔄 从企微同步
+                </button>
+            </form>
         </div>
     </div>
 

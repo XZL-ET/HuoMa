@@ -43,6 +43,7 @@ public class PatrolWorker {
     private final AlertService alertService;
     private final RateLimiterService rateLimiterService;
     private final MessageGuardService messageGuardService;
+    private final com.bookstore.qrcode.service.EmployeeSyncService employeeSyncService;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
@@ -80,24 +81,43 @@ public class PatrolWorker {
     }
 
     /**
-     * 检查全局员工池 standby 余量并发送告警。
+     * 检查全局员工池 standby 余量，自动补充并发送告警。
      *
-     * <p><b>告警规则：</b>
-     * <ul>
-     *   <li>standby = 0：全局池完全枯竭，任何活码都无法扩容</li>
-     *   <li>standby < 5：全局池严重不足，需及时补充</li>
-     * </ul>
+     * <p><b>处理流程：</b>
+     * <ol>
+     *   <li>standby ≥ 10：正常，不操作</li>
+     *   <li>standby ∈ [1, 9]：尝试从企微同步新员工入池补充</li>
+     *   <li>standby = 0：池完全枯竭，发送告警（如果同步后仍为 0）</li>
+     * </ol>
      *
      * <p>与旧逻辑不同，全局池是所有活码共享的，无需按活码逐条检查。</p>
      */
     private void checkGlobalPoolLow() {
         long standbyCount = poolRepo.countByStatus(
             GlobalAgentPool.PoolStatus.standby);
+        if (standbyCount >= 10) {
+            return; // 池子充足
+        }
+
+        // 余量不足，尝试从企微通讯录补充
+        log.warn("全局池 standby 不足 ({} 人)，尝试自动补充...", standbyCount);
+        try {
+            int added = employeeSyncService.syncToGlobalPool();
+            if (added > 0) {
+                log.info("巡检自动补充: 新增 {} 人入池", added);
+                standbyCount = poolRepo.countByStatus(
+                    GlobalAgentPool.PoolStatus.standby);
+            }
+        } catch (Exception e) {
+            log.error("巡检自动补充失败", e);
+        }
+
+        // 补充后仍不足，发送告警
         if (standbyCount == 0) {
-            alertService.alertEmptyBackup(null, "全局后备池完全枯竭！");
+            alertService.alertEmptyBackup(null, "全局后备池完全枯竭！已尝试自动补充但无新员工可加");
         } else if (standbyCount < 5) {
             alertService.alertEmptyBackup(null,
-                "全局后备池严重不足: 仅剩 " + standbyCount + " 人");
+                "全局后备池严重不足: 仅剩 " + standbyCount + " 人，已自动补充");
         }
     }
 

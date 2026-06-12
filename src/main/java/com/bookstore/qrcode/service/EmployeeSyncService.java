@@ -1,7 +1,9 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.Employee;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
@@ -14,15 +16,18 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * 员工同步服务 —— 定时从企微 API 全量同步员工通讯录到本地 DB。
+ * 员工同步服务 —— 企微通讯录 ↔ 本地 Employee 表 ↔ 全局员工池。
  *
- * <p>同步策略：
+ * <p>三层数据流：
  * <ol>
- *   <li>每 30 分钟自动执行一次全量同步</li>
- *   <li>新员工 → 插入；已有员工 → 更新姓名/部门</li>
- *   <li>已不在企微通讯录中的员工 → 标记为离职（{@code active = false}），不删除记录</li>
+ *   <li><b>企微 → Employee 表：</b>每 30 分钟全量同步，新增/更新/标记离职</li>
+ *   <li><b>Employee 表 → 全局池：</b>按需触发（手动按钮 / 巡检自动补人），
+ *       将在职但不在池中的员工写入 {@link GlobalAgentPool}</li>
+ *   <li><b>离职清理：</b>同步发现离职员工时，同时从全局池移除</li>
  * </ol>
  *
  * @author Bookstore Dev
@@ -35,6 +40,8 @@ public class EmployeeSyncService {
 
     private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
+    private final GlobalAgentPoolService poolService;
+    private final GlobalAgentPoolRepository poolRepo;
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
@@ -51,7 +58,7 @@ public class EmployeeSyncService {
     }
 
     /**
-     * 全量同步企微员工到本地 DB。
+     * 全量同步企微员工到本地 Employee 表。
      *
      * @return 同步的员工总数
      */
@@ -88,7 +95,6 @@ public class EmployeeSyncService {
                     emp.setActive(true);
                     changed = true;
                 }
-                // department 可能变化
                 if (dept != null && !dept.equals(emp.getDepartment())) {
                     emp.setDepartment(dept);
                     changed = true;
@@ -121,5 +127,61 @@ public class EmployeeSyncService {
             inserted, updated, deactivated, activeUserIds.size());
 
         return activeUserIds.size();
+    }
+
+    /**
+     * 将在职但不在全局池中的员工写入池（幂等）。
+     *
+     * <p>调用时机：
+     * <ul>
+     *   <li>管理员在员工管理页点击「从企微同步」按钮</li>
+     *   <li>巡检发现全局池 standby 不足时自动触发</li>
+     * </ul>
+     *
+     * <p>新入池员工排在队尾（sortOrder = 当前最大 + 1），日上限默认 200。</p>
+     *
+     * @return 新增入池的员工数
+     */
+    @Transactional
+    public int syncToGlobalPool() {
+        // 已在池中的 userid 集合
+        Set<String> pooledUserIds = poolRepo.findAll().stream()
+            .map(GlobalAgentPool::getAgentUserid)
+            .collect(Collectors.toSet());
+
+        // 在职但不在池中的员工
+        List<Employee> activeNotInPool = employeeRepo.findAllByActiveTrueOrderByName().stream()
+            .filter(e -> !pooledUserIds.contains(e.getUserid()))
+            .toList();
+
+        if (activeNotInPool.isEmpty()) {
+            log.info("全局池同步：所有在职员工已在池中，无需新增");
+            return 0;
+        }
+
+        int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
+            .map(GlobalAgentPool::getSortOrder).orElse(0);
+
+        int added = 0;
+        for (Employee emp : activeNotInPool) {
+            try {
+                poolService.ensureInPool(emp.getUserid(), 200);
+                // 新员工排在队尾
+                maxOrder++;
+                var poolEntry = poolRepo.findByAgentUserid(emp.getUserid());
+                if (poolEntry.isPresent()) {
+                    GlobalAgentPool p = poolEntry.get();
+                    p.setSortOrder(maxOrder);
+                    poolRepo.save(p);
+                }
+                added++;
+            } catch (Exception e) {
+                log.warn("员工入池失败: userid={}", emp.getUserid(), e);
+            }
+        }
+
+        log.info("全局池同步完成：新增 {} 人入池，池总数 {} 人",
+            added, pooledUserIds.size() + added);
+        return added;
     }
 }
