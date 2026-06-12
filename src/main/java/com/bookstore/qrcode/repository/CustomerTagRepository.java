@@ -41,4 +41,13 @@ public interface CustomerTagRepository extends JpaRepository<CustomerTag, Long> 
      * @param tagId      标签 ID
      */
     void deleteByCustomerIdAndTagId(Long customerId, Long tagId);
+
+    /**
+     * 判断指定客户与指定标签是否已存在关联。
+     *
+     * @param customerId 客户 ID
+     * @param tagId      标签 ID
+     * @return true 如果关联已存在
+     */
+    boolean existsByCustomerIdAndTagId(Long customerId, Long tagId);
 }

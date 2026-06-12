@@ -1,19 +1,33 @@
 <!DOCTYPE html>
-<!-- 数据看板页面 — 展示平台整体运营数据概览，包括活码总数、员工统计、新增趋势和异常事件 -->
+<!-- 数据看板页面 — 展示平台整体运营数据概览，包括活码总数、全局池余量、新增趋势和异常事件 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='数据看板', content=~{::main})}">
 <main>
     <h4>数据看板</h4>
-    <!-- 数据概览卡片行 -->
-    <div class="row g-3">
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>总活码</h6><h2>6,000</h2></div></div>
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>接待员</h6><h2>-</h2></div></div>
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>服务老师</h6><h2>-</h2></div></div>
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>今日新增</h6><h2>-</h2></div></div>
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>继承成功</h6><h2>-</h2></div></div>
-        <div class="col-md-2"><div class="card p-3 text-center"><h6>异常</h6><h2 class="text-danger">-</h2></div></div>
+
+    <!-- 活码统计行 -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-3"><div class="card p-3 text-center"><h6>总活码</h6><h2 th:text="${totalQr}">-</h2><small class="text-muted">活跃 <span th:text="${activeQr}">-</span> / 满员 <span th:text="${fullQr}">-</span></small></div></div>
+        <div class="col-md-3"><div class="card p-3 text-center"><h6>全局池待命</h6><h2 th:text="${poolStandby}" th:classappend="${poolStandby < 5 ? 'text-danger' : ''}">-</h2><small class="text-muted">🟢 待命 <span th:text="${poolStandby}">-</span> / 🟡 已满 <span th:text="${poolFull}">-</span> / 🔴 暂停 <span th:text="${poolBlocked}">-</span></small></div></div>
+        <div class="col-md-3"><div class="card p-3 text-center"><h6>今日新增客户</h6><h2 th:text="${todayAdd}">-</h2><small class="text-muted">截至当前</small></div></div>
+        <div class="col-md-3"><div class="card p-3 text-center"><h6>今日告警</h6><h2 th:text="${todayAlerts}" th:classappend="${todayAlerts > 0 ? 'text-warning' : ''}">-</h2><small class="text-muted">异常 <span th:text="${blockedAgents + meltedAgents}">-</span> 人（封号 <span th:text="${blockedAgents}">-</span> / 熔断 <span th:text="${meltedAgents}">-</span>）</small></div></div>
     </div>
-    <!-- 开发占位提示 -->
-    <div class="alert alert-info mt-3">数据看板开发中 — 将包含实时添加趋势、活码状态分布、异常事件列表。</div>
+
+    <!-- 全局池状态条 -->
+    <div class="card p-3 mb-3">
+        <h6>全局员工池分布（共 <span th:text="${poolTotal}">-</span> 人）</h6>
+        <div class="progress" style="height: 28px;">
+            <div class="progress-bar bg-success" th:style="'width:' + (${poolTotal > 0 ? poolStandby * 100 / poolTotal : 0}) + '%'" th:text="'待命 ' + ${poolStandby}"></div>
+            <div class="progress-bar bg-warning text-dark" th:style="'width:' + (${poolTotal > 0 ? poolFull * 100 / poolTotal : 0}) + '%'" th:text="'已满 ' + ${poolFull}"></div>
+            <div class="progress-bar bg-danger" th:style="'width:' + (${poolTotal > 0 ? poolBlocked * 100 / poolTotal : 0}) + '%'" th:text="'暂停 ' + ${poolBlocked}"></div>
+        </div>
+    </div>
+
+    <!-- 快捷入口 -->
+    <div class="row g-3">
+        <div class="col-md-4"><a href="/qrcodes" class="card p-3 text-center text-decoration-none"><h6>📱 活码列表</h6><small class="text-muted">管理所有活码及其联系人</small></a></div>
+        <div class="col-md-4"><a href="/agents" class="card p-3 text-center text-decoration-none"><h6>👥 员工管理</h6><small class="text-muted">全局员工池及日限配置</small></a></div>
+        <div class="col-md-4"><a href="/alerts" class="card p-3 text-center text-decoration-none"><h6>🚨 告警中心</h6><small class="text-muted">查看和处理系统告警</small></a></div>
+    </div>
 </main>
 </html>

@@ -5,6 +5,7 @@ import com.bookstore.qrcode.service.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
@@ -62,20 +63,28 @@ public class CallbackWorker {
     private final RateLimiterService rateLimiterService;
     private final ObjectMapper objectMapper;
     private final Executor callbackExecutor;
+    private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
+    private static final int CONSUMER_THREADS = 4;
+    private static final String CONSUMER_PREFIX = "callback-worker";
 
     /**
-     * 初始化启动方法，在 Spring 依赖注入完成后自动调用。
+     * 初始化启动方法，启动 4 个并行消费线程。
      *
-     * <p>向 {@code callbackExecutor}（一个独立的线程池）提交消费循环任务，
-     * 使回调处理与 Web 请求线程解耦。启动时打印 Stream 和消费者组名称以便运维确认。</p>
+     * <p>每个线程以独立消费者身份加入同一 Consumer Group，
+     * Redis Stream 自动将消息分发到不同消费者，无需额外分片。</p>
      */
     @PostConstruct
     public void start() {
-        callbackExecutor.execute(this::consumeLoop);
-        log.info("CallbackWorker 已启动, Stream={}, Group={}",
-            RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP);
+        for (int i = 1; i <= CONSUMER_THREADS; i++) {
+            final int threadId = i;
+            final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
+            callbackExecutor.execute(() -> consumeLoop(consumerName, threadId));
+        }
+        log.info("CallbackWorker 已启动 {} 个消费线程, Stream={}, Group={}",
+            CONSUMER_THREADS, RedisConfig.CALLBACK_STREAM_KEY,
+            RedisConfig.CALLBACK_CONSUMER_GROUP);
     }
 
     /**
@@ -97,49 +106,97 @@ public class CallbackWorker {
      * <p><b>错误处理：</b>读取 Stream 的网络异常会触发 5 秒休眠后重试；
      * 单条消息的处理异常只影响本条消息，不影响同批次其他消息。</p>
      */
-    private void consumeLoop() {
+    private void consumeLoop(String consumerName, int threadId) {
         while (running) {
             try {
                 List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
                     .read(
                         org.springframework.data.redis.connection.stream.Consumer.from(
                             RedisConfig.CALLBACK_CONSUMER_GROUP,
-                            RedisConfig.CALLBACK_CONSUMER_NAME),
+                            consumerName),
                         StreamReadOptions.empty().count(50).block(Duration.ofSeconds(5)),
                         StreamOffset.create(RedisConfig.CALLBACK_STREAM_KEY,
                             ReadOffset.lastConsumed())
                     );
 
                 if (records == null || records.isEmpty()) {
-                    Thread.sleep(100); // 无消息时短暂休眠
+                    Thread.sleep(100);
                     continue;
                 }
 
                 for (MapRecord<String, Object, Object> record : records) {
+                    String msgId = record.getId().getValue();
+                    Map<Object, Object> value = record.getValue();
+                    String eventJson = (String) value.get("event");
+
+                    boolean success = false;
                     try {
-                        Map<Object, Object> value = record.getValue();
-                        String eventJson = (String) value.get("event");
                         processEvent(eventJson);
+                        success = true;
                     } catch (Exception e) {
-                        log.error("处理回调事件失败", e);
-                    } finally {
-                        // ACK 每条消息
+                        log.error("处理回调事件失败: consumer={}, msgId={}", consumerName, msgId, e);
+                    }
+
+                    if (success) {
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.CALLBACK_STREAM_KEY,
                             RedisConfig.CALLBACK_CONSUMER_GROUP,
-                            record.getId().getValue());
+                            msgId);
+                    } else {
+                        Map<String, String> fields = new java.util.LinkedHashMap<>();
+                        fields.put("event", eventJson);
+                        messageGuardService.markRetryOrDead(
+                            RedisConfig.CALLBACK_STREAM_KEY,
+                            RedisConfig.CALLBACK_CONSUMER_GROUP,
+                            msgId, fields,
+                            "CallbackWorker 处理失败");
                     }
                 }
+
+                // 每批消费后 trim，防 Stream 无限增长（只在 ACK 后删除已消费消息）
+                try {
+                    redisTemplate.opsForStream().trim(
+                        RedisConfig.CALLBACK_STREAM_KEY,
+                        RedisConfig.STREAM_MAXLEN, true);
+                } catch (Exception e) {
+                    log.debug("CALLBACK_STREAM trim 跳过: {}", e.getMessage());
+                }
+
+                log.debug("Consumer-{} 本批处理 {} 条", threadId, records.size());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("CallbackWorker 消费异常, 5s 后重试", e);
+                // NOGROUP: 消费者组被删除后自动重建（与 TagWorker/DataFillWorker 一致的自愈逻辑）
+                if (e.getMessage() != null && e.getMessage().contains("NOGROUP")) {
+                    try {
+                        // 占位消息确保 Stream 存在（Redis < 7.0 要求），
+                        // 用 XDEL 精确删除占位消息，避免 trim(0) 误删未消费的合法消息
+                        RecordId initId = redisTemplate.opsForStream()
+                            .add(RedisConfig.CALLBACK_STREAM_KEY, Map.of("_init", "1"));
+                        redisTemplate.opsForStream().createGroup(
+                            RedisConfig.CALLBACK_STREAM_KEY,
+                            ReadOffset.from("0-0"), RedisConfig.CALLBACK_CONSUMER_GROUP);
+                        redisTemplate.opsForStream().delete(RedisConfig.CALLBACK_STREAM_KEY, initId);
+                    } catch (Exception ignored) {}
+                    continue;
+                }
+                log.error("CallbackWorker-{} 消费异常, 5s 后重试", threadId, e);
                 try { Thread.sleep(5000); }
                 catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
-        log.warn("CallbackWorker 已停止");
+        log.warn("CallbackWorker-{} 已停止", threadId);
+    }
+
+    /**
+     * 优雅关闭：通知所有消费线程退出循环。
+     * Spring 容器销毁时自动调用，给线程最多 10 秒完成当前批次。
+     */
+    @PreDestroy
+    public void shutdown() {
+        running = false;
+        log.info("CallbackWorker 已发送关闭信号");
     }
 
     /**
@@ -277,9 +334,7 @@ public class CallbackWorker {
                 redisTemplate.opsForStream().add(
                     RedisConfig.TAG_STREAM_KEY,
                     Map.of("event", objectMapper.writeValueAsString(tagEvent)));
-                // 近似裁剪到 MAXLEN，O(1) 操作，防止 Stream 历史消息无限增长
-                redisTemplate.opsForStream().trim(RedisConfig.TAG_STREAM_KEY,
-                    RedisConfig.STREAM_MAXLEN, true);
+                // trim 操作已移到 TagWorker 消费者侧执行，防止生产者 trim 截断未消费消息
             } catch (Exception e) {
                 log.error("发布打标事件失败: external={}", externalUserId, e);
             }

@@ -132,8 +132,8 @@ public class GlobalAgentPoolService {
                 .dailyTotalCap(500).build());
         }
 
-        int maxOrder = poolRepo.findAll().stream()
-            .mapToInt(GlobalAgentPool::getSortOrder).max().orElse(0);
+        int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
+            .map(GlobalAgentPool::getSortOrder).orElse(0);
 
         poolRepo.save(GlobalAgentPool.builder()
             .agentUserid(userid).dailyMax(dailyMax)
@@ -162,21 +162,32 @@ public class GlobalAgentPoolService {
     }
 
     /**
-     * 每日重置 — 将所有 full 状态员工恢复为 standby，清零日计数。
+     * 每日重置 — 将所有 full 状态员工恢复为 standby，清零日计数，并移到队尾。
      *
      * <p>由 {@code DailyResetWorker} 在凌晨 00:00 调用。
      * blocked 状态的员工不在此处理（需人工解除）。</p>
+     *
+     * <p><b>轮转公平性：</b>满过的员工排到队尾（max+1），确保次日优先使用
+     * 未被耗尽过的 standby 员工，避免同一批人每天被先消耗。</p>
      */
     @Transactional
     public void dailyReset() {
         List<GlobalAgentPool> fulls = poolRepo
             .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.full);
+        if (fulls.isEmpty()) return;
+
+        // 取当前最大 sortOrder，满员恢复后依次排到队尾
+        int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
+            .map(GlobalAgentPool::getSortOrder).orElse(0);
+
         for (GlobalAgentPool p : fulls) {
             p.setStatus(GlobalAgentPool.PoolStatus.standby);
             p.setDailyCurrent(0);
+            p.setSortOrder(++maxOrder);
             p.setLastResetAt(LocalDateTime.now());
             poolRepo.save(p);
         }
-        log.info("全局池日重置: 恢复 {} 个 full 员工", fulls.size());
+        log.info("全局池日重置: 恢复 {} 个 full 员工，已移至队尾 (maxOrder={})",
+            fulls.size(), maxOrder);
     }
 }

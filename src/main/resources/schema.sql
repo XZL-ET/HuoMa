@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS agent (
     INDEX idx_role (role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工表';
 
+-- employee：企微员工通讯录
+-- 定时从企微API全量同步，用于活码创建页员工选择器
+CREATE TABLE IF NOT EXISTS employee (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微UserID',
+    name VARCHAR(100) NOT NULL COMMENT '员工姓名',
+    department VARCHAR(500) COMMENT '所属部门ID列表(JSON数组)',
+    active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否在职',
+    last_sync_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '最近同步时间',
+    INDEX idx_active (active),
+    INDEX idx_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='企微员工通讯录';
+
 -- qr_agent：活码-员工关联
 -- 活码-员工关联表
 CREATE TABLE IF NOT EXISTS qr_agent (
@@ -164,6 +177,14 @@ CREATE TABLE IF NOT EXISTS tag (
     FOREIGN KEY (parent_id) REFERENCES tag(id),
     INDEX idx_type (type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标签表';
+
+-- tag 新增字段（企微标签同步）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tag' AND COLUMN_NAME = 'wecom_tag_id') = 0,
+    'ALTER TABLE tag ADD COLUMN wecom_tag_id VARCHAR(50) COMMENT ''企业微信标签ID''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- customer_tag：客户标签关联
 -- 客户-标签关联

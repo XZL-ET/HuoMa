@@ -7,7 +7,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 速率控制服务 — 基于 Redis Sorted Set 的滑动窗口计数，防止企微风控。
@@ -47,64 +46,67 @@ public class RateLimiterService {
     /** 1 分钟窗口阈值 */
     private static final int WINDOW_60S_MAX = 60;
 
+    /** 原子化滑动窗口 Lua 脚本：ZADD + ZREMRANGE + ZCARD + EXPIRE 一步完成 */
+    private static final String RATE_CHECK_LUA =
+        "local key = KEYS[1]\n"
+        + "local now = tonumber(ARGV[1])\n"
+        + "local window = tonumber(ARGV[2])\n"
+        + "local member = ARGV[3]\n"
+        + "local maxCount = tonumber(ARGV[4])\n"
+        + "local ttl = tonumber(ARGV[5])\n"
+        + "redis.call('ZADD', key, now, member)\n"
+        + "redis.call('ZREMRANGEBYSCORE', key, 0, now - window)\n"
+        + "redis.call('EXPIRE', key, ttl)\n"
+        + "local count = redis.call('ZCARD', key)\n"
+        + "return count";
+
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long> RATE_CHECK_SCRIPT;
+
+    static {
+        RATE_CHECK_SCRIPT = new org.springframework.data.redis.core.script.DefaultRedisScript<>();
+        RATE_CHECK_SCRIPT.setScriptText(RATE_CHECK_LUA);
+        RATE_CHECK_SCRIPT.setResultType(Long.class);
+    }
+
     /**
-     * 记录员工一次好友添加操作，检测当前速率并决定是否触发降速或熔断。
+     * 记录员工一次好友添加操作，原子化检测速率并触发熔断/告警。
      *
-     * <p>每次收到企微回调 {@code add_external_contact} 时调用。
-     * 同时写入 15 秒和 60 秒两个滑动窗口，然后按优先级检查：</p>
-     * <ol>
-     *   <li>先检查 60 秒窗口（持续性高负载 → 熔断）</li>
-     *   <li>再检查 15 秒窗口（突发峰值 → 降速警告 + 微延迟）</li>
-     * </ol>
-     *
-     * <p>之所以先检查 60 秒窗口，是因为熔断是比降速更严重的处置动作，
-     * 需要优先处理。如果同时触发了两个阈值，熔断优先。</p>
+     * <p>使用 Redis Lua 脚本确保滑动窗口的 ZADD + ZREMRANGE + ZCARD 原子执行，
+     * 消除多线程并发下的计数漏判。移除了 Thread.sleep(100) 阻塞调用，
+     * 降速仅记录告警日志，由 60 秒窗口的熔断机制兜底。</p>
      *
      * @param userId 员工 userid
      */
     public void recordAdd(String userId) {
         long now = Instant.now().getEpochSecond();
-
-        // Redis Sorted Set 数据结构：key = rate:{userId}:{windowSize}
-        // score = 当前时间戳（秒），member = "timestamp:nanotime"（确保唯一性）
-        // 使用时间戳纳秒拼接作为 member，避免高并发下同秒内的重复 member 被去重
-        String key15s = RedisConfig.RATE_WINDOW_KEY_PREFIX + userId + ":15s";
-        String key60s = RedisConfig.RATE_WINDOW_KEY_PREFIX + userId + ":60s";
-
         String member = now + ":" + System.nanoTime();
 
-        // ===== 15 秒窗口（捕捉突发峰值） =====
-        // 1. 写入当前记录，score=now
-        redisTemplate.opsForZSet().add(key15s, member, now);
-        // 2. 移除 15 秒前的过期记录，保持窗口始终为最近 15 秒
-        redisTemplate.opsForZSet().removeRangeByScore(key15s, 0, now - 15);
-        // 3. 设置 TTL 为 30 秒（略大于窗口大小），确保 Redis 内存及时释放
-        redisTemplate.expire(key15s, 30, TimeUnit.SECONDS);
+        // 15 秒窗口原子检查（突发峰值）
+        Long count15s = redisTemplate.execute(
+            RATE_CHECK_SCRIPT,
+            java.util.List.of(RedisConfig.RATE_WINDOW_KEY_PREFIX + userId + ":15s"),
+            String.valueOf(now), "15", member,
+            String.valueOf(WINDOW_15S_MAX), "30");
 
-        // ===== 60 秒窗口（评估持续吞吐量） =====
-        redisTemplate.opsForZSet().add(key60s, member, now);
-        redisTemplate.opsForZSet().removeRangeByScore(key60s, 0, now - 60);
-        redisTemplate.expire(key60s, 120, TimeUnit.SECONDS);
+        // 60 秒窗口原子检查（持续吞吐）
+        Long count60s = redisTemplate.execute(
+            RATE_CHECK_SCRIPT,
+            java.util.List.of(RedisConfig.RATE_WINDOW_KEY_PREFIX + userId + ":60s"),
+            String.valueOf(now), "60", member,
+            String.valueOf(WINDOW_60S_MAX), "120");
 
-        // 查询两个窗口的当前计数
-        Long count15s = redisTemplate.opsForZSet().zCard(key15s);
-        Long count60s = redisTemplate.opsForZSet().zCard(key60s);
+        int c60 = count60s != null ? count60s.intValue() : 0;
+        int c15 = count15s != null ? count15s.intValue() : 0;
 
-        // 熔断优先于降速：60 秒窗口反映持续吞吐量，超过阈值说明员工操作过于密集
-        if (count60s != null && count60s > WINDOW_60S_MAX) {
-            log.error("员工 {} 1分钟内添加 {} 人，触发熔断！", userId, count60s);
+        // 熔断优先于降速
+        if (c60 > WINDOW_60S_MAX) {
+            log.error("员工 {} 1分钟内添加 {} 人，触发熔断！", userId, c60);
             alertService.meltAgent(userId, null,
-                String.format("1分钟内添加 %d 人，超过阈值 %d", count60s, WINDOW_60S_MAX));
-        } else if (count15s != null && count15s > WINDOW_15S_MAX) {
-            // 15 秒窗口超过阈值说明有短时突发峰值
-            // 此时仅告警 + 插入 100ms 微延迟，让操作自然降速
-            // 不直接熔断的原因是：突发峰值可能是客户集中扫码导致的，员工操作未必有问题
-            log.warn("员工 {} 15秒内添加 {} 人，建议降速", userId, count15s);
-            try {
-                Thread.sleep(100); // 人为插入微延迟，将集中请求在时间轴上打散
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
+                String.format("1分钟内添加 %d 人，超过阈值 %d", c60, WINDOW_60S_MAX));
+        } else if (c15 > WINDOW_15S_MAX) {
+            // 突发峰值仅告警，不再阻塞线程
+            log.warn("员工 {} 15秒内添加 {} 人（阈值 {}），建议关注",
+                userId, c15, WINDOW_15S_MAX);
         }
     }
 

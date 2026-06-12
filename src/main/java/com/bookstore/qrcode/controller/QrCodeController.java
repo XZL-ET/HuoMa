@@ -9,9 +9,14 @@ import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.QrRotateLogRepository;
+import com.bookstore.qrcode.repository.TagRepository;
+import com.bookstore.qrcode.entity.Tag;
+import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
+import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -68,7 +73,18 @@ public class QrCodeController {
     private final CustomerRepository customerRepo;
     private final QrCodeRepository qrCodeRepo;
     private final QrRotateLogRepository rotateLogRepo;
+    private final TagRepository tagRepo;
     private final QrImageService qrImageService;
+    private final TagService tagService;
+    private final EmployeeRepository employeeRepo;
+    private final EmployeeSyncService employeeSyncService;
+
+    // 企微标签缓存（避免每次打开创建页都调企微接口）
+    private volatile java.time.LocalDateTime lastTagSyncTime = null;
+    private volatile List<String> cachedCityOptions = null;
+    private volatile List<String> cachedDistrictOptions = null;
+    private volatile List<String> cachedSchoolOptions = null;
+    private static final long TAG_CACHE_MINUTES = 10;
 
     /**
      * 活码列表页 —— 支持关键词搜索、城市/区县/状态筛选、分页。
@@ -169,29 +185,220 @@ public class QrCodeController {
      */
     @GetMapping("/create")
     public String createForm(Model model) {
-        // 调用企业微信 API 获取成员简单列表
-        try {
-            JsonNode result = wecomApiClient.getUserSimplelist();
+        // ── 员工列表：优先从本地 DB 读取，空库时触发同步 ──
+        List<Map<String, String>> userList = buildUserList();
+        model.addAttribute("userList", userList);
 
-            // 检查 API 返回的 errcode，非 0 表示调用失败
-            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
-                model.addAttribute("loadError", "成员列表加载失败: " + result.get("errmsg").asText());
-                model.addAttribute("userList", List.of());  // 空列表让页面优雅降级
-            } else {
-                // 从 userlist 数组中提取 userid 和 name，构建前端友好的数据结构
-                List<Map<String, String>> userList = new ArrayList<>();
-                for (JsonNode u : result.get("userlist")) {
-                    userList.add(Map.of("userid", u.get("userid").asText(),
-                                        "name", u.get("name").asText()));
+        // ---- 自动生成建议的学校 ID（格式: SCH + 时间戳，确保唯一） ----
+        String suggestedSchoolId = "SCH" + java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+        model.addAttribute("suggestedSchoolId", suggestedSchoolId);
+
+        // ---- 调用企微接口获取全部标签（带缓存，10 分钟内不重复调） ----
+        JsonNode wecomTagResp = null;
+        boolean needApiCall = lastTagSyncTime == null
+            || java.time.Duration.between(lastTagSyncTime, java.time.LocalDateTime.now())
+                .toMinutes() >= TAG_CACHE_MINUTES;
+
+        if (needApiCall) {
+            try {
+                wecomTagResp = wecomApiClient.getCorpTagList();
+                log.info("企微标签 API 原始响应: {}", wecomTagResp.toString());
+                // 同步到本地 DB
+                tagService.syncTagsFromWecom(wecomTagResp);
+                // 直接从企微标签组提取下拉选项（先提取数据，成功后再更新时间戳）
+                var extracted = extractOptionsFromGroups(wecomTagResp);
+                cachedCityOptions = extracted.get("city");
+                cachedDistrictOptions = extracted.get("district");
+                cachedSchoolOptions = extracted.get("school");
+                lastTagSyncTime = java.time.LocalDateTime.now();
+            } catch (Exception e) {
+                log.warn("企微标签同步失败，使用缓存数据: {}", e.getMessage());
+            }
+        } else {
+            log.debug("标签缓存未过期，跳过企微接口调用 (上次同步: {})", lastTagSyncTime);
+        }
+
+        // ---- 加载下拉框选项数据 ----
+        // 优先从企微标签组名称直接提取；缓存过期后刷新
+        try {
+            List<String> cityOptions = cachedCityOptions != null
+                ? new ArrayList<>(cachedCityOptions) : new ArrayList<>();
+            List<String> districtOptions = cachedDistrictOptions != null
+                ? new ArrayList<>(cachedDistrictOptions) : new ArrayList<>();
+            List<String> schoolOptions = cachedSchoolOptions != null
+                ? new ArrayList<>(cachedSchoolOptions) : new ArrayList<>();
+
+            // ── 降级：缓存全为空时用 DB + 命名规则兜底 ──
+            if (cityOptions.isEmpty() && districtOptions.isEmpty() && schoolOptions.isEmpty()) {
+                log.info("缓存为空，使用 DB 标签命名规则兜底");
+                List<Tag> allTags = tagRepo.findAll();
+                for (Tag t : allTags) {
+                    String name = t.getName();
+                    if (name.endsWith("市") || name.endsWith("州") || name.endsWith("盟")) {
+                        cityOptions.add(name);
+                    } else if (name.endsWith("区") || name.endsWith("县")
+                            || name.endsWith("旗") || name.endsWith("乡")) {
+                        districtOptions.add(name);
+                    } else if (isSchoolName(name)) {
+                        schoolOptions.add(name);
+                    }
                 }
-                model.addAttribute("userList", userList);
+                Collections.sort(cityOptions);
+                Collections.sort(districtOptions);
+                Collections.sort(schoolOptions);
+            }
+
+            log.info("下拉选项统计: city={}, district={}, school={}",
+                cityOptions.size(), districtOptions.size(), schoolOptions.size());
+
+            model.addAttribute("cityOptions", cityOptions);
+            model.addAttribute("districtOptions", districtOptions);
+            model.addAttribute("schoolOptions", schoolOptions);
+        } catch (Exception e) {
+            // 下拉数据加载失败不影响页面使用，降级为空列表
+            log.warn("加载下拉选项数据失败: {}", e.getMessage());
+            model.addAttribute("cityOptions", List.of());
+            model.addAttribute("districtOptions", List.of());
+            model.addAttribute("schoolOptions", List.of());
+        }
+
+        return "qrcode/create";
+    }
+
+    /**
+     * 构建前端员工列表：优先读 DB，DB 为空时触发企微同步。
+     *
+     * @return {@code List<Map<"userid"|"name", String>>}
+     */
+    private List<Map<String, String>> buildUserList() {
+        // ① 从本地 DB 读取在职员工
+        List<com.bookstore.qrcode.entity.Employee> employees = employeeRepo.findAllByActiveTrueOrderByName();
+        if (!employees.isEmpty()) {
+            List<Map<String, String>> list = new ArrayList<>();
+            for (com.bookstore.qrcode.entity.Employee e : employees) {
+                list.add(Map.of("userid", e.getUserid(), "name", e.getName()));
+            }
+            log.info("从 DB 加载员工列表: {} 人", list.size());
+            return list;
+        }
+
+        // ② DB 为空（首次启动），触发企微同步
+        log.info("DB 中无员工数据，触发首次同步");
+        try {
+            int count = employeeSyncService.syncFromWecom();
+            if (count > 0) {
+                employees = employeeRepo.findAllByActiveTrueOrderByName();
+                List<Map<String, String>> list = new ArrayList<>();
+                for (com.bookstore.qrcode.entity.Employee e : employees) {
+                    list.add(Map.of("userid", e.getUserid(), "name", e.getName()));
+                }
+                log.info("首次同步完成，从 DB 加载员工列表: {} 人", list.size());
+                return list;
             }
         } catch (Exception e) {
-            // 网络异常或其他未预期错误，统一捕获并展示
-            model.addAttribute("loadError", "成员列表加载失败: " + e.getMessage());
-            model.addAttribute("userList", List.of());
+            log.warn("首次员工同步失败: {}", e.getMessage());
         }
-        return "qrcode/create";
+
+        // ③ 同步失败，降级到直接调企微 API
+        log.info("DB 同步失败，降级为直接调企微 API");
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
+                log.warn("企微 API 获取员工列表失败: {}", result.get("errmsg").asText());
+                return List.of();
+            }
+            List<Map<String, String>> list = new ArrayList<>();
+            for (JsonNode u : result.get("userlist")) {
+                list.add(Map.of("userid", u.get("userid").asText(),
+                                "name", u.has("name") ? u.get("name").asText() : ""));
+            }
+            return list;
+        } catch (Exception e) {
+            log.error("企微 API 获取员工列表异常: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 判断标签名是否像一个学校名称（而非年级/班级等子分类）。
+     * <p>
+     * 学校名称特征：包含 中学/小学/学校/幼儿园/大学/学院，或以"中"结尾（如"一中""二中"等缩写）。
+     * 排除"年级"（如"小学一年级"）和"班"（如"一班"）等子分类名称。
+     * </p>
+     */
+    private static boolean isSchoolName(String name) {
+        if (name == null) return false;
+        // 排除年级/班级级别名称
+        if (name.contains("年级") || name.contains("班")) return false;
+        // 匹配学校特征：完整词或以"中"结尾的缩写（如"兰州一中"）
+        return name.contains("中学") || name.contains("小学")
+            || name.contains("学校") || name.contains("幼儿园")
+            || name.contains("大学") || name.contains("学院")
+            || name.endsWith("中");
+    }
+
+    /**
+     * 从企微标签列表响应中按标签组名称提取市/区/学校选项。
+     *
+     * <p>匹配规则：
+     * <ul>
+     *   <li>标签组名含"学校" → 学校选项</li>
+     *   <li>标签组名含"市"/"州"/"盟" → 城市选项</li>
+     *   <li>标签组名含"区"/"县"/"旗"/"乡" → 区县选项</li>
+     * </ul>
+     *
+     * @param resp 企微 {@code get_corp_tag_list} 响应
+     * @return Map，key 为 city / district / school
+     */
+    private static Map<String, List<String>> extractOptionsFromGroups(JsonNode resp) {
+        List<String> cities = new ArrayList<>();
+        List<String> districts = new ArrayList<>();
+        List<String> schools = new ArrayList<>();
+
+        if (resp == null || !resp.has("tag_group")) {
+            return Map.of("city", cities, "district", districts, "school", schools);
+        }
+
+        // 打印企微返回的全部标签组概览（调试用）
+        List<String> groupSummaries = new ArrayList<>();
+
+        for (JsonNode group : resp.get("tag_group")) {
+            String groupName = group.has("group_name")
+                ? group.get("group_name").asText().trim() : "";
+            if (!group.has("tag")) continue;
+
+            // 收集该组下所有标签名
+            List<String> tagNames = new ArrayList<>();
+            for (JsonNode t : group.get("tag")) {
+                String name = t.has("name") ? t.get("name").asText().trim() : "";
+                if (!name.isEmpty()) tagNames.add(name);
+            }
+
+            // 按组名归类
+            String matched = null;
+            if (groupName.contains("学校")) {
+                schools.addAll(tagNames);
+                matched = "学校";
+            } else if (groupName.contains("市") || groupName.contains("州")
+                    || groupName.contains("盟")) {
+                cities.addAll(tagNames);
+                matched = "城市";
+            } else if (groupName.contains("区") || groupName.contains("县")
+                    || groupName.contains("旗") || groupName.contains("乡")) {
+                districts.addAll(tagNames);
+                matched = "区县";
+            }
+            groupSummaries.add(groupName + "(" + tagNames.size() + "个)→" + (matched != null ? matched : "未归类"));
+        }
+
+        log.info("企微标签组总数: {}, 明细: {}",
+            groupSummaries.size(), String.join(" | ", groupSummaries));
+
+        Collections.sort(cities);
+        Collections.sort(districts);
+        Collections.sort(schools);
+        return Map.of("city", cities, "district", districts, "school", schools);
     }
 
     /**
@@ -212,6 +419,13 @@ public class QrCodeController {
     public String create(@ModelAttribute QrCodeCreateRequest req,
                           RedirectAttributes redirect) {
         try {
+            // 如果学校ID为空（用户清掉了自动生成的值），自动补生成一个
+            if (req.getSchoolId() == null || req.getSchoolId().isBlank()) {
+                String autoId = "SCH" + java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+                req.setSchoolId(autoId);
+                log.info("学校ID为空，已自动生成: {}", autoId);
+            }
             qrCodeService.create(req);
             redirect.addFlashAttribute("message", "活码创建成功");
         } catch (Exception e) {
@@ -339,9 +553,16 @@ public class QrCodeController {
         model.addAttribute("services",
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
 
-        // ---- 3. 获取全局后备池 ----
+        // ---- 3. 获取全局员工池（全部状态） ----
         List<GlobalAgentPool> backups = qrCodeService.getBackups(id);
         model.addAttribute("backups", backups);
+        // 3a. 池状态统计
+        model.addAttribute("poolStandby",
+            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.standby).count());
+        model.addAttribute("poolFull",
+            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.full).count());
+        model.addAttribute("poolBlocked",
+            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.blocked).count());
 
         // ---- 4. 加载企业微信全员列表（供前端"新增联系人"/"新增后备"弹窗使用） ----
         // agentNameMap: userid -> 姓名，用于详情页列表展示中文姓名
@@ -881,4 +1102,5 @@ public class QrCodeController {
         response.getOutputStream().write(zipBytes);
         response.getOutputStream().flush();
     }
+
 }

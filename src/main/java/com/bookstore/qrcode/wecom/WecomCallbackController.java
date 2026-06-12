@@ -72,6 +72,7 @@ public class WecomCallbackController {
     private final WecomCallbackValidator validator;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     /**
      * 【GET】企业微信回调 URL 验证接口。
@@ -158,17 +159,19 @@ public class WecomCallbackController {
                           @RequestParam("timestamp") String timestamp,
                           @RequestParam("nonce") String nonce,
                           HttpServletRequest request) {
+        String body = null;
         try {
             // ================================================================
             // 步骤1: 读取请求体（原始 XML）
             // ================================================================
-            String body = new String(request.getInputStream().readAllBytes(),
+            body = new String(request.getInputStream().readAllBytes(),
                 java.nio.charset.StandardCharsets.UTF_8);
 
             // ================================================================
             // 步骤2: 校验签名 + AES 解密 → 得到明文 XML
             // ================================================================
             String decryptedXml = validator.decryptMessage(msgSignature, timestamp, nonce, body);
+            log.info("解密后的XML: {}", decryptedXml);
 
             // ================================================================
             // 步骤3: 快速提取事件关键字段
@@ -204,6 +207,22 @@ public class WecomCallbackController {
             String eventJson = objectMapper.writeValueAsString(event);
 
             // ================================================================
+            // 步骤 4.5: 消息去重（防企微 5s 内重推同一回调）
+            //   MsgId 优先；缺失时降级为 CreateTime + Event + ExternalUserID + UserID 组合 hash
+            // ================================================================
+            String msgId = extractXmlTag(decryptedXml, "MsgId");
+            if (msgId == null || msgId.isEmpty()) {
+                String raw = String.format("%s|%s|%s|%s",
+                    extractXmlTag(decryptedXml, "CreateTime"),
+                    eventType, externalUserId, userId);
+                msgId = Integer.toHexString(raw.hashCode());
+            }
+            if (!messageGuardService.tryDedup(msgId)) {
+                log.info("重复回调消息，跳过处理: msgId={}", msgId);
+                return "success";
+            }
+
+            // ================================================================
             // 步骤5: XADD → Redis Stream（异步消息队列）
             //   Key: CALLBACK_STREAM_KEY
             //   消费者组: 后台 Worker 通过 XREADGROUP 获取并消费
@@ -225,8 +244,41 @@ public class WecomCallbackController {
 
         } catch (Exception e) {
             log.error("回调处理异常", e);
+
             // 异常兜底：即使异常也返回 "success"，避免企微不断重试
+            // 写入本地 fallback 日志，供事后回放（Redis 不可用时保护回调数据不丢失）
+            try {
+                writeFallbackLog(body, e);
+            } catch (Exception ignored) {}
+
             return "success";
+        }
+    }
+
+    /**
+     * 将回调原始数据写入本地 fallback 日志文件，用于 Redis 不可用时的数据保护。
+     *
+     * <p>仅在正常流程（验签→解密→去重→XADD）中 Redis 操作失败时调用。
+     * 日志写入 {@code logs/callback-fallback.log}，每条一行 JSON，
+     * 包含原始 XML、提取字段、异常信息和时间戳，可供事后回放。</p>
+     *
+     * @param rawXml 原始加密 XML 字符串
+     * @param error  触发 fallback 的异常
+     */
+    private void writeFallbackLog(String rawXml, Exception error) {
+        try {
+            java.io.File logDir = new java.io.File("logs");
+            if (!logDir.exists()) logDir.mkdirs();
+            try (java.io.FileWriter fw = new java.io.FileWriter(
+                    new java.io.File(logDir, "callback-fallback.log"), true)) {
+                Map<String, String> entry = new java.util.LinkedHashMap<>();
+                entry.put("time", Instant.now().toString());
+                entry.put("error", error.getClass().getSimpleName() + ": " + error.getMessage());
+                entry.put("raw_xml", rawXml.length() > 2000 ? rawXml.substring(0, 2000) + "..." : rawXml);
+                fw.write(objectMapper.writeValueAsString(entry) + "\n");
+            }
+        } catch (Exception ignored) {
+            // fallback 自身失败时静默，不阻塞主流程
         }
     }
 

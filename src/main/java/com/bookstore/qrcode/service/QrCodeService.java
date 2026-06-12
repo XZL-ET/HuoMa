@@ -73,6 +73,7 @@ public class QrCodeService {
     private final StringRedisTemplate redisTemplate;
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
+    private final AlertService alertService;
 
     // ==================== 查询 ====================
 
@@ -120,16 +121,26 @@ public class QrCodeService {
     }
 
     /**
-     * 获取全局池中所有 standby 员工列表（不再按活码过滤）。
+     * 获取全局员工池全部记录（含 standby / full / blocked）。
      *
-     * <p>重构后后备池升级为全局员工池，所有活码共享同一后备池。
-     * 按优先级排序返回。</p>
+     * <p>v2.0 重构后升级为全局员工池，所有活码共享。
+     * 返回全部状态员工，standby 优先在前，同状态按 sortOrder 排序。</p>
      *
      * @param qrCodeId 活码主键 ID（保留参数兼容性，实际不区分活码）
-     * @return 全局 standby 员工列表
+     * @return 全局池全部员工列表
      */
     public List<GlobalAgentPool> getBackups(Long qrCodeId) {
-        return poolService.listStandby();
+        List<GlobalAgentPool> all = poolRepo.findAll();
+        // standby 优先在前，同状态按 sortOrder 排序
+        all.sort((a, b) -> {
+            int sa = a.getStatus() == GlobalAgentPool.PoolStatus.standby ? 0
+                : a.getStatus() == GlobalAgentPool.PoolStatus.full ? 1 : 2;
+            int sb = b.getStatus() == GlobalAgentPool.PoolStatus.standby ? 0
+                : b.getStatus() == GlobalAgentPool.PoolStatus.full ? 1 : 2;
+            if (sa != sb) return Integer.compare(sa, sb);
+            return Integer.compare(a.getSortOrder(), b.getSortOrder());
+        });
+        return all;
     }
 
     // ==================== 手动创建 ====================
@@ -383,8 +394,17 @@ public class QrCodeService {
             body.put("config_id", qr.getQrConfigId());
             body.put("user", new ArrayList<>(userIds));
             String json = objectMapper.writeValueAsString(body);
-            wecomApi.updateContactWay(json);
+            JsonNode result = wecomApi.updateContactWay(json);
+            int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
+            if (errcode != 0) {
+                String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
+                throw new RuntimeException(
+                    String.format("同步企微活码失败 config_id=%s errcode=%d errmsg=%s",
+                        qr.getQrConfigId(), errcode, errmsg));
+            }
             log.info("手动同步企微活码: config_id={}, users={}", qr.getQrConfigId(), userIds);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("同步企微活码失败: " + e.getMessage(), e);
         }
@@ -928,6 +948,19 @@ public class QrCodeService {
                     .sortOrder(sortOrder++)
                     .status(QrAgent.AgentStatus.active).build());
                 needCount--;
+            }
+
+            // 全局池不足，无法满足 initialAgentCount 要求时告警
+            if (needCount > 0) {
+                log.warn("活码 {} 创建时全局池不足：需要 {} 人，实际绑定 {} 人（缺 {} 人）",
+                    qrCodeId,
+                    req.getInitialAgentCount() != null ? req.getInitialAgentCount() : 1,
+                    sortOrder, needCount);
+                alertService.alertEmptyBackup(qrCodeId,
+                    String.format("活码 %s 创建时全局池不足：需 %d 人，实绑 %d 人",
+                        req.getSchoolName(),
+                        req.getInitialAgentCount() != null ? req.getInitialAgentCount() : 1,
+                        sortOrder));
             }
 
         } catch (Exception e) {

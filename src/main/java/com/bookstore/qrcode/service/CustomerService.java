@@ -1,18 +1,28 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 客户服务，负责客户的新增、更新、查询、数据修复等核心业务逻辑。
@@ -41,6 +51,9 @@ public class CustomerService {
     private final CustomerTagRepository customerTagRepo;
     private final TagRepository tagRepo;
     private final WecomApiClient wecomApi;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final EntityManager entityManager;
 
     /**
      * 从企微回调创建或更新客户。
@@ -99,43 +112,98 @@ public class CustomerService {
             return existing.getId();
         }
 
-        // ===== 新客户：从企微 API 获取客户详情 =====
-        // 首次添加时需要从企业微信获取客户名称、头像、unionid 等信息
-        String name = "未知";
-        String avatar = null;
-        String unionid = null;
-        int type = 1;
-        try {
-            JsonNode detail = wecomApi.getExternalContact(externalUserId);
-            if (detail.has("external_contact")) {
-                JsonNode ec = detail.get("external_contact");
-                name = ec.has("name") ? ec.get("name").asText() : name;
-                avatar = ec.has("avatar") ? ec.get("avatar").asText() : null;
-                type = ec.has("type") ? ec.get("type").asInt() : 1;
-                // unionid 可能为空，需判断是否为 null 值
-                unionid = ec.has("unionid") && !ec.get("unionid").isNull()
-                    ? ec.get("unionid").asText() : null;
+        // ===== 新客户：快速写入稀疏记录，由 DataFillWorker 异步补全 =====
+        // 不在此处调企微 API（GET /externalcontact/get），避免 200ms+
+        // 的网络等待阻塞消费主链路
+
+        // Redis 轻量锁防并发重复插入（多线程安全）
+        String lockKey = "customer:lock:" + externalUserId;
+        Boolean locked = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
+
+        if (Boolean.FALSE.equals(locked)) {
+            // 另一个线程正在创建同一客户 → 等待并重试查询（最多 10 次，指数退避）
+            for (int attempt = 0; attempt < 10; attempt++) {
+                try { Thread.sleep(Math.min(50L << attempt, 500L)); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                Customer retry = customerRepo.findByExternalUserid(externalUserId).orElse(null);
+                if (retry != null) {
+                    retry.setCurrentAgent(userId);
+                    retry.setUpdatedAt(LocalDateTime.now());
+                    if (qrCodeId != null) {
+                        retry.setSourceQrId(qrCodeId);
+                        retry.setSchoolId(schoolId);
+                    }
+                    customerRepo.save(retry);
+                    return retry.getId();
+                }
             }
-        } catch (Exception e) {
-            // 获取客户详情失败时使用默认值，不影响客户创建流程
-            log.warn("获取客户详情失败, 使用默认值: external={}", externalUserId);
+            // 重试耗尽：赢家事务可能异常回滚，记录告警后放弃本条消息
+            // （消息已在 Stream 中被 ACK，不会重试；极端情况下通过 repairCustomerData 兜底）
+            log.error("[ALERT] 客户并发插入锁竞争失败: external={}, 重试10次后仍未查到记录", externalUserId);
+            return null;
         }
 
-        Customer customer = Customer.builder()
-            .externalUserid(externalUserId)
-            .name(name)
-            .avatar(avatar)
-            .type(type)
-            .unionid(unionid)
-            .addedAgent(userId)       // 首次添加时的员工，后续不再变更
-            .currentAgent(userId)     // 当前归属员工，可能随回调更新
-            .sourceQrId(qrCodeId)
-            .schoolId(schoolId)
-            .status(Customer.CustomerStatus.active)
-            .addTime(LocalDateTime.now())
-            .build();
-        customer = customerRepo.save(customer);
-        return customer.getId();
+        // 事务提交后释放锁，防止锁提前释放导致竞态窗口
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    redisTemplate.delete(lockKey);
+                }
+            });
+
+        try {
+            Customer customer = Customer.builder()
+                .externalUserid(externalUserId)
+                .name("未知")            // 占位，DataFillWorker 异步补全
+                .type(1)
+                .addedAgent(userId)
+                .currentAgent(userId)
+                .sourceQrId(qrCodeId)
+                .schoolId(schoolId)
+                .status(Customer.CustomerStatus.active)
+                .addTime(LocalDateTime.now())
+                .build();
+            customer = customerRepo.save(customer);
+
+            // 发布数据补全事件 → DataFillWorker 异步消费
+            try {
+                Map<String, Object> fillEvent = new LinkedHashMap<>();
+                fillEvent.put("external_userid", externalUserId);
+                fillEvent.put("customer_id", customer.getId());
+                redisTemplate.opsForStream().add(
+                    RedisConfig.DATAFILL_STREAM_KEY,
+                    Map.of("event", objectMapper.writeValueAsString(fillEvent)));
+            } catch (Exception e) {
+                // Redis publish 失败 → customer 已持久化但 DataFill 永不触发
+                // 标记为需要 repair 兜底（name="未知" 的客户会被 repairCustomerData 扫描修复）
+                log.error("[ALERT] DataFill 事件发布失败，客户数据将不完整: external={}, customerId={}",
+                    externalUserId, customer.getId(), e);
+            }
+
+            return customer.getId();
+
+        } catch (DataIntegrityViolationException e) {
+            // 并发插入冲突 → 清除 Hibernate Session 污染（防止 session 被标记为 rollback-only）
+            entityManager.clear();
+            // 此时赢家已提交，查库必然能查到 → 更新而非插入
+            log.warn("客户并发插入冲突，清除 Session 后查库更新: external={}", externalUserId);
+            Customer retry = customerRepo.findByExternalUserid(externalUserId).orElse(null);
+            if (retry != null) {
+                retry.setCurrentAgent(userId);
+                retry.setUpdatedAt(LocalDateTime.now());
+                if (qrCodeId != null) {
+                    retry.setSourceQrId(qrCodeId);
+                    retry.setSchoolId(schoolId);
+                }
+                customerRepo.save(retry);
+                return retry.getId();
+            }
+            // 极端情况：唯一键冲突但查不到记录 → 可能是 DB 异常
+            log.error("[ALERT] 并发插入冲突后仍查不到客户: external={}", externalUserId);
+            throw new RuntimeException("并发插入异常: " + externalUserId, e);
+        }
     }
 
     /**

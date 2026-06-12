@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -169,11 +170,12 @@ public class AgentBindService {
     @Transactional
     public void expandQrCodeUsers(Long qrCodeId, String fullUserId,
                                   QrCode qr, GlobalAgentPool fullPool) {
-        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":expand";
+        // 与 preActivateBackup 共用同一把锁，防止并发时重复添加同一员工
+        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
         if (Boolean.FALSE.equals(locked)) {
-            log.debug("扩容进行中，跳过: qr={}", qrCodeId);
+            log.debug("轮换进行中（扩容等待），跳过: qr={}", qrCodeId);
             return;
         }
 
@@ -252,10 +254,14 @@ public class AgentBindService {
      */
     @Transactional
     public void preActivateBackup(Long qrCodeId, QrCode qr) {
-        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":preactivate";
+        // 与 expandQrCodeUsers 共用同一把锁，防止并发时重复添加同一员工
+        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
-        if (Boolean.FALSE.equals(locked)) return;
+        if (Boolean.FALSE.equals(locked)) {
+            log.debug("轮换进行中（预激活等待），跳过: qr={}", qrCodeId);
+            return;
+        }
 
         try {
             if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
@@ -340,8 +346,23 @@ public class AgentBindService {
             body.put("config_id", qr.getQrConfigId());
             body.put("user", new ArrayList<>(userIds));
             String json = objectMapper.writeValueAsString(body);
-            wecomApi.updateContactWay(json);
-            log.info("企微活码异步同步完成: config_id={}, users={}", qr.getQrConfigId(), userIds);
+            JsonNode result = wecomApi.updateContactWay(json);
+            int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
+            if (errcode != 0) {
+                String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
+                log.error("异步同步企微活码失败: config_id={}, errcode={}, errmsg={}, users={}",
+                    qr.getQrConfigId(), errcode, errmsg, userIds);
+                alertService.createAlert(
+                    userIds.isEmpty() ? "system" : userIds.iterator().next(),
+                    "sync_wecom_fail",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("企微活码同步失败 config_id=%s errcode=%d errmsg=%s",
+                        qr.getQrConfigId(), errcode, errmsg),
+                    AgentAlert.AutoAction.none,
+                    qrCodeId);
+            } else {
+                log.info("企微活码异步同步完成: config_id={}, users={}", qr.getQrConfigId(), userIds);
+            }
         } catch (Exception e) {
             log.error("异步同步企微活码失败: config_id={}", qr.getQrConfigId(), e);
         }

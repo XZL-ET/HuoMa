@@ -11,6 +11,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -52,6 +54,7 @@ public class DailyResetWorker {
     private final CustomerTransferRepository transferRepo;
     private final QrCodeService qrCodeService;
     private final GlobalAgentPoolService poolService;
+    private final com.bookstore.qrcode.service.AgentBindService agentBindService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -137,13 +140,21 @@ public class DailyResetWorker {
         }
         log.info("已恢复 {} 个 full 员工，涉及 {} 个活码", fullAgents.size(), affectedQrIds.size());
 
-        // 重新同步受影响的活码到企微（让恢复的员工重新出现在活码上）
-        for (Long qrId : affectedQrIds) {
-            try {
-                qrCodeService.syncQrUsersToWechat(qrId);
-            } catch (Exception e) {
-                log.error("日重置后同步活码失败: qrId={}", qrId, e);
-            }
+        // 事务提交后异步同步企微活码（避免长时间占用 DB 连接）
+        if (!affectedQrIds.isEmpty()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        for (Long qrId : affectedQrIds) {
+                            try {
+                                agentBindService.syncQrCodeToWechatAsync(qrId);
+                            } catch (Exception e) {
+                                log.error("日重置后异步同步活码失败: qrId={}", qrId, e);
+                            }
+                        }
+                    }
+                });
         }
     }
 

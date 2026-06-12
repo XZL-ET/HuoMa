@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
@@ -32,10 +33,33 @@ public class RedisConfig {
     public static final String CALLBACK_STREAM_KEY = "wecom:callback:stream";
     /** Consumer Group 名称：回调 Worker 消费组 */
     public static final String CALLBACK_CONSUMER_GROUP = "callback-worker-group";
-    /** Consumer 名称：当前实例的消费者标识 */
+    /** Consumer 名称：当前实例的消费者标识（单线程模式） */
     public static final String CALLBACK_CONSUMER_NAME = "worker-1";
-    /** Stream 最大长度（近似），超出后自动删除旧消息，防止内存无限增长 */
+    /** Stream 最大长度（近似），Tag/DataFill 流用 */
     public static final long STREAM_MAXLEN = 10000;
+    /** Tag Stream 最大长度（高吞吐场景扩容），防止高峰期 trim 丢打标事件 */
+    public static final long TAG_STREAM_MAXLEN = 50000;
+    /** DataFill Stream 最大长度，缓冲约 1 小时新客户高峰 */
+    public static final long DATAFILL_STREAM_MAXLEN = 50000;
+
+    // ==================== 死信队列 (DLQ) Stream 相关常量 ====================
+
+    /** Redis Stream Key：死信队列，存放重试耗尽的消息 */
+    public static final String DLQ_STREAM_KEY = "wecom:dlq:stream";
+    /** Consumer Group 名称：死信队列消费组（重放时使用） */
+    public static final String DLQ_CONSUMER_GROUP = "dlq-worker-group";
+    /** DLQ Stream 最大长度，防止 OOM（死信通常很少，设保守上限） */
+    public static final long DLQ_STREAM_MAXLEN = 10000;
+
+    // ==================== 消息去重 Key 前缀常量 ====================
+
+    /** 回调去重 Key 前缀。完整 Key: callback:dedup:{msgId}，TTL 300s */
+    public static final String CALLBACK_DEDUP_KEY_PREFIX = "callback:dedup:";
+
+    // ==================== 重试计数 Key 前缀常量 ====================
+
+    /** 消息重试计数 Key 前缀。完整 Key: dlq:retry:{streamKey}:{messageId}，TTL 3600s */
+    public static final String DLQ_RETRY_KEY_PREFIX = "dlq:retry:";
 
     // ==================== 标签自动打标 Stream 相关常量 ====================
 
@@ -45,6 +69,13 @@ public class RedisConfig {
     public static final String TAG_CONSUMER_GROUP = "tag-worker-group";
     /** Consumer 名称：当前实例的标签消费者标识 */
     public static final String TAG_CONSUMER_NAME = "tag-worker-1";
+
+    // ==================== 客户信息补全 Stream 相关常量 ====================
+
+    /** Redis Stream Key：客户信息补全事件流，DataFillWorker 从此消费补全事件 */
+    public static final String DATAFILL_STREAM_KEY = "wecom:datafill:stream";
+    /** Consumer Group 名称：客户信息补全消费组 */
+    public static final String DATAFILL_CONSUMER_GROUP = "datafill-worker-group";
 
     // ==================== 业务 Key 前缀常量 ====================
 
@@ -81,9 +112,9 @@ public class RedisConfig {
     /**
      * 员工轮换分布式锁 Key 前缀。
      * <p>
-     * 完整 Key 格式：<code>rotate:lock:{qrCodeId}:{userid}</code>
-     * <br>在活码员工轮换逻辑中使用分布式锁，
-     * 防止并发场景下多次选中同一位员工，保证轮换的原子性。
+     * 完整 Key 格式：<code>rotate:lock:{qrCodeId}:rotate</code>
+     * <br>在活码员工轮换逻辑（扩容/预激活）中使用分布式锁，
+     * 防止并发场景下重复添加同一位员工，保证轮换的原子性。
      * </p>
      */
     public static final String ROTATE_LOCK_PREFIX = "rotate:lock:";
@@ -128,8 +159,14 @@ public class RedisConfig {
     @Bean
     public String callbackConsumerGroup(StringRedisTemplate redisTemplate) {
         try {
+            // 先 XADD 占位消息确保 Stream 存在（XADD 自动创建 Stream），
+            // 否则 Redis < 7.0 时 XGROUP CREATE 对不存在的 key 返回 ERR
+            // 使用 XDEL 精确删除占位消息，避免 trim(0) 误删已存在的合法消息
+            RecordId initId = redisTemplate.opsForStream()
+                .add(CALLBACK_STREAM_KEY, Map.of("_init", "1"));
             redisTemplate.opsForStream().createGroup(CALLBACK_STREAM_KEY,
                 ReadOffset.from("0-0"), CALLBACK_CONSUMER_GROUP);
+            redisTemplate.opsForStream().delete(CALLBACK_STREAM_KEY, initId);
         } catch (Exception e) {
             // 消费组已存在时抛出 RedisCommandExecutionException，属于正常情况，忽略即可
         }
@@ -151,16 +188,45 @@ public class RedisConfig {
     public String tagConsumerGroup(StringRedisTemplate redisTemplate) {
         try {
             // 先 XADD 一条占位消息确保 Stream 存在（XADD 会自动创建不存在的 Stream），
-            // 否则后续 XGROUP CREATE 会因 Stream 不存在而报 NOGROUP 错误
-            redisTemplate.opsForStream()
+            // 否则后续 XGROUP CREATE 会因 Stream 不存在而报 NOGROUP 错误。
+            // 使用 XDEL 精确删除占位消息，避免 trim(0) 误删已存在的合法消息。
+            RecordId initId = redisTemplate.opsForStream()
                 .add(TAG_STREAM_KEY, Map.of("_init", "1"));
             redisTemplate.opsForStream().createGroup(TAG_STREAM_KEY,
                 ReadOffset.from("0-0"), TAG_CONSUMER_GROUP);
-            // 用 trim 清理占位消息（XDEL API 存在兼容性问题，改用 trim 近似清理）
-            redisTemplate.opsForStream().trim(TAG_STREAM_KEY, 0, true);
+            redisTemplate.opsForStream().delete(TAG_STREAM_KEY, initId);
         } catch (Exception e) {
             // 消费组已存在时属于正常情况（非首次启动），忽略即可
         }
         return TAG_CONSUMER_GROUP;
+    }
+
+    /**
+     * 应用启动时自动创建客户信息补全 Redis Stream Consumer Group。
+     */
+    @Bean
+    public String datafillConsumerGroup(StringRedisTemplate redisTemplate) {
+        try {
+            RecordId initId = redisTemplate.opsForStream()
+                .add(DATAFILL_STREAM_KEY, Map.of("_init", "1"));
+            redisTemplate.opsForStream().createGroup(DATAFILL_STREAM_KEY,
+                ReadOffset.from("0-0"), DATAFILL_CONSUMER_GROUP);
+            redisTemplate.opsForStream().delete(DATAFILL_STREAM_KEY, initId);
+        } catch (Exception e) {
+            // 消费组已存在，忽略
+        }
+        return DATAFILL_CONSUMER_GROUP;
+    }
+
+    /**
+     * 为每个消费线程生成唯一的消费者名称，确保 Redis Stream Consumer Group
+     * 正确分发消息到不同线程。
+     *
+     * @param prefix   消费者前缀，如 "callback-worker"
+     * @param threadId 线程序号，从 1 开始
+     * @return 唯一消费者名称，如 "callback-worker-1"
+     */
+    public static String consumerName(String prefix, int threadId) {
+        return prefix + "-" + threadId;
     }
 }

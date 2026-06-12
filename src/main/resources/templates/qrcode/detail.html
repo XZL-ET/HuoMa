@@ -138,8 +138,8 @@
                 <!-- 策略说明 -->
                 <small class="text-muted mt-2 d-block">
                     💡 策略：扫码优先加到<span class="text-primary">服务老师</span>。
-                    服务老师日限快满时，自动从后备池激活<span class="text-info">接待员</span>加入活码。
-                    满员后<span class="text-danger">切换</span>为仅接待员。
+                    日限快满时，自动从<span class="text-info">全局员工池</span>取待命员工加入活码分流。
+                    满员员工<span class="text-danger">下码</span>，午夜重置并排到池队尾。
                 </small>
                 <!-- 手动同步到企微按钮 -->
                 <form th:action="@{/qrcodes/{id}/sync(id=${qr.id})}" method="post" class="mt-2">
@@ -150,58 +150,69 @@
             </div>
         </div>
 
-        <!-- 后备接待员面板 -->
+        <!-- 全局员工池面板 -->
         <div class="col-md-6">
             <div class="card p-4">
                 <h6>
-                    🛡️ 后备接待员
-                    <span class="badge bg-secondary" th:text="${backups.size()} + '人待命'"></span>
+                    🌐 全局员工池
+                    <span class="badge bg-success me-1" th:text="'待命 ' + ${poolStandby}"></span>
+                    <span class="badge bg-warning text-dark me-1" th:text="'已满 ' + ${poolFull}"></span>
+                    <span th:if="${poolBlocked > 0}" class="badge bg-danger me-1" th:text="'暂停 ' + ${poolBlocked}"></span>
                     <button class="btn btn-sm btn-outline-primary float-end" data-bs-toggle="modal" data-bs-target="#addBackupModal">
                         <i class="bi bi-plus-lg"></i> 新增
                     </button>
                 </h6>
-                <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>优先级</th><th>日限</th><th>状态</th><th style="width:120px;">操作</th></tr></thead>
+                <small class="text-muted">以下员工供所有活码共享，按优先级分配。上移/下移调整全局优先级。</small>
+                <table class="table table-sm mb-0 mt-2">
+                    <thead><tr><th>姓名</th><th>优先级</th><th>今日用量</th><th>日限</th><th>状态</th><th style="width:120px;">操作</th></tr></thead>
                     <tbody>
-                        <!-- 后备接待员行，th:each 遍历 backups，iter 提供 first/last 判断 -->
+                        <!-- 全局池员工行，th:each 遍历 backups，iter 提供 first/last 判断 -->
                         <tr th:each="b,iter : ${backups}">
                             <td th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid)}"></td>
                             <!-- 按 sortOrder 排序的优先级标识 -->
                             <td><span class="badge bg-light text-dark" th:text="'#' + ${b.sortOrder}"></span></td>
+                            <!-- 今日已接待 / 日上限 -->
+                            <td>
+                                <span th:text="${b.dailyCurrent}"
+                                      th:classappend="${b.dailyCurrent >= b.dailyMax ? 'text-danger fw-bold' : ''}"></span>
+                            </td>
                             <td th:text="${b.dailyMax}">200</td>
                             <td>
-                                <span class="badge bg-info" th:if="${b.status.name() == 'standby'}">待命</span>
-                                <span class="badge bg-warning" th:if="${b.status.name() == 'full'}">已满</span>
+                                <span class="badge bg-success" th:if="${b.status.name() == 'standby'}">待命</span>
+                                <span class="badge bg-warning text-dark" th:if="${b.status.name() == 'full'}">已满</span>
                                 <span class="badge bg-danger" th:if="${b.status.name() == 'blocked'}">暂停</span>
                             </td>
                             <td class="text-nowrap">
-                                <!-- 上移按钮 -->
+                                <!-- standby 可调优先级 -->
+                                <th:block th:if="${b.status.name() == 'standby'}">
+                                <!-- 上移按钮（调整全局优先级） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="up">
-                                    <button class="btn btn-sm btn-outline-secondary" title="上移"
+                                    <button class="btn btn-sm btn-outline-secondary" title="上移（全局优先级）"
                                             th:disabled="${iter.first}"><i class="bi bi-chevron-up"></i></button>
                                 </form>
-                                <!-- 下移按钮 -->
+                                <!-- 下移按钮（调整全局优先级） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="down">
-                                    <button class="btn btn-sm btn-outline-secondary" title="下移"
+                                    <button class="btn btn-sm btn-outline-secondary" title="下移（全局优先级）"
                                             th:disabled="${iter.last}"><i class="bi bi-chevron-down"></i></button>
                                 </form>
-                                <!-- 移除按钮 -->
+                                </th:block>
+                                <!-- 移除按钮（从全局池删除，影响所有活码） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/remove(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline"
-                                      onsubmit="return confirm('确定要移除该后备接待员吗？')">
-                                    <button class="btn btn-sm btn-outline-danger" title="移除"><i class="bi bi-trash"></i></button>
+                                      onsubmit="return confirm('⚠️ 将从全局员工池移除该员工，影响所有活码。确定吗？')">
+                                    <button class="btn btn-sm btn-outline-danger" title="从全局池移除"><i class="bi bi-trash"></i></button>
                                 </form>
                             </td>
                         </tr>
-                        <!-- 后备池为空提示 -->
+                        <!-- 全局池为空提示 -->
                         <tr th:if="${backups.isEmpty()}">
-                            <td colspan="5" class="text-muted text-center">
-                                后备池为空
-                                <br><small class="text-warning">⚠️ 服务老师满了没人顶</small>
+                            <td colspan="6" class="text-muted text-center">
+                                全局池为空
+                                <br><small class="text-warning">⚠️ 无 standby 员工可用，所有活码都无法自动扩容</small>
                             </td>
                         </tr>
                     </tbody>
@@ -244,13 +255,13 @@
         </div>
     </div>
 
-    <!-- 新增后备接待员弹窗 -->
+    <!-- 新增全局池员工弹窗 -->
     <div class="modal fade" id="addBackupModal" tabindex="-1" aria-labelledby="addBackupModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addBackupModalLabel">
-                        <i class="bi bi-person-plus"></i> 选择后备接待员
+                        <i class="bi bi-person-plus"></i> 添加员工到全局池（所有活码共享）
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -262,9 +273,9 @@
                         <input type="text" id="backupSearchInput" class="form-control form-control-sm"
                                placeholder="🔍 搜索姓名或账号..." oninput="filterBackupCandidates()">
                     </div>
-                    <!-- 已加入后备池的员工列表提示 -->
+                    <!-- 已在全局池中的员工列表提示 -->
                     <div th:if="${!backups.isEmpty()}" class="alert alert-info py-1 small mb-2">
-                        已在后备池：
+                        已在全局池（无法重复添加）：
                         <span th:each="b,stat : ${backups}"
                               th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid) + (stat.last ? '' : '、')}"></span>
                     </div>
@@ -305,13 +316,13 @@
         </div>
     </div>
 
-    <!-- 新增活码联系人弹窗 -->
+    <!-- 新增活码联系人弹窗（仅影响本活码） -->
     <div class="modal fade" id="addAgentModal" tabindex="-1" aria-labelledby="addAgentModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addAgentModalLabel">
-                        <i class="bi bi-person-plus"></i> 新增活码联系人
+                        <i class="bi bi-person-plus"></i> 新增联系人到此活码
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>

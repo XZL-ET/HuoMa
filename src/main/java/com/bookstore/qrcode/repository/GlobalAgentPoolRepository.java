@@ -27,4 +27,7 @@ public interface GlobalAgentPoolRepository
 
     /** 统计指定状态的员工数 */
     long countByStatus(GlobalAgentPool.PoolStatus status);
+
+    /** 取 sortOrder 最大的记录（用于队尾追加），池空时返回空 */
+    Optional<GlobalAgentPool> findFirstByOrderBySortOrderDesc();
 }

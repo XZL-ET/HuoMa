@@ -127,4 +127,12 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      */
     @Query("SELECT DISTINCT q.regionDistrict FROM QrCode q WHERE q.regionDistrict IS NOT NULL ORDER BY q.regionDistrict")
     List<String> findDistinctRegionDistrict();
+
+    /**
+     * 获取所有已使用的学校名称列表（去重、排序）。
+     *
+     * @return 排重后的学校名称列表，按字母序升序排列
+     */
+    @Query("SELECT DISTINCT q.schoolName FROM QrCode q WHERE q.schoolName IS NOT NULL ORDER BY q.schoolName")
+    List<String> findDistinctSchoolName();
 }

@@ -60,28 +60,21 @@ public class AsyncConfig {
     }
 
     /**
-     * 通用异步任务线程池 — 用于 TagWorker、批量导入、企微活码异步同步等非回调类任务。
-     * <p>
-     * <b>线程池参数说明：</b>
-     * <ul>
-     *   <li>corePoolSize = 2  &mdash; 核心线程数，TagWorker 常驻 + 异步同步弹性使用</li>
-     *   <li>maxPoolSize = 4  &mdash; 最大线程数，允许少量并发提升吞吐</li>
-     *   <li>queueCapacity = 1000  &mdash; 队列容量适中，避免任务堆积过多消耗内存</li>
-     *   <li>threadNamePrefix = "async-"  &mdash; 线程名前缀，便于区分日志来源</li>
-     *   <li>CallerRunsPolicy  &mdash; 拒绝策略由调用线程直接运行，保证任务不丢失</li>
-     * </ul>
-     * </p>
+     * 通用异步任务线程池 — TagWorker(8) + DataFillWorker(4) + syncQrCodeToWechatAsync + 批量导入。
      *
-     * @return 通用异步任务线程池
+     * <p>常驻线程数 = 8 + 4 = 12，corePoolSize 设为 12 确保常驻任务不被排队。
+     * maxPoolSize=16 给弹性任务留 4 个槽位。</p>
      */
     @Bean("taskExecutor")
     public Executor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(1000);
+        executor.setCorePoolSize(12);
+        executor.setMaxPoolSize(16);
+        executor.setQueueCapacity(2000);
         executor.setThreadNamePrefix("async-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        // AbortPolicy: 队列满时抛异常，由调用方 catch 并记录日志，
+        // 而非 DiscardOldestPolicy 的静默丢弃（导致任务永远丢失不可追溯）
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.initialize();
         return executor;
     }

@@ -3,6 +3,7 @@ package com.bookstore.qrcode.worker;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.*;
+import com.bookstore.qrcode.config.RedisConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -41,6 +42,7 @@ public class PatrolWorker {
     private final QrCodeRepository qrCodeRepo;
     private final AlertService alertService;
     private final RateLimiterService rateLimiterService;
+    private final MessageGuardService messageGuardService;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
@@ -63,6 +65,16 @@ public class PatrolWorker {
 
         // 3. 统计今日异常
         countTodayAlerts();
+
+        // 4. 检查死信队列积压
+        try {
+            long dlq = messageGuardService.dlqSize();
+            if (dlq > 0) {
+                log.warn("死信队列积压: {} 条", dlq);
+            }
+        } catch (Exception e) {
+            log.debug("DLQ 积压检查跳过: {}", e.getMessage());
+        }
 
         log.debug("定时巡检完成");
     }
@@ -132,5 +144,45 @@ public class PatrolWorker {
      */
     private void countTodayAlerts() {
         // 统计逻辑在 DashboardService 中等候实现
+    }
+
+    /**
+     * 每分钟第 30 秒执行一次 PEL 崩溃回收巡检。
+     *
+     * <p>扫描三个 Stream 的 Pending Entries List，回收 idle 超过 30 秒的孤消息。
+     * 这些消息意味着原来的消费者（Worker 线程）在 READ 和 ACK 之间崩溃
+     * （JVM crash / kill -9），需要重新入队或移入死信队列。</p>
+     *
+     * <p><b>与正常重试的关系：</b>正常 Worker 处理失败时会走
+     * {@link MessageGuardService#markRetryOrDead} 主动重试或移入 DLQ，
+     * 不会让消息留在 PEL。PEL 里有消息一定是意外崩溃。</p>
+     */
+    @Scheduled(cron = "30 */1 * * * *")
+    public void recoverOrphanedPending() {
+        log.debug("PEL 崩溃回收巡检开始");
+        long idleMs = 30_000;
+
+        try {
+            int cb = messageGuardService.recoverOrphanedPending(
+                RedisConfig.CALLBACK_STREAM_KEY,
+                RedisConfig.CALLBACK_CONSUMER_GROUP,
+                "callback-recovery", idleMs);
+
+            int tag = messageGuardService.recoverOrphanedPending(
+                RedisConfig.TAG_STREAM_KEY,
+                RedisConfig.TAG_CONSUMER_GROUP,
+                "tag-recovery", idleMs);
+
+            int df = messageGuardService.recoverOrphanedPending(
+                RedisConfig.DATAFILL_STREAM_KEY,
+                RedisConfig.DATAFILL_CONSUMER_GROUP,
+                "datafill-recovery", idleMs);
+
+            if (cb + tag + df > 0) {
+                log.warn("PEL 崩溃回收完成: callback={}, tag={}, datafill={}", cb, tag, df);
+            }
+        } catch (Exception e) {
+            log.error("PEL 崩溃回收异常", e);
+        }
     }
 }

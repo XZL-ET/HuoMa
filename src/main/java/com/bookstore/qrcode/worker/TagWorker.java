@@ -5,6 +5,7 @@ import com.bookstore.qrcode.service.TagService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
@@ -51,20 +52,24 @@ public class TagWorker {
     private final TagService tagService;
     private final ObjectMapper objectMapper;
     private final Executor taskExecutor;
+    private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
+    private static final int CONSUMER_THREADS = 8;
+    private static final String CONSUMER_PREFIX = "tag-worker";
 
     /**
-     * 初始化启动方法，在 Spring 依赖注入完成后自动调用。
-     *
-     * <p>向 {@code taskExecutor}（通用异步线程池）提交消费循环任务，
-     * 使打标处理与回调主消费线程解耦。启动时打印 Stream 和消费者组名称以便运维确认。</p>
+     * 启动 4 个并行打标消费线程。
      */
     @PostConstruct
     public void start() {
-        taskExecutor.execute(this::consumeLoop);
-        log.info("TagWorker 已启动, Stream={}, Group={}",
-            RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP);
+        for (int i = 1; i <= CONSUMER_THREADS; i++) {
+            final int threadId = i;
+            final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
+            taskExecutor.execute(() -> consumeLoop(consumerName, threadId));
+        }
+        log.info("TagWorker 已启动 {} 个消费线程, Stream={}, Group={}",
+            CONSUMER_THREADS, RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP);
     }
 
     /**
@@ -86,49 +91,95 @@ public class TagWorker {
      * <p><b>错误处理：</b>读取 Stream 的网络异常会触发 5 秒休眠后重试；
      * 单条消息的处理异常只影响本条消息，不影响同批次其他消息。</p>
      */
-    private void consumeLoop() {
+    private void consumeLoop(String consumerName, int threadId) {
         while (running) {
             try {
                 List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
                     .read(
                         org.springframework.data.redis.connection.stream.Consumer.from(
                             RedisConfig.TAG_CONSUMER_GROUP,
-                            RedisConfig.TAG_CONSUMER_NAME),
+                            consumerName),
                         StreamReadOptions.empty().count(50).block(Duration.ofSeconds(5)),
                         StreamOffset.create(RedisConfig.TAG_STREAM_KEY,
                             ReadOffset.lastConsumed())
                     );
 
                 if (records == null || records.isEmpty()) {
-                    Thread.sleep(100); // 无消息时短暂休眠，避免空转
+                    Thread.sleep(100);
                     continue;
                 }
 
                 for (MapRecord<String, Object, Object> record : records) {
+                    String msgId = record.getId().getValue();
+                    Map<Object, Object> value = record.getValue();
+                    String eventJson = (String) value.get("event");
+
+                    boolean success = false;
                     try {
-                        Map<Object, Object> value = record.getValue();
-                        String eventJson = (String) value.get("event");
                         processEvent(eventJson);
+                        success = true;
                     } catch (Exception e) {
-                        log.error("处理打标事件失败", e);
-                    } finally {
-                        // ACK 每条消息，确保消息不积压
+                        log.error("处理打标事件失败: consumer={}, msgId={}", consumerName, msgId, e);
+                    }
+
+                    if (success) {
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TAG_STREAM_KEY,
                             RedisConfig.TAG_CONSUMER_GROUP,
-                            record.getId().getValue());
+                            msgId);
+                    } else {
+                        Map<String, String> fields = new java.util.LinkedHashMap<>();
+                        fields.put("event", eventJson);
+                        messageGuardService.markRetryOrDead(
+                            RedisConfig.TAG_STREAM_KEY,
+                            RedisConfig.TAG_CONSUMER_GROUP,
+                            msgId, fields,
+                            "TagWorker 处理失败");
                     }
+
+                    // 最小调用间隔 50ms，8 线程并发下约 160 QPS，防止触达企微 API 限流
+                    try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
                 }
+
+                // 消费后 trim，扩容到 50000 防止高峰期丢打标事件
+                try {
+                    redisTemplate.opsForStream().trim(
+                        RedisConfig.TAG_STREAM_KEY,
+                        RedisConfig.TAG_STREAM_MAXLEN, true);
+                } catch (Exception e) {
+                    log.debug("TAG_STREAM trim 跳过: {}", e.getMessage());
+                }
+
+                log.debug("TagConsumer-{} 本批处理 {} 条", threadId, records.size());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                log.error("TagWorker 消费异常, 5s 后重试", e);
+                if (e.getMessage() != null && e.getMessage().contains("NOGROUP")) {
+                    try {
+                        RecordId initId = redisTemplate.opsForStream()
+                            .add(RedisConfig.TAG_STREAM_KEY, Map.of("_init", "1"));
+                        redisTemplate.opsForStream().createGroup(RedisConfig.TAG_STREAM_KEY,
+                            ReadOffset.from("0-0"), RedisConfig.TAG_CONSUMER_GROUP);
+                        redisTemplate.opsForStream().delete(RedisConfig.TAG_STREAM_KEY, initId);
+                    } catch (Exception ignored) {}
+                    continue;
+                }
+                log.error("TagWorker-{} 消费异常, 5s 后重试", threadId, e);
                 try { Thread.sleep(5000); }
                 catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
-        log.warn("TagWorker 已停止");
+        log.warn("TagWorker-{} 已停止", threadId);
+    }
+
+    /**
+     * 优雅关闭：通知所有消费线程退出循环。
+     */
+    @PreDestroy
+    public void shutdown() {
+        running = false;
+        log.info("TagWorker 已发送关闭信号");
     }
 
     /**
@@ -156,12 +207,14 @@ public class TagWorker {
      *                   由调用方 ({@link #consumeLoop()}) 捕获并记录日志
      */
     private void processEvent(String eventJson) throws Exception {
+        if (eventJson == null) return;
         JsonNode event = objectMapper.readTree(eventJson);
-        String externalUserId = event.has("external_userid")
+        // 注意：Jackson NullNode.asText() 返回字符串 "null"，必须用 isNull() 判断
+        String externalUserId = (event.has("external_userid") && !event.get("external_userid").isNull())
             ? event.get("external_userid").asText() : null;
-        String userId = event.has("userid")
+        String userId = (event.has("userid") && !event.get("userid").isNull())
             ? event.get("userid").asText() : null;
-        String state = event.has("state")
+        String state = (event.has("state") && !event.get("state").isNull())
             ? event.get("state").asText() : null;
 
         if (externalUserId == null || userId == null || state == null) {

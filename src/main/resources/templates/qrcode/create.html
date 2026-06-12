@@ -20,11 +20,15 @@
 .employee-picker .search-bar .count { font-size: 12px; color: #888; white-space: nowrap; }
 .employee-picker .list {
     max-height: 220px; overflow-y: auto;
+    /* 始终占位滚动条宽度，防止列表高度变化时页面跳动 */
+    scrollbar-gutter: stable;
 }
 .employee-picker .list .row-item {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 10px; border-bottom: 1px solid #f5f5f5;
-    transition: background .1s; cursor: pointer;
+    cursor: pointer;
+    /* 隔离布局影响：行显隐不触发整体重排，IME 窗口不跳 */
+    contain: layout style;
 }
 .employee-picker .list .row-item:hover { background: #f8f9ff; }
 .employee-picker .list .row-item.selected { background: #e8f0fe; }
@@ -43,6 +47,39 @@
 .employee-picker .list .no-result {
     padding: 20px; text-align: center; color: #999; font-size: 13px;
 }
+
+/* ── 自动补全下拉框 ── */
+.autocomplete-wrapper { position: relative; }
+.autocomplete-wrapper .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: #aaa; font-size: 13px; z-index: 1; pointer-events: none;
+}
+.autocomplete-wrapper input { padding-left: 30px; }
+.autocomplete-dropdown {
+    position: absolute; top: 100%; left: 0; width: 100%;
+    max-height: 220px; overflow-y: auto;
+    background: #fff; border: 1px solid #dee2e6;
+    border-top: none; border-radius: 0 0 8px 8px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+    z-index: 1050;
+}
+.autocomplete-item {
+    padding: 7px 12px; cursor: pointer;
+    font-size: 14px; color: #333;
+    border-bottom: 1px solid #f5f5f5;
+    transition: background 0.1s;
+}
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:hover, .autocomplete-item.active {
+    background: #e8f0fe;
+}
+.autocomplete-item mark {
+    background: transparent; color: #0d6efd; font-weight: 600; padding: 0;
+}
+.autocomplete-empty {
+    padding: 16px; text-align: center;
+    color: #999; font-size: 13px;
+}
 </style>
 
 <div class="card p-4 mx-auto" style="max-width: 800px;">
@@ -50,26 +87,54 @@
     <form method="post" th:action="@{/qrcodes/create}" id="createForm">
         <!-- 基本信息区 -->
         <div class="row g-3 mb-3">
-            <!-- 学校名称（必填） -->
+            <!-- 学校名称（必填）—— 输入时自动补全已有学校 -->
             <div class="col-md-6">
-                <label class="form-label">学校名称 <span class="text-danger">*</span></label>
-                <input type="text" name="schoolName" class="form-control" required>
+                <label class="form-label">学校 <span class="text-danger">*</span>
+                    <span class="badge bg-secondary ms-1" th:text="${schoolOptions.size()}">0</span>
+                </label>
+                <div class="autocomplete-wrapper" id="schoolAcWrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" name="schoolName" class="form-control" required
+                           placeholder="输入学校名，下拉选择已有学校" autocomplete="off">
+                </div>
             </div>
-            <!-- 学校 ID（必填），作为企微 state 参数中的唯一标识 -->
+            <!-- 学校 ID（自动生成，可手动修改），作为企微 state 参数中的唯一标识 -->
             <div class="col-md-6">
-                <label class="form-label">学校ID <span class="text-danger">*</span></label>
-                <input type="text" name="schoolId" class="form-control" required
-                       placeholder="唯一标识，写入企微 state">
+                <label class="form-label">学校ID <span class="text-danger">*</span>
+                    <small class="text-muted fw-normal">— 自动生成，可改</small>
+                </label>
+                <div class="input-group">
+                    <input type="text" name="schoolId" id="schoolIdInput" class="form-control"
+                           th:value="${suggestedSchoolId}"
+                           placeholder="自动生成唯一标识">
+                    <button type="button" class="btn btn-outline-secondary" id="regenerateSchoolIdBtn"
+                            title="重新生成">
+                        🔄
+                    </button>
+                </div>
+                <div class="form-text">作为企微 state 参数，用于回调时识别来源活码</div>
             </div>
-            <!-- 所在城市（必填） -->
+            <!-- 所在城市（必填）—— 输入时自动补全已有城市 -->
             <div class="col-md-6">
-                <label class="form-label">市 <span class="text-danger">*</span></label>
-                <input type="text" name="regionCity" class="form-control" required>
+                <label class="form-label">市州 <span class="text-danger">*</span>
+                    <span class="badge bg-secondary ms-1" th:text="${cityOptions.size()}">0</span>
+                </label>
+                <div class="autocomplete-wrapper" id="cityAcWrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" name="regionCity" class="form-control" required
+                           placeholder="输入城市名，下拉选择已有城市" autocomplete="off">
+                </div>
             </div>
-            <!-- 所在区县（必填） -->
+            <!-- 所在区县（必填）—— 输入时自动补全已有区县 -->
             <div class="col-md-6">
-                <label class="form-label">区 <span class="text-danger">*</span></label>
-                <input type="text" name="regionDistrict" class="form-control" required>
+                <label class="form-label">县区 <span class="text-danger">*</span>
+                    <span class="badge bg-secondary ms-1" th:text="${districtOptions.size()}">0</span>
+                </label>
+                <div class="autocomplete-wrapper" id="districtAcWrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" name="regionDistrict" class="form-control" required
+                           placeholder="输入区县名，下拉选择已有区县" autocomplete="off">
+                </div>
             </div>
             <!-- 备注（选填） -->
             <div class="col-12">
@@ -87,6 +152,9 @@
         <script th:inline="javascript">
             /*<![CDATA[*/
             window._employeeList = /*[[${userList}]]*/ [];
+            window._schoolOptions = /*[[${schoolOptions}]]*/ [];
+            window._cityOptions = /*[[${cityOptions}]]*/ [];
+            window._districtOptions = /*[[${districtOptions}]]*/ [];
             /*]]>*/
         </script>
 
@@ -120,15 +188,7 @@
                 <textarea name="welcomeText" class="form-control" rows="2"
                           placeholder="欢迎来到XX书店家校服务！..."></textarea>
             </div>
-            <!-- 自定义标签，客户扫码后自动打标 -->
-            <div class="col-md-6">
-                <label class="form-label">
-                    自定义标签
-                    <small class="text-muted fw-normal">— 客户扫码后自动打标</small>
-                </label>
-                <input type="text" name="customTags" class="form-control"
-                       placeholder="VIP, 重点校, 高三优先（逗号分隔）">
-            </div>
+            <!-- 自定义标签板块已移除，customTags 字段保留在实体内以兼容已有数据 -->
         </div>
 
         <!-- 提交按钮 -->
@@ -159,37 +219,24 @@ class EmployeePicker {
         this.placeholder = opts.placeholder || '搜索姓名或账号...';
         this.selected = new Map(); // key=userid, value=dailyMax
 
-        this.render();
+        this.buildAll();
         this.bindEvents();
     }
 
-    /** 渲染员工面板，支持按搜索关键词过滤 */
-    render(filter = '') {
-        // 保存搜索框焦点和光标位置，避免输入时失焦
-        const oldInput = this.el.querySelector('.search-input');
-        const wasFocused = oldInput && document.activeElement === oldInput;
-        const cursorPos = wasFocused ? oldInput.selectionStart : 0;
-
-        const q = filter.toLowerCase();
-        // 按姓名或账号过滤
-        const filtered = this.items.filter(it =>
-            it.name.toLowerCase().includes(q) || it.userid.toLowerCase().includes(q)
-        );
+    /** 一次性构建全部 DOM：搜索栏 + 全部员工行（不再销毁重建） */
+    buildAll() {
         const selCount = this.selected.size;
-
-        // 构建面板 HTML
         this.el.innerHTML = `
             <div class="search-bar">
                 <i class="bi bi-search"></i>
-                <input type="text" class="search-input" placeholder="${this.placeholder}" value="${this._escape(filter)}" autocomplete="off" autofocus>
-                <span class="count">已选 <strong>${selCount}</strong> 人</span>
+                <input type="text" class="search-input" placeholder="${this.placeholder}" autocomplete="off">
+                <span class="count">已选 <strong>${selCount}</strong> / ${this.items.length} 人</span>
             </div>
             <div class="list">
-                ${filtered.length === 0 ? '<div class="no-result">无匹配员工</div>' : filtered.map(it => {
-                    const checked = this.selected.has(it.userid);
-                    const dm = checked ? this.selected.get(it.userid) : this.defaultDailyMax;
-                    return `<div class="row-item${checked ? ' selected' : ''}" data-userid="${it.userid}">
-                        <input class="form-check-input" type="checkbox" ${checked ? 'checked' : ''}>
+                ${this.items.length === 0 ? '<div class="no-result">暂无员工数据</div>' : this.items.map(it => {
+                    const dm = this.defaultDailyMax;
+                    return `<div class="row-item" data-userid="${it.userid}">
+                        <input class="form-check-input" type="checkbox">
                         <div class="name-col">
                             <div class="name">${it.name}</div>
                             <div class="uid">${it.userid}</div>
@@ -198,70 +245,109 @@ class EmployeePicker {
                             <div class="input-group input-group-sm">
                                 <span class="input-group-text" style="font-size:11px;">日限</span>
                                 <input type="number" class="form-control form-control-sm"
-                                    value="${dm}" min="1" max="9999"
-                                    ${checked ? '' : 'disabled'}>
+                                    value="${dm}" min="1" max="9999" disabled>
                             </div>
                         </div>
                     </div>`;
                 }).join('')}
             </div>`;
-
-        // 恢复搜索框焦点和光标位置
-        if (wasFocused) {
-            const newInput = this.el.querySelector('.search-input');
-            if (newInput) {
-                newInput.focus();
-                newInput.setSelectionRange(Math.min(cursorPos, newInput.value.length),
-                    Math.min(cursorPos, newInput.value.length));
-            }
-        }
-
-        // 重新绑定行事件
         this.bindRowEvents();
     }
 
-    /** 绑定搜索输入事件 */
-    bindEvents() {
-        this.el.addEventListener('input', e => {
-            if (e.target.classList.contains('search-input')) {
-                this.render(e.target.value);
+    /** CSS 显隐过滤 — 不动 DOM，IME 完全不受影响 */
+    applyFilter(filter) {
+        const q = filter.toLowerCase().trim();
+        const rows = this.el.querySelectorAll('.row-item');
+        let visibleCount = 0;
+        rows.forEach(row => {
+            const name = (row.querySelector('.name')?.textContent || '').toLowerCase();
+            const uid = (row.querySelector('.uid')?.textContent || '').toLowerCase();
+            const match = !q || name.includes(q) || uid.includes(q);
+            row.style.display = match ? '' : 'none';
+            if (match) visibleCount++;
+        });
+        // "无匹配" 提示
+        let noResult = this.el.querySelector('.no-result');
+        if (visibleCount === 0 && q) {
+            if (!noResult) {
+                noResult = document.createElement('div');
+                noResult.className = 'no-result';
+                noResult.textContent = '无匹配员工';
+                this.el.querySelector('.list').appendChild(noResult);
             }
+        } else if (noResult) {
+            noResult.remove();
+        }
+    }
+
+    /** 更新单行视觉状态（选中/取消时调用，不动其他行） */
+    updateRow(userid) {
+        const row = this.el.querySelector('.row-item[data-userid="' + userid + '"]');
+        if (!row) return;
+        const cb = row.querySelector('.form-check-input');
+        const limitInput = row.querySelector('.limit-col input');
+        const checked = this.selected.has(userid);
+        cb.checked = checked;
+        if (checked) {
+            row.classList.add('selected');
+            limitInput.disabled = false;
+            limitInput.value = this.selected.get(userid);
+        } else {
+            row.classList.remove('selected');
+            limitInput.disabled = true;
+            limitInput.value = this.defaultDailyMax;
+        }
+        // 更新计数
+        const countEl = this.el.querySelector('.count');
+        if (countEl) countEl.innerHTML = '已选 <strong>' + this.selected.size + '</strong> / ' + this.items.length + ' 人';
+    }
+
+    /** 绑定搜索输入事件 — requestAnimationFrame 合并同帧多次输入 */
+    bindEvents() {
+        const input = this.el.querySelector('.search-input');
+        if (!input) return;
+        let scheduled = false;
+        input.addEventListener('input', () => {
+            if (scheduled) return;       // 同一帧内已有待执行任务，跳过
+            scheduled = true;
+            requestAnimationFrame(() => {
+                scheduled = false;
+                this.applyFilter(input.value);
+            });
         });
     }
 
-    /** 绑定每行的复选框和日限输入事件 */
+    /** 绑定每行的复选框和日限输入事件（只绑一次，不重复绑） */
     bindRowEvents() {
         const rows = this.el.querySelectorAll('.row-item');
         rows.forEach(row => {
-            // 复选框变化：选中/取消选中
+            const userid = row.dataset.userid;
             const cb = row.querySelector('.form-check-input');
+            const limitInput = row.querySelector('.limit-col input');
+
+            // 复选框变化
             cb.addEventListener('change', () => {
-                const userid = row.dataset.userid;
                 if (cb.checked) {
-                    const limitInput = row.querySelector('.limit-col input');
                     this.selected.set(userid, parseInt(limitInput.value) || this.defaultDailyMax);
                 } else {
                     this.selected.delete(userid);
                 }
-                this.render(this.el.querySelector('.search-input')?.value || '');
+                this.updateRow(userid);
             });
 
-            // 点击行切换复选框（输入框除外）
+            // 点击行切换复选框
             row.addEventListener('click', e => {
-                if (e.target.tagName === 'INPUT') return; // 输入框自己处理事件
+                if (e.target.tagName === 'INPUT') return;
                 cb.checked = !cb.checked;
                 cb.dispatchEvent(new Event('change'));
             });
 
-            // 日上限输入变化时更新
-            const limitInput = row.querySelector('.limit-col input');
+            // 日限输入变化
             limitInput.addEventListener('change', () => {
-                const userid = row.dataset.userid;
                 if (this.selected.has(userid)) {
                     this.selected.set(userid, parseInt(limitInput.value) || this.defaultDailyMax);
                 }
             });
-            // 阻止点击日限输入框时触发行切换
             limitInput.addEventListener('click', e => e.stopPropagation());
         });
     }
@@ -286,42 +372,179 @@ class EmployeePicker {
     /** 重置为全部未选 */
     reset() {
         this.selected.clear();
-        this.render();
+        const rows = this.el.querySelectorAll('.row-item');
+        rows.forEach(row => {
+            const userid = row.dataset.userid;
+            this.updateRow(userid);
+        });
+        const input = this.el.querySelector('.search-input');
+        if (input) { input.value = ''; this.applyFilter(''); }
     }
+}
+
+/**
+ * AutocompleteInput — 输入自动补全下拉组件。
+ *
+ * 鼠标点击选项或方向键 ↑↓ 导航后回车确认，匹配关键词高亮显示。
+ * 也可直接输入下拉列表中不存在的自定义值。
+ *
+ * 用法: new AutocompleteInput(document.getElementById('wrapperId'), ['选项1', '选项2', ...])
+ */
+class AutocompleteInput {
+    constructor(wrapper, options = []) {
+        this.wrapper = wrapper;
+        this.input = wrapper.querySelector('input');
+        this.options = options;
+        this.dropdown = null;
+        this.activeIdx = -1;
+        this.bindEvents();
+    }
+
+    /** 显示下拉列表，按关键词过滤 */
+    show(q) {
+        this.hide();
+        const kw = q.toLowerCase().trim();
+        // 无关键词时展示前 30 条，有关键词时模糊匹配
+        const filtered = kw
+            ? this.options.filter(o => o.toLowerCase().includes(kw))
+            : this.options.slice(0, 30);
+        if (filtered.length === 0) {
+            this.dropdown = document.createElement('div');
+            this.dropdown.className = 'autocomplete-dropdown';
+            this.dropdown.innerHTML = '<div class="autocomplete-empty">无匹配，回车使用输入值</div>';
+            this.wrapper.appendChild(this.dropdown);
+            return;
+        }
+        this.dropdown = document.createElement('div');
+        this.dropdown.className = 'autocomplete-dropdown';
+        this.dropdown.innerHTML = filtered.map(o => {
+            const label = kw
+                ? this._escapeHtml(o).replace(new RegExp(`(${this._escapeRe(kw)})`, 'gi'), '<mark>$1</mark>')
+                : this._escapeHtml(o);
+            return `<div class="autocomplete-item" data-value="${this._escapeHtml(o)}">${label}</div>`;
+        }).join('');
+        this.wrapper.appendChild(this.dropdown);
+        this.activeIdx = -1;
+
+        // 鼠标点击选中
+        this.dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+            item.addEventListener('mousedown', e => {
+                e.preventDefault();
+                this.select(item.dataset.value);
+            });
+        });
+    }
+
+    /** 关闭下拉 */
+    hide() {
+        if (this.dropdown) { this.dropdown.remove(); this.dropdown = null; }
+        this.activeIdx = -1;
+    }
+
+    /** 选中某值，填入 input 并关闭下拉 */
+    select(value) {
+        this.input.value = value;
+        this.hide();
+    }
+
+    /** 方向键移动高亮 */
+    move(delta) {
+        if (!this.dropdown) return;
+        const items = this.dropdown.querySelectorAll('.autocomplete-item');
+        if (items.length === 0) return;
+        if (this.activeIdx >= 0) items[this.activeIdx].classList.remove('active');
+        this.activeIdx = Math.max(0, Math.min(items.length - 1, this.activeIdx + delta));
+        items[this.activeIdx].classList.add('active');
+        items[this.activeIdx].scrollIntoView({ block: 'nearest' });
+    }
+
+    /** 绑定输入/焦点/键盘事件，兼容中文输入法（IME composition） */
+    bindEvents() {
+        let composing = false;
+        this.input.addEventListener('compositionstart', () => { composing = true; });
+        this.input.addEventListener('compositionend', () => {
+            composing = false;
+            this.show(this.input.value);
+        });
+        this.input.addEventListener('input', () => {
+            if (!composing) this.show(this.input.value);
+        });
+        this.input.addEventListener('focus', () => this.show(this.input.value));
+        // 延迟关闭让 mousedown 先于 blur 触发
+        this.input.addEventListener('blur', () => setTimeout(() => this.hide(), 150));
+        this.input.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown')      { e.preventDefault(); this.move(1); }
+            else if (e.key === 'ArrowUp')   { e.preventDefault(); this.move(-1); }
+            else if (e.key === 'Enter')     {
+                if (this.dropdown && this.activeIdx >= 0) {
+                    e.preventDefault();
+                    const items = this.dropdown.querySelectorAll('.autocomplete-item');
+                    if (items[this.activeIdx]) this.select(items[this.activeIdx].dataset.value);
+                }
+            }
+            else if (e.key === 'Escape')    { this.hide(); }
+        });
+    }
+
+    _escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    _escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 }
 
 // ── 页面初始化 ──
 document.addEventListener('DOMContentLoaded', () => {
     const employees = window._employeeList || [];
-    if (employees.length === 0) return;
 
-    // 初始化服务老师选择器
-    const svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
-        items: employees,
-        defaultDailyMax: 1000,
-        placeholder: '搜索服务老师姓名或账号...'
+    // 员工选择器初始化（仅在有员工数据时）
+    if (employees.length > 0) {
+        // 初始化服务老师选择器
+        const svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
+            items: employees,
+            defaultDailyMax: 1000,
+            placeholder: '搜索服务老师姓名或账号...'
+        });
+
+        // 初始化后备接待员选择器
+        const receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
+            items: employees,
+            defaultDailyMax: 200,
+            placeholder: '搜索后备接待员姓名或账号...'
+        });
+
+        // 表单提交前将选中员工数据序列化到隐藏字段
+        document.getElementById('createForm').addEventListener('submit', () => {
+            // 服务老师 → JSON 字符串
+            const svc = svcPicker.getSelected();
+            document.getElementById('svcJson').value = svc.length > 0 ? JSON.stringify(svc) : '';
+            // 逗号分隔回退（兼容旧版接口）
+            document.getElementById('svcFallback').value = svc.map(s => s.userid).join(',');
+
+            // 接待员 → JSON 字符串
+            const receptionist = receptionistPicker.getSelected();
+            document.getElementById('receptionistJson').value = receptionist.length > 0
+                ? JSON.stringify(receptionist) : '';
+        });
+    }
+
+    // ── 学校ID自动生成 ──
+    const schoolIdInput = document.getElementById('schoolIdInput');
+    document.getElementById('regenerateSchoolIdBtn').addEventListener('click', () => {
+        const now = new Date();
+        const pad = (n, len) => String(n).padStart(len, '0');
+        const ts = now.getFullYear()
+            + pad(now.getMonth() + 1, 2)
+            + pad(now.getDate(), 2)
+            + pad(now.getHours(), 2)
+            + pad(now.getMinutes(), 2)
+            + pad(now.getSeconds(), 2);
+        // 加两位随机数防止同一秒内重复
+        const rnd = Math.floor(Math.random() * 100);
+        schoolIdInput.value = 'SCH' + ts + pad(rnd, 2);
     });
 
-    // 初始化后备接待员选择器
-    const receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
-        items: employees,
-        defaultDailyMax: 200,
-        placeholder: '搜索后备接待员姓名或账号...'
-    });
-
-    // 表单提交前将选中员工数据序列化到隐藏字段
-    document.getElementById('createForm').addEventListener('submit', () => {
-        // 服务老师 → JSON 字符串
-        const svc = svcPicker.getSelected();
-        document.getElementById('svcJson').value = svc.length > 0 ? JSON.stringify(svc) : '';
-        // 逗号分隔回退（兼容旧版接口）
-        document.getElementById('svcFallback').value = svc.map(s => s.userid).join(',');
-
-        // 接待员 → JSON 字符串
-        const receptionist = receptionistPicker.getSelected();
-        document.getElementById('receptionistJson').value = receptionist.length > 0
-            ? JSON.stringify(receptionist) : '';
-    });
+    // ── 自动补全下拉初始化 ──
+    new AutocompleteInput(document.getElementById('schoolAcWrapper'), window._schoolOptions || []);
+    new AutocompleteInput(document.getElementById('cityAcWrapper'), window._cityOptions || []);
+    new AutocompleteInput(document.getElementById('districtAcWrapper'), window._districtOptions || []);
 });
 </script>
 </main>

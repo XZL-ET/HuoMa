@@ -35,8 +35,8 @@ public class Tag {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** 标签名称，长度不超过 100 个字符。支持中文、英文及特殊字符。 */
-    @Column(nullable = false, length = 100)
+    /** 标签名称，长度不超过 100 个字符。支持中文、英文及特殊字符。唯一约束防并发重复创建。 */
+    @Column(nullable = false, length = 100, unique = true)
     private String name;
 
     /** 标签来源类型：system（系统自动打标）、form（表单自动打标）、manual（手动创建/企微同步）。默认值为 manual。 */

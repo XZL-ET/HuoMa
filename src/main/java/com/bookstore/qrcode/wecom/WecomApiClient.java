@@ -5,11 +5,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * 企业微信 API 客户端。
@@ -42,14 +50,24 @@ import java.util.List;
 public class WecomApiClient {
 
     private final WecomConfig config;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = createRestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static RestTemplate createRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3000);   // 连接超时 3s
+        factory.setReadTimeout(10000);     // 读取超时 10s
+        return new RestTemplate(factory);
+    }
 
     /** access_token 获取接口: GET https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ID&corpsecret=SECRET */
     private static final String TOKEN_URL =
         "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s";
     /** 企微 API 基础路径 */
     private static final String BASE_URL = "https://qyapi.weixin.qq.com/cgi-bin";
+
+    /** access_token 读写锁：缓存命中时多线程并发读，刷新时排他写 */
+    private final ReentrantReadWriteLock tokenLock = new ReentrantReadWriteLock();
 
     // ========================================================================
     //  access_token 管理
@@ -76,13 +94,27 @@ public class WecomApiClient {
      * @return 有效的 access_token 字符串
      * @throws RuntimeException 获取失败时抛出（网络超时、corpid/corpsecret 无效等）
      */
-    public synchronized String getAccessToken() {
-        // 缓存命中判断：token 非空且未到过期时间
-        if (config.getAccessToken() != null
-                && Instant.now().getEpochSecond() < config.getAccessTokenExpireAt()) {
-            return config.getAccessToken();
-        }
+    public String getAccessToken() {
+        // 读锁：缓存命中时多线程并发，不互斥
+        tokenLock.readLock().lock();
         try {
+            if (config.getAccessToken() != null
+                    && Instant.now().getEpochSecond() < config.getAccessTokenExpireAt()) {
+                return config.getAccessToken();
+            }
+        } finally {
+            tokenLock.readLock().unlock();
+        }
+
+        // 写锁：缓存过期/缺失时排他刷新，防止多线程同时调企微 API
+        tokenLock.writeLock().lock();
+        try {
+            // Double-check：可能其他线程已刷新
+            if (config.getAccessToken() != null
+                    && Instant.now().getEpochSecond() < config.getAccessTokenExpireAt()) {
+                return config.getAccessToken();
+            }
+
             String url = String.format(TOKEN_URL, config.getCorpId(), config.getCorpSecret());
             String resp = restTemplate.getForObject(url, String.class);
             JsonNode node = objectMapper.readTree(resp);
@@ -105,6 +137,8 @@ public class WecomApiClient {
         } catch (Exception e) {
             log.error("获取 access_token 异常", e);
             throw new RuntimeException("获取 access_token 失败: " + e.getMessage(), e);
+        } finally {
+            tokenLock.writeLock().unlock();
         }
     }
 
@@ -140,7 +174,7 @@ public class WecomApiClient {
      */
     public JsonNode createContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/add_contact_way?access_token=" + getAccessToken();
-        String resp = restTemplate.postForObject(url, requestJson, String.class);
+        String resp = postForJson(url, requestJson);
         return parseOrThrow(resp, "创建活码");
     }
 
@@ -158,7 +192,7 @@ public class WecomApiClient {
      */
     public JsonNode updateContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/update_contact_way?access_token=" + getAccessToken();
-        String resp = restTemplate.postForObject(url, requestJson, String.class);
+        String resp = postForJson(url, requestJson);
         return parseOrThrow(resp, "更新活码");
     }
 
@@ -173,9 +207,13 @@ public class WecomApiClient {
      */
     public void deleteContactWay(String configId) {
         String url = BASE_URL + "/externalcontact/del_contact_way?access_token=" + getAccessToken();
-        String body = "{\"config_id\":\"" + configId + "\"}";
-        String resp = restTemplate.postForObject(url, body, String.class);
-        parseOrThrow(resp, "删除活码");
+        try {
+            String body = objectMapper.writeValueAsString(Map.of("config_id", configId));
+            String resp = postForJson(url, body);
+            parseOrThrow(resp, "删除活码");
+        } catch (Exception e) {
+            throw new RuntimeException("删除活码失败: " + e.getMessage(), e);
+        }
     }
 
     // ========================================================================
@@ -205,16 +243,13 @@ public class WecomApiClient {
     public JsonNode addCorpTag(String tagName, String groupId) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
         try {
-            String body;
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             if (groupId != null && !groupId.isEmpty()) {
-                body = String.format(
-                    "{\"group_id\":\"%s\",\"tag\":[{\"name\":\"%s\"}]}",
-                    groupId, tagName);
-            } else {
-                body = String.format(
-                    "{\"tag\":[{\"name\":\"%s\"}]}", tagName);
+                bodyMap.put("group_id", groupId);
             }
-            String resp = restTemplate.postForObject(url, body, String.class);
+            bodyMap.put("tag", List.of(Map.of("name", tagName)));
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
             return parseOrThrow(resp, "创建企业标签");
         } catch (Exception e) {
             throw new RuntimeException("创建企业标签失败: " + e.getMessage(), e);
@@ -243,10 +278,11 @@ public class WecomApiClient {
     public JsonNode addCorpTagWithGroup(String tagName, String groupName) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
         try {
-            String body = String.format(
-                "{\"group_name\":\"%s\",\"tag\":[{\"name\":\"%s\"}]}",
-                groupName, tagName);
-            String resp = restTemplate.postForObject(url, body, String.class);
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("group_name", groupName);
+            bodyMap.put("tag", List.of(Map.of("name", tagName)));
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
             return parseOrThrow(resp, "创建企业标签组");
         } catch (Exception e) {
             throw new RuntimeException("创建企业标签组失败: " + e.getMessage(), e);
@@ -283,7 +319,7 @@ public class WecomApiClient {
         try {
             // 请求体传空 JSON 对象，不传参数时获取全部标签
             String body = "{}";
-            String resp = restTemplate.postForObject(url, body, String.class);
+            String resp = postForJson(url, body);
             return parseOrThrow(resp, "获取标签列表");
         } catch (Exception e) {
             throw new RuntimeException("获取标签列表失败: " + e.getMessage(), e);
@@ -314,12 +350,18 @@ public class WecomApiClient {
     public void markTag(String externalUserId, String userId, List<String> tagIds) {
         String url = BASE_URL + "/externalcontact/mark_tag?access_token=" + getAccessToken();
         try {
-            String tagIdsJson = objectMapper.writeValueAsString(tagIds);
-            String body = String.format(
-                "{\"userid\":\"%s\",\"external_userid\":\"%s\",\"add_tag\":%s}",
-                userId, externalUserId, tagIdsJson);
-            String resp = restTemplate.postForObject(url, body, String.class);
-            parseOrThrow(resp, "打标签");
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("userid", userId);
+            bodyMap.put("external_userid", externalUserId);
+            bodyMap.put("add_tag", tagIds);
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String respStr = postForJson(url, body);
+            JsonNode resp = objectMapper.readTree(respStr);
+            int errcode = resp.has("errcode") ? resp.get("errcode").asInt() : -1;
+            if (errcode != 0) {
+                String errmsg = resp.has("errmsg") ? resp.get("errmsg").asText() : "";
+                throw new RuntimeException("打标签 errcode=" + errcode + " " + errmsg);
+            }
         } catch (Exception e) {
             throw new RuntimeException("打标签失败: " + e.getMessage(), e);
         }
@@ -356,11 +398,17 @@ public class WecomApiClient {
     public JsonNode transferCustomer(String handoverUserid, String takeoverUserid,
                                       String externalUserid) {
         String url = BASE_URL + "/externalcontact/transfer_customer?access_token=" + getAccessToken();
-        String body = String.format(
-            "{\"handover_userid\":\"%s\",\"takeover_userid\":\"%s\",\"external_userid\":[\"%s\"]}",
-            handoverUserid, takeoverUserid, externalUserid);
-        String resp = restTemplate.postForObject(url, body, String.class);
-        return parseOrThrow(resp, "在职继承");
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("handover_userid", handoverUserid);
+            bodyMap.put("takeover_userid", takeoverUserid);
+            bodyMap.put("external_userid", List.of(externalUserid));
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            return parseOrThrow(resp, "在职继承");
+        } catch (Exception e) {
+            throw new RuntimeException("在职继承失败: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -395,11 +443,17 @@ public class WecomApiClient {
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
                                        String externalUserid) {
         String url = BASE_URL + "/externalcontact/get_transfer_result?access_token=" + getAccessToken();
-        String body = String.format(
-            "{\"handover_userid\":\"%s\",\"takeover_userid\":\"%s\",\"external_userid\":\"%s\"}",
-            handoverUserid, takeoverUserid, externalUserid);
-        String resp = restTemplate.postForObject(url, body, String.class);
-        return parseOrThrow(resp, "查询继承结果");
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("handover_userid", handoverUserid);
+            bodyMap.put("takeover_userid", takeoverUserid);
+            bodyMap.put("external_userid", externalUserid);
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            return parseOrThrow(resp, "查询继承结果");
+        } catch (Exception e) {
+            throw new RuntimeException("查询继承结果失败: " + e.getMessage(), e);
+        }
     }
 
     // ========================================================================
@@ -535,12 +589,13 @@ public class WecomApiClient {
     public void sendMessage(String sender, String externalUserid, String text) {
         String url = BASE_URL + "/externalcontact/message/send?access_token=" + getAccessToken();
         try {
-            // 使用 ObjectMapper 对文本进行 JSON 转义，避免特殊字符破坏 JSON 结构
-            String escapedText = objectMapper.writeValueAsString(text);
-            String body = String.format(
-                "{\"sender\":\"%s\",\"external_userid\":\"%s\",\"msgtype\":\"text\",\"text\":{\"content\":%s}}",
-                sender, externalUserid, escapedText);
-            String resp = restTemplate.postForObject(url, body, String.class);
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("sender", sender);
+            bodyMap.put("external_userid", externalUserid);
+            bodyMap.put("msgtype", "text");
+            bodyMap.put("text", Map.of("content", text));
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
             parseOrThrow(resp, "发送消息");
         } catch (Exception e) {
             throw new RuntimeException("发送消息失败: " + e.getMessage(), e);
@@ -550,6 +605,18 @@ public class WecomApiClient {
     // ========================================================================
     //  内部工具方法
     // ========================================================================
+
+    /**
+     * POST JSON 字符串到企微 API，强制使用 {@code application/json;charset=UTF-8} 内容类型。
+     * <p>解决 {@link RestTemplate} 默认使用 {@code text/plain} 发送 String 正文
+     * 导致中文标签名在企微侧显示为乱码的问题。</p>
+     */
+    private String postForJson(String url, String jsonBody) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(new MediaType("application", "json", StandardCharsets.UTF_8));
+        HttpEntity<String> entity = new HttpEntity<>(jsonBody, headers);
+        return restTemplate.postForObject(url, entity, String.class);
+    }
 
     /**
      * 解析企微 API 响应并校验错误码。

@@ -1,0 +1,345 @@
+package com.bookstore.qrcode.service;
+
+import com.bookstore.qrcode.config.RedisConfig;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.stream.*;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 消息可靠性守护服务 —— 去重 / 重试计数 / 死信队列 / PEL 回收 / DLQ 重放。
+ *
+ * <p><b>三大保护机制：</b>
+ * <ol>
+ *   <li><b>入队前去重</b> —— {@link #tryDedup(String)} 基于 Redis SETNX，
+ *       防止企微 5 秒内重推同一条回调导致重复处理；</li>
+ *   <li><b>失败重试 + 死信队列</b> —— {@link #markRetryOrDead(String, String, String, Map, String)}
+ *       记录重试次数，≤3 次放回 Stream 重试，>3 次移入 DLQ；</li>
+ *   <li><b>PEL 崩溃回收</b> —— {@link #recoverOrphanedPending(String, String, String, long)}
+ *       扫描 PEL 中 idle > 30s 的消息，XCLAIM 后 XADD 回 Stream 重试或移入 DLQ。</li>
+ * </ol>
+ *
+ * <p><b>设计原则：</b>
+ * <ul>
+ *   <li>所有 Redis 操作失败时 fail-open，不阻塞正常消息链路</li>
+ *   <li>DLQ 是一条独立 Redis Stream，支持通过 API 查询和重放</li>
+ *   <li>PEL 回收的 XCLAIM 拿到消息体后直接 XADD 回 Stream 尾部，
+ *       避免 recovery consumer 无人消费导致消息卡死</li>
+ * </ul>
+ *
+ * @author Bookstore Dev
+ * @since 1.3.0
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class MessageGuardService {
+
+    private final StringRedisTemplate redisTemplate;
+
+    private static final int MAX_RETRIES = 3;
+    private static final int DEDUP_TTL_SECONDS = 300;
+    private static final int RETRY_TTL_SECONDS = 3600;
+    private static final long DEFAULT_IDLE_MS = 30_000;
+
+    // ================================================================
+    // ① 消息去重
+    // ================================================================
+
+    /**
+     * 尝试对消息做去重标记。首次出现的消息返回 true，重复消息返回 false。
+     *
+     * <p>使用 Redis SETNX 原子操作，Key TTL 为 300 秒（覆盖企微 5 秒重试窗口 + 安全余量）。
+     * Redis 不可用时 fail-open：直接返回 true，允许消息通过，避免阻断正常回调。</p>
+     *
+     * @param msgId 消息唯一标识（企微回调 XML 中的 MsgId 标签值或降级 hash）
+     * @return true = 首次出现，可继续处理；false = 重复消息，应跳过
+     */
+    public boolean tryDedup(String msgId) {
+        if (msgId == null || msgId.isEmpty()) {
+            // 无标识时无法去重，放行（企微回调理论上都有 MsgId）
+            log.warn("回调消息缺少去重标识，放行");
+            return true;
+        }
+        try {
+            String key = RedisConfig.CALLBACK_DEDUP_KEY_PREFIX + msgId;
+            Boolean success = redisTemplate.opsForValue()
+                .setIfAbsent(key, "1", Duration.ofSeconds(DEDUP_TTL_SECONDS));
+            return Boolean.TRUE.equals(success);
+        } catch (Exception e) {
+            // Redis 不可用 → fail-open，不阻塞回调
+            log.error("消息去重 Redis 操作失败, 放行消息: msgId={}", msgId, e);
+            return true;
+        }
+    }
+
+    // ================================================================
+    // ② 失败重试 + 死信队列
+    // ================================================================
+
+    /**
+     * 记录一次处理失败，决定重试或移入死信队列。
+     *
+     * <p><b>决策逻辑：</b>
+     * <ol>
+     *   <li>INCR 重试计数器 (TTL 1h)</li>
+     *   <li>retryCount ≤ 3 → XADD 回原 Stream 尾部重试，ACK 原消息</li>
+     *   <li>retryCount > 3 → XADD 到 DLQ Stream，ACK 原消息，ERROR 日志</li>
+     * </ol>
+     *
+     * <p><b>注意：</b>重试放回 Stream 尾部意味着消息顺序可能改变。
+     * 当前业务场景中各回调事件相互独立，顺序不重要。</p>
+     *
+     * @param streamKey     原消息所在的 Stream Key
+     * @param consumerGroup  Consumer Group 名称（用于 ACK）
+     * @param messageId     原消息的 Redis Stream Message ID
+     * @param fields        消息体字段（用于重试/DLQ 时重新写入）
+     * @param errorInfo     失败原因描述
+     */
+    public void markRetryOrDead(String streamKey, String consumerGroup,
+                                 String messageId, Map<String, String> fields,
+                                 String errorInfo) {
+        // 基于消息内容生成逻辑 ID，确保 XADD 重新入队后重试计数器仍能延续
+        // （Stream messageId 每次 XADD 都会变化，但同一条逻辑消息的 fields 哈希不变）
+        String logicalId = Integer.toHexString(fields.hashCode());
+        String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + streamKey + ":" + logicalId;
+
+        try {
+            Long retryCount = redisTemplate.opsForValue().increment(retryKey);
+            if (retryCount == null) retryCount = 1L;
+            redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
+
+            if (retryCount <= MAX_RETRIES) {
+                // 放回原 Stream 尾部重试
+                redisTemplate.opsForStream().add(streamKey, fields);
+                log.warn("消息处理失败，放回重试 ({}/{}): stream={}, msgId={}, error={}",
+                    retryCount, MAX_RETRIES, streamKey, messageId, errorInfo);
+            } else {
+                // 移入死信队列
+                moveToDlq(streamKey, messageId, fields, retryCount, errorInfo);
+            }
+
+            // 无论重试还是 DLQ，ACK 原消息（已移走，不再占 PEL）
+            ackSafely(streamKey, consumerGroup, messageId);
+
+        } catch (Exception e) {
+            // Redis 操作失败，兜底 ACK 防止 PEL 堆积
+            log.error("重试/DLQ 操作失败，兜底 ACK: stream={}, msgId={}", streamKey, messageId, e);
+            ackSafely(streamKey, consumerGroup, messageId);
+        }
+    }
+
+    // ================================================================
+    // ③ PEL 崩溃回收
+    // ================================================================
+
+    /**
+     * 扫描指定 Stream 的 PEL，回收 idle 超时的孤消息。
+     *
+     * <p>正常流程中 Worker 会在处理成功后 ACK，PEL 应接近空。
+     * PEL 有消息意味着：Worker 在 READ 和 ACK 之间崩溃（JVM crash / kill -9）。</p>
+     *
+     * <p><b>回收逻辑（对每条 idle > idleMs 的消息）：</b>
+     * <ol>
+     *   <li>INCR 重试计数器</li>
+     *   <li>retryCount ≤ 3 → XCLAIM 获取消息体 → XADD 回原 Stream 尾部
+     *       → ACK 原消息。正常 Worker 会重新消费到。</li>
+     *   <li>retryCount > 3 → XRANGE 读消息体 → 移入 DLQ → ACK 原消息</li>
+     * </ol>
+     *
+     * <p><b>为什么 XCLAIM 后必须 re-enqueue：</b>
+     * XCLAIM 把消息分配给 recovery consumer，但正常 Worker 的 XREADGROUP
+     * 使用 {@code >} 只读新消息，不会读 recovery consumer 的 PEL。
+     * 所以 claim 拿到消息体后必须 XADD 回 Stream 让正常 Worker 消费。</p>
+     *
+     * @param streamKey       Stream Key
+     * @param consumerGroup   Consumer Group 名称
+     * @param recoveryConsumer XCLAIM 使用的恢复消费者名称
+     * @param idleMs          消息 idle 超过此毫秒数才回收（建议 30000ms）
+     * @return 回收的消息数量
+     */
+    public int recoverOrphanedPending(String streamKey, String consumerGroup,
+                                       String recoveryConsumer, long idleMs) {
+        int recovered = 0;
+        try {
+            PendingMessagesSummary summary = redisTemplate.opsForStream()
+                .pending(streamKey, consumerGroup);
+            if (summary == null || summary.getTotalPendingMessages() == 0) {
+                return 0;
+            }
+
+            PendingMessages pending = redisTemplate.opsForStream().pending(
+                streamKey, consumerGroup, Range.unbounded(), 50L);
+
+            for (PendingMessage pm : pending) {
+                if (pm.getElapsedTimeSinceLastDelivery() == null) continue;
+                long idle = pm.getElapsedTimeSinceLastDelivery().toMillis();
+                if (idle < idleMs) continue;
+
+                String msgId = pm.getIdAsString();
+
+                try {
+                    // 先 XCLAIM 获取消息体，用内容哈希做重试 key（与 markRetryOrDead 一致）
+                    List<MapRecord<String, Object, Object>> claimed =
+                        redisTemplate.opsForStream().claim(
+                            streamKey, consumerGroup, recoveryConsumer,
+                            Duration.ofMillis(idleMs),
+                            RecordId.of(msgId));
+
+                    if (claimed == null || claimed.isEmpty()) {
+                        continue;
+                    }
+
+                    Map<String, String> fields = toStringMap(claimed.get(0).getValue());
+                    fields.remove("_dlq_origin_stream");
+                    fields.remove("_dlq_origin_msgid");
+                    fields.remove("_dlq_retry_count");
+                    fields.remove("_dlq_last_error");
+                    fields.remove("_dlq_time");
+
+                    // 基于消息内容生成逻辑 ID，与 markRetryOrDead 共享计数器
+                    String logicalId = Integer.toHexString(fields.hashCode());
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + streamKey + ":" + logicalId;
+
+                    Long retryCount = redisTemplate.opsForValue().increment(retryKey);
+                    if (retryCount == null) retryCount = 1L;
+                    redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
+
+                    if (retryCount <= MAX_RETRIES) {
+                        redisTemplate.opsForStream().add(streamKey, fields);
+                        ackSafely(streamKey, consumerGroup, msgId);
+                        log.warn("PEL 回收: XCLAIM + re-enqueue, stream={}, msgId={}, idle={}ms, retry={}",
+                            streamKey, msgId, idle, retryCount);
+                        recovered++;
+                    } else {
+                        moveToDlq(streamKey, msgId, fields, retryCount,
+                            "PEL idle timeout " + idle + "ms");
+                        ackSafely(streamKey, consumerGroup, msgId);
+                        recovered++;
+                    }
+                } catch (Exception inner) {
+                    log.error("PEL 回收单条消息失败: stream={}, msgId={}", streamKey, msgId, inner);
+                }
+            }
+        } catch (Exception e) {
+            log.error("PEL 回收扫描失败: stream={}, group={}", streamKey, consumerGroup, e);
+        }
+        return recovered;
+    }
+
+    // ================================================================
+    // ④ DLQ 统计 & 重放
+    // ================================================================
+
+    /**
+     * 获取 DLQ Stream 当前长度。
+     *
+     * @return Stream 中的消息数量，异常时返回 -1
+     */
+    public long dlqSize() {
+        try {
+            Long size = redisTemplate.opsForStream().size(RedisConfig.DLQ_STREAM_KEY);
+            return size != null ? size : 0;
+        } catch (Exception e) {
+            log.error("DLQ size 查询失败", e);
+            return -1;
+        }
+    }
+
+    /**
+     * 将 DLQ 中的所有消息重放到指定 Stream，然后清空 DLQ。
+     *
+     * <p>重放时会保留原始消息的所有字段，同时添加 _dlq_replayed 标记。
+     * 一次最多重放 100 条死信，防止一次性压力过大。</p>
+     *
+     * @param targetStreamKey 重放目标 Stream（通常是原 Stream）
+     * @return 重放的消息数量
+     */
+    public int replayDlq(String targetStreamKey) {
+        int count = 0;
+        try {
+            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
+                .read(StreamReadOptions.empty().count(100),
+                    StreamOffset.fromStart(RedisConfig.DLQ_STREAM_KEY));
+
+            if (records != null && !records.isEmpty()) {
+                for (MapRecord<String, Object, Object> r : records) {
+                    Map<String, String> fields = toStringMap(r.getValue());
+                    // 标记为重放消息，便于追踪
+                    fields.put("_dlq_replayed", "true");
+                    fields.put("_dlq_replayed_time", Instant.now().toString());
+                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    count++;
+                }
+
+                // 清空 DLQ（已重放的消息无需保留）
+                redisTemplate.opsForStream().trim(RedisConfig.DLQ_STREAM_KEY, 0, true);
+                log.info("DLQ 重放完成: {} 条 → {}", count, targetStreamKey);
+            }
+        } catch (Exception e) {
+            log.error("DLQ 重放失败: target={}", targetStreamKey, e);
+        }
+        return count;
+    }
+
+    // ================================================================
+    // ⑤ 内部辅助方法
+    // ================================================================
+
+    /**
+     * 将消息移入死信队列。
+     */
+    private void moveToDlq(String streamKey, String messageId,
+                            Map<String, String> fields, long retryCount,
+                            String errorInfo) {
+        Map<String, String> dlqFields = new LinkedHashMap<>(fields);
+        dlqFields.put("_dlq_origin_stream", streamKey);
+        dlqFields.put("_dlq_origin_msgid", messageId);
+        dlqFields.put("_dlq_retry_count", String.valueOf(retryCount));
+        dlqFields.put("_dlq_last_error", errorInfo);
+        dlqFields.put("_dlq_time", Instant.now().toString());
+
+        redisTemplate.opsForStream().add(RedisConfig.DLQ_STREAM_KEY, dlqFields);
+        redisTemplate.opsForStream().trim(RedisConfig.DLQ_STREAM_KEY,
+            RedisConfig.DLQ_STREAM_MAXLEN, true);
+
+        log.error("消息已移入死信队列: originStream={}, msgId={}, retries={}, error={}",
+            streamKey, messageId, retryCount, errorInfo);
+    }
+
+    /**
+     * 安全的 ACK 操作，失败时仅记录日志不抛异常。
+     */
+    private void ackSafely(String streamKey, String consumerGroup, String messageId) {
+        try {
+            redisTemplate.opsForStream().acknowledge(streamKey, consumerGroup, messageId);
+        } catch (Exception e) {
+            log.error("ACK 失败: stream={}, group={}, msgId={}", streamKey, consumerGroup, messageId, e);
+        }
+    }
+
+    /**
+     * 将 Redis Stream 返回的 {@code Map<Object, Object>} 转换为 {@code Map<String, String>}。
+     *
+     * <p>Spring Data Redis Stream 的返回值中 key/value 可能是 byte[] 或 String，
+     * 本方法统一转换为 String 类型，方便后续处理。</p>
+     *
+     * @param value 原始 Map（key/value 为 Object 类型）
+     * @return 转换后的 String→String Map
+     */
+    private Map<String, String> toStringMap(Map<Object, Object> value) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (value != null) {
+            value.forEach((k, v) -> result.put(String.valueOf(k), String.valueOf(v)));
+        }
+        return result;
+    }
+}
