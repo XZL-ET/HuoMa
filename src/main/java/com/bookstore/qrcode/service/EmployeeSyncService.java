@@ -1,7 +1,9 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -13,10 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +41,7 @@ public class EmployeeSyncService {
     private final WecomApiClient wecomApi;
     private final GlobalAgentPoolService poolService;
     private final GlobalAgentPoolRepository poolRepo;
+    private final AgentRepository agentRepo;
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
@@ -130,7 +130,7 @@ public class EmployeeSyncService {
     }
 
     /**
-     * 将在职但不在全局池中的员工写入池（幂等）。
+     * 将在职但不在全局池中的员工批量写入池（不调企微 API，从本地 employee 表取数据）。
      *
      * <p>调用时机：
      * <ul>
@@ -162,26 +162,44 @@ public class EmployeeSyncService {
         int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
             .map(GlobalAgentPool::getSortOrder).orElse(0);
 
-        int added = 0;
+        // 已在 Agent 表中的 userid（减少查询次数）
+        Set<String> existingAgentIds = agentRepo.findAll().stream()
+            .map(Agent::getUserid)
+            .collect(Collectors.toSet());
+
+        List<GlobalAgentPool> batch = new ArrayList<>();
+        List<Agent> agentBatch = new ArrayList<>();
+
         for (Employee emp : activeNotInPool) {
-            try {
-                poolService.ensureInPool(emp.getUserid(), 200);
-                // 新员工排在队尾
-                maxOrder++;
-                var poolEntry = poolRepo.findByAgentUserid(emp.getUserid());
-                if (poolEntry.isPresent()) {
-                    GlobalAgentPool p = poolEntry.get();
-                    p.setSortOrder(maxOrder);
-                    poolRepo.save(p);
-                }
-                added++;
-            } catch (Exception e) {
-                log.warn("员工入池失败: userid={}", emp.getUserid(), e);
+            // 确保 Agent 主数据表有记录（用本地 employee 表的 name，不调企微 API）
+            if (!existingAgentIds.contains(emp.getUserid())) {
+                agentBatch.add(Agent.builder()
+                    .userid(emp.getUserid())
+                    .name(emp.getName() != null && !emp.getName().isEmpty()
+                        ? emp.getName() : emp.getUserid())
+                    .role(Agent.AgentRole.receptionist)
+                    .dailyTotalCap(500)
+                    .build());
+                existingAgentIds.add(emp.getUserid());
             }
+
+            maxOrder++;
+            batch.add(GlobalAgentPool.builder()
+                .agentUserid(emp.getUserid())
+                .dailyMax(200)
+                .sortOrder(maxOrder)
+                .status(GlobalAgentPool.PoolStatus.standby)
+                .build());
         }
 
+        // 批量写入
+        if (!agentBatch.isEmpty()) {
+            agentRepo.saveAll(agentBatch);
+        }
+        poolRepo.saveAll(batch);
+
         log.info("全局池同步完成：新增 {} 人入池，池总数 {} 人",
-            added, pooledUserIds.size() + added);
-        return added;
+            batch.size(), pooledUserIds.size() + batch.size());
+        return batch.size();
     }
 }
