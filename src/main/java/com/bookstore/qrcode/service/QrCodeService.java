@@ -16,6 +16,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
@@ -220,20 +222,29 @@ public class QrCodeService {
         // 3. 绑定员工：从全局池取人写入 QrAgent
         bindAgents(qr.getId(), req);
 
-        // 4. 同步企微活码：确保从池中补齐的员工也出现在企微活码上
-        //    同步失败不阻断活码创建（例如员工未实名、员工已离职等），
-        //    活码在 DB 侧正常可用，管理员修复员工问题后可手动重同步
-        try {
-            syncQrUsersToWechat(qr.getId());
-        } catch (Exception e) {
-            log.error("活码创建后同步企微失败（活码已保存，需手动重同步）: qrId={}, configId={}, error={}",
-                qr.getId(), qr.getQrConfigId(), e.getMessage());
-            alertService.createAlert("system", "qr_sync_failed_on_create",
-                AgentAlert.AlertSeverity.high,
-                String.format("活码「%s」(config_id=%s) 创建后同步企微失败：%s",
-                    qr.getSchoolName(), qr.getQrConfigId(), e.getMessage()),
-                AgentAlert.AutoAction.none, qr.getId());
-        }
+        // 4. 同步企微活码（事务提交后执行，同步失败不回滚活码创建）
+        final Long finalQrId = qr.getId();
+        final String finalConfigId = qr.getQrConfigId();
+        final String finalSchoolName = qr.getSchoolName();
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncQrUsersToWechat(finalQrId);
+                    } catch (Exception e) {
+                        log.error("活码创建后同步企微失败（活码已保存，需手动重同步）: qrId={}, configId={}, error={}",
+                            finalQrId, finalConfigId, e.getMessage());
+                        try {
+                            alertService.createAlert("system", "qr_sync_failed_on_create",
+                                AgentAlert.AlertSeverity.high,
+                                String.format("活码「%s」(config_id=%s) 创建后同步企微失败：%s",
+                                    finalSchoolName, finalConfigId, e.getMessage()),
+                                AgentAlert.AutoAction.none, finalQrId);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
 
         return qr;
     }
