@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -157,17 +158,29 @@ public class DailyResetWorker {
     }
 
     /**
-     * 恢复 {@code full} 状态的员工为 {@code active}，并重新同步活码到企业微信。
+     * 日计数归零 + 恢复 {@code full} 员工为 {@code active}，并重新同步活码到企微。
+     *
+     * <p><b>归零范围：</b>所有 QrAgent 的 dailyCurrent 归零（不仅是 full），
+     * Redis key 在每日过期，DB 持久化值也必须同步归零，否则跨日残留。</p>
      *
      * <p><b>恢复条件：</b>排除 {@code blocked（封号）} 和 {@code melted（熔断）} 的员工，
-     * 只恢复正常的满负荷员工。恢复后将该员工所属活码 ID 收集起来，统一调用
-     * {@link com.bookstore.qrcode.service.QrCodeService#syncQrUsersToWechat(Long)}
-     * 重新同步到企微，确保活码上再次展示这些恢复后的员工。</p>
+     * 只恢复正常的满负荷员工。</p>
      *
      * <p><b>注意：</b>活码同步可能因网络等原因失败，此处逐条 try-catch 避免一个活码
      * 失败影响其他活码的同步。</p>
      */
     private void recoverFullAgents() {
+        // 1. 全部 QrAgent 日计数归零（不只是 full，active 的也要清）
+        List<QrAgent> allAgents = qrAgentRepo.findAll();
+        for (var qa : allAgents) {
+            if (qa.getDailyCurrent() > 0) {
+                qa.setDailyCurrent(0);
+                qa.setLastResetAt(LocalDateTime.now());
+                qrAgentRepo.save(qa);
+            }
+        }
+
+        // 2. full → active
         var fullAgents = qrAgentRepo.findByStatus(QrAgent.AgentStatus.full);
         Set<Long> affectedQrIds = new HashSet<>();
         for (var qa : fullAgents) {
@@ -176,13 +189,12 @@ public class DailyResetWorker {
                 && agent.getOverallStatus() != Agent.OverallStatus.blocked
                 && agent.getOverallStatus() != Agent.OverallStatus.melted) {
                 qa.setStatus(QrAgent.AgentStatus.active);
-                qa.setDailyCurrent(0);
-                qa.setLastResetAt(LocalDateTime.now());
                 qrAgentRepo.save(qa);
                 affectedQrIds.add(qa.getQrCodeId());
             }
         }
-        log.info("已恢复 {} 个 full 员工，涉及 {} 个活码", fullAgents.size(), affectedQrIds.size());
+        log.info("已归零 {} 个 QrAgent 日计数，恢复 {} 个 full 员工，涉及 {} 个活码",
+            allAgents.size(), fullAgents.size(), affectedQrIds.size());
 
         // 事务提交后异步同步企微活码（避免长时间占用 DB 连接）
         if (!affectedQrIds.isEmpty()) {

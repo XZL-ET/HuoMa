@@ -162,7 +162,7 @@ public class GlobalAgentPoolService {
     }
 
     /**
-     * 每日重置 — 将所有 full 状态员工恢复为 standby，清零日计数，并移到队尾。
+     * 每日重置 — 将所有员工日计数清零，满员恢复为待命并移到队尾。
      *
      * <p>由 {@code DailyResetWorker} 在凌晨 00:00 调用。
      * blocked 状态的员工不在此处理（需人工解除）。</p>
@@ -172,6 +172,16 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void dailyReset() {
+        // 1. 全部员工日计数归零（Redis key 在每日过期，此处同步 DB 持久化值）
+        List<GlobalAgentPool> all = poolRepo.findAll();
+        for (GlobalAgentPool p : all) {
+            if (p.getDailyCurrent() > 0) {
+                p.setDailyCurrent(0);
+                poolRepo.save(p);
+            }
+        }
+
+        // 2. full → standby，移往队尾
         List<GlobalAgentPool> fulls = poolRepo
             .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.full);
         if (fulls.isEmpty()) return;
@@ -182,7 +192,6 @@ public class GlobalAgentPoolService {
 
         for (GlobalAgentPool p : fulls) {
             p.setStatus(GlobalAgentPool.PoolStatus.standby);
-            p.setDailyCurrent(0);
             p.setSortOrder(++maxOrder);
             p.setLastResetAt(LocalDateTime.now());
             poolRepo.save(p);
