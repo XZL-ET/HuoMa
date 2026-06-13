@@ -145,6 +145,19 @@
 
         <!-- 员工配置区 -->
         <h6 class="mb-3">员工配置</h6>
+
+        <!-- 学校人数 — 自动计算所需接待员数量 -->
+        <div class="row g-3 mb-3">
+            <div class="col-md-4">
+                <label class="form-label">学校人数
+                    <small class="text-muted fw-normal">— 每120学生配1接待员</small>
+                </label>
+                <input type="number" name="studentCount" id="studentCountInput"
+                       class="form-control" min="1" max="99999"
+                       placeholder="填入学生总人数">
+                <div class="form-text" id="agentCountPreview" style="display:none;"></div>
+            </div>
+        </div>
         <!-- 加载员工数据时的错误提示 -->
         <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
 
@@ -494,17 +507,18 @@ class AutocompleteInput {
 document.addEventListener('DOMContentLoaded', () => {
     const employees = window._employeeList || [];
 
+    let svcPicker = null;
+    let receptionistPicker = null;
+
     // 员工选择器初始化（仅在有员工数据时）
     if (employees.length > 0) {
-        // 初始化服务老师选择器
-        const svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
+        svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
             items: employees,
             defaultDailyMax: 1000,
             placeholder: '搜索服务老师姓名或账号...'
         });
 
-        // 初始化后备接待员选择器
-        const receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
+        receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
             items: employees,
             defaultDailyMax: 200,
             placeholder: '搜索后备接待员姓名或账号...'
@@ -545,6 +559,23 @@ document.addEventListener('DOMContentLoaded', () => {
     new AutocompleteInput(document.getElementById('schoolAcWrapper'), window._schoolOptions || []);
     new AutocompleteInput(document.getElementById('cityAcWrapper'), window._cityOptions || []);
     new AutocompleteInput(document.getElementById('districtAcWrapper'), window._districtOptions || []);
+
+    // ── 学校人数 → 自动计算接待员数预览 ──
+    const studentCountInput = document.getElementById('studentCountInput');
+    const previewEl = document.getElementById('agentCountPreview');
+    studentCountInput.addEventListener('input', () => {
+        const count = parseInt(studentCountInput.value);
+        if (count && count > 0) {
+            const need = Math.max(1, Math.min(100, Math.ceil(count / 120)));
+            const svcSelected = svcPicker ? svcPicker.getSelected().length : 0;
+            const fromPool = Math.max(0, need - svcSelected);
+            previewEl.style.display = '';
+            previewEl.innerHTML = '预计需要 <strong>' + need + '</strong> 个接待员'
+                + (svcSelected > 0 ? '（含 ' + svcSelected + ' 位服务老师，从全局池补 <strong>' + fromPool + '</strong> 人）' : '');
+        } else {
+            previewEl.style.display = 'none';
+        }
+    });
 });
 </script>
 </main>

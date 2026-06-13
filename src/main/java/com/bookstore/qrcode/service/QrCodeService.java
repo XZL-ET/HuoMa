@@ -173,6 +173,14 @@ public class QrCodeService {
             throw new RuntimeException("学校ID已存在: " + req.getSchoolId());
         }
 
+        // 若填写了学校人数，自动计算所需接待员总数（每 120 学生配 1 人，最少 1 人，最多 100 人）
+        if (req.getStudentCount() != null && req.getStudentCount() > 0) {
+            int computed = (int) Math.ceil(req.getStudentCount() / 120.0);
+            int need = Math.max(1, Math.min(100, computed));
+            req.setInitialAgentCount(need);
+            log.info("学校人数={}, 自动计算 initialAgentCount={}", req.getStudentCount(), need);
+        }
+
         // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败不影响事务）
         String qrRequestJson = buildContactWayJson(req);
         JsonNode result = wecomApi.createContactWay(qrRequestJson);
@@ -204,6 +212,7 @@ public class QrCodeService {
             .transferTargetUserid(req.getTransferTargetUserid())
             .initialAgentCount(req.getInitialAgentCount() != null
                 ? req.getInitialAgentCount() : 1)
+            .studentCount(req.getStudentCount())
             .customTags(req.getCustomTags())
             .build();
         qr = qrCodeRepo.save(qr);

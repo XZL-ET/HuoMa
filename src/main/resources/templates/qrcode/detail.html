@@ -15,6 +15,9 @@
                             学校ID：<code th:text="${qr.schoolId}"></code> |
                             地区：<span th:text="${qr.regionCity + ' ' + qr.regionDistrict}"></span> |
                             创建方式：<span th:text="${qr.createMode.name()}"></span>
+                            <span th:if="${qr.studentCount != null}">
+                                | 学生人数：<span th:text="${qr.studentCount}"></span>人
+                            </span>
                         </div>
                     </div>
                     <!-- 右侧：状态徽标 + 暂停/启用 + 删除按钮 -->

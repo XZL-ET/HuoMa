@@ -129,6 +129,10 @@ public class QrCode {
     @Builder.Default
     private Integer initialAgentCount = 1;
 
+    /** 学校学生人数，用于自动计算所需接待员数量 */
+    @Column(name = "student_count")
+    private Integer studentCount;
+
     /** 客户扫码后自动打标的自定义标签列表，多个标签以逗号分隔 */
     @Column(name = "custom_tags", length = 500)
     private String customTags;

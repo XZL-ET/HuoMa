@@ -52,6 +52,13 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'student_count') = 0,
+    'ALTER TABLE qr_code ADD COLUMN student_count INT COMMENT ''学校学生人数，自动计算接待员数量''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- agent：员工
 -- 员工表
 CREATE TABLE IF NOT EXISTS agent (
