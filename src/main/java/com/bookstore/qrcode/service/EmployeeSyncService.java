@@ -144,7 +144,25 @@ public class EmployeeSyncService {
      */
     @Transactional
     public int syncToGlobalPool() {
-        // 已在池中的 userid 集合
+        // 1. 清理已在池中的离职员工（企微通讯录已标记 inactive 但仍留在池中）
+        Set<String> inactiveUserIds = employeeRepo.findAll().stream()
+            .filter(e -> !e.getActive())
+            .map(Employee::getUserid)
+            .collect(Collectors.toSet());
+        int cleaned = 0;
+        if (!inactiveUserIds.isEmpty()) {
+            List<GlobalAgentPool> toRemove = poolRepo.findAll().stream()
+                .filter(p -> inactiveUserIds.contains(p.getAgentUserid()))
+                .toList();
+            if (!toRemove.isEmpty()) {
+                poolRepo.deleteAll(toRemove);
+                cleaned = toRemove.size();
+                log.info("全局池同步：移除 {} 个已离职员工: {}", cleaned,
+                    toRemove.stream().map(GlobalAgentPool::getAgentUserid).toList());
+            }
+        }
+
+        // 2. 已在池中的 userid 集合（刷新，因为上面可能删了）
         Set<String> pooledUserIds = poolRepo.findAll().stream()
             .map(GlobalAgentPool::getAgentUserid)
             .collect(Collectors.toSet());
@@ -198,8 +216,8 @@ public class EmployeeSyncService {
         }
         poolRepo.saveAll(batch);
 
-        log.info("全局池同步完成：新增 {} 人入池，池总数 {} 人",
-            batch.size(), pooledUserIds.size() + batch.size());
+        log.info("全局池同步完成：新增 {} 人入池，清理离职 {} 人，池总数 {} 人",
+            batch.size(), cleaned, pooledUserIds.size() + batch.size());
         return batch.size();
     }
 }

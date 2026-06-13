@@ -1,8 +1,10 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.Agent;
+import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.AgentRepository;
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -39,6 +41,7 @@ public class GlobalAgentPoolService {
 
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
+    private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
 
     /**
@@ -58,13 +61,33 @@ public class GlobalAgentPoolService {
             log.warn("全局员工池无 standby 员工可用！");
             return null;
         }
+        int skippedInactive = 0, skippedBlocked = 0;
         for (GlobalAgentPool p : standbys) {
-            if (excludeUserids == null || !excludeUserids.contains(p.getAgentUserid())) {
-                return p;
+            // 排除已在活码上的员工
+            if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
+                continue;
             }
+            // 过滤已离职员工（企微通讯录已标记 inactive）
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null && !emp.getActive()) {
+                skippedInactive++;
+                log.info("跳过离职员工: userid={}", p.getAgentUserid());
+                continue;
+            }
+            // 过滤封号/熔断员工（企微侧已不可用）
+            Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
+            if (agent != null && (
+                agent.getOverallStatus() == Agent.OverallStatus.blocked
+                || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
+                skippedBlocked++;
+                log.info("跳过封号/熔断员工: userid={}", p.getAgentUserid());
+                continue;
+            }
+            return p;
         }
-        log.warn("全局员工池所有 standby 均在排除列表中（排除 {} 人），无可用员工",
-            excludeUserids != null ? excludeUserids.size() : 0);
+        log.warn("全局员工池无可用 standby（排除={}, 跳过离职={}, 跳过封号/熔断={}）",
+            excludeUserids != null ? excludeUserids.size() : 0,
+            skippedInactive, skippedBlocked);
         return null;
     }
 
