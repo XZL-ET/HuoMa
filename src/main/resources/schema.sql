@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS employee (
     INDEX idx_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='企微员工通讯录';
 
+-- employee 新增字段（企微侧状态，Layer1 主动过滤不可用员工）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee' AND COLUMN_NAME = 'wechat_status') = 0,
+    'ALTER TABLE employee ADD COLUMN wechat_status INT COMMENT ''企微侧状态: 1=已激活 2=禁用 4=未激活 5=已离职''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- qr_agent：活码-员工关联
 -- 活码-员工关联表
 CREATE TABLE IF NOT EXISTS qr_agent (

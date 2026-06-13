@@ -8,13 +8,16 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -43,6 +46,7 @@ public class GlobalAgentPoolService {
     private final AgentRepository agentRepo;
     private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
+    private final ObjectMapper objectMapper;
 
     /**
      * 从全局池取优先级最高（sortOrder 最小）的 standby 员工，排除指定 userid 集合。
@@ -61,7 +65,7 @@ public class GlobalAgentPoolService {
             log.warn("全局员工池无 standby 员工可用！");
             return null;
         }
-        int skippedInactive = 0, skippedBlocked = 0;
+        int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
         for (GlobalAgentPool p : standbys) {
             // 排除已在活码上的员工
             if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
@@ -72,6 +76,13 @@ public class GlobalAgentPoolService {
             if (emp != null && !emp.getActive()) {
                 skippedInactive++;
                 log.info("跳过离职员工: userid={}", p.getAgentUserid());
+                continue;
+            }
+            // 过滤企微侧不可用员工（未激活、已禁用、已离职等，Layer 1 主动防御）
+            if (emp != null && emp.getWechatStatus() != null && emp.getWechatStatus() != 1) {
+                skippedWechatUnavailable++;
+                log.info("跳过企微不可用员工: userid={}, wechatStatus={}",
+                    p.getAgentUserid(), emp.getWechatStatus());
                 continue;
             }
             // 过滤封号/熔断员工（企微侧已不可用）
@@ -85,9 +96,9 @@ public class GlobalAgentPoolService {
             }
             return p;
         }
-        log.warn("全局员工池无可用 standby（排除={}, 跳过离职={}, 跳过封号/熔断={}）",
+        log.warn("全局员工池无可用 standby（排除={}, 跳过离职={}, 跳过企微不可用={}, 跳过封号/熔断={}）",
             excludeUserids != null ? excludeUserids.size() : 0,
-            skippedInactive, skippedBlocked);
+            skippedInactive, skippedWechatUnavailable, skippedBlocked);
         return null;
     }
 
@@ -221,5 +232,40 @@ public class GlobalAgentPoolService {
         }
         log.info("全局池日重置: 恢复 {} 个 full 员工，已移至队尾 (maxOrder={})",
             fulls.size(), maxOrder);
+    }
+
+    /**
+     * Layer 2 自愈：封锁企微侧不可用员工并移出全局池。
+     *
+     * <p>调用时机：企微 API 返回 40098（未实名）或 41054（未激活）时。
+     * 将员工在 agent 表标记为 blocked，并从 global_agent_pool 物理删除，
+     * 确保后续 takeStandby 不会再次选中。</p>
+     *
+     * @param agentUserid 企微员工 userid
+     * @param errcode     企微 API 返回的错误码
+     */
+    @Transactional
+    public void blockAgentForWechatIssue(String agentUserid, int errcode) {
+        // 标记 agent 为 blocked，记录原因
+        Agent agent = agentRepo.findById(agentUserid).orElse(null);
+        if (agent != null) {
+            agent.setOverallStatus(Agent.OverallStatus.blocked);
+            Map<String, Object> reason = new LinkedHashMap<>();
+            reason.put("reason", "企微不可用: errcode=" + errcode);
+            reason.put("errcode", errcode);
+            reason.put("blocked_at", LocalDateTime.now().toString());
+            try {
+                agent.setStatusReason(objectMapper.writeValueAsString(reason));
+            } catch (Exception ignored) {
+                agent.setStatusReason("企微不可用: errcode=" + errcode);
+            }
+            agentRepo.save(agent);
+        }
+
+        // 从全局员工池移除（物理删除，确保 takeStandby 不选到）
+        poolRepo.findByAgentUserid(agentUserid).ifPresent(pool -> {
+            poolRepo.delete(pool);
+            log.warn("Layer2自愈: 全局池已移除不可用员工 userid={}, errcode={}", agentUserid, errcode);
+        });
     }
 }

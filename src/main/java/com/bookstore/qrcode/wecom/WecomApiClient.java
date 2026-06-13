@@ -554,6 +554,23 @@ public class WecomApiClient {
         return parseOrThrow(resp, "获取成员列表");
     }
 
+    /**
+     * 获取部门成员详情列表（递归），含 status 字段。
+     *
+     * <p><b>企微接口：</b>{@code GET /cgi-bin/user/list?department_id=1&fetch_child=1}
+     * 与 {@link #getUserSimplelist()} 的区别：此接口返回每个用户的
+     * {@code status}（1=已激活 2=禁用 4=未激活 5=已离职）
+     * 和 {@code enable}（1=启用 0=禁用），用于主动过滤不可用员工。</p>
+     *
+     * @return JsonNode 包含 {@code userlist} 数组，每项含 userid、name、status 等字段
+     */
+    public JsonNode getUserList() {
+        String url = BASE_URL + "/user/list?access_token=" + getAccessToken()
+                     + "&department_id=1&fetch_child=1";
+        String resp = restTemplate.getForObject(url, String.class);
+        return parseOrThrow(resp, "获取成员详情列表");
+    }
+
     // ========================================================================
     //  消息推送
     //  文档: https://developer.work.weixin.qq.com/document/path/92123

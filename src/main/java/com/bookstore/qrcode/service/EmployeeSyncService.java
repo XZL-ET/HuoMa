@@ -64,7 +64,7 @@ public class EmployeeSyncService {
      */
     @Transactional
     public int syncFromWecom() {
-        JsonNode resp = wecomApi.getUserSimplelist();
+        JsonNode resp = wecomApi.getUserList();
 
         if (!resp.has("userlist") || !resp.get("userlist").isArray()) {
             log.warn("企微员工列表为空或格式异常");
@@ -79,6 +79,7 @@ public class EmployeeSyncService {
             String userid = u.get("userid").asText();
             String name = u.has("name") ? u.get("name").asText() : "";
             String dept = u.has("department") ? u.get("department").toString() : null;
+            Integer wechatStatus = u.has("status") ? u.get("status").asInt() : null;
 
             if (userid.isEmpty()) continue;
             activeUserIds.add(userid);
@@ -99,6 +100,10 @@ public class EmployeeSyncService {
                     emp.setDepartment(dept);
                     changed = true;
                 }
+                if (wechatStatus != null && !wechatStatus.equals(emp.getWechatStatus())) {
+                    emp.setWechatStatus(wechatStatus);
+                    changed = true;
+                }
                 if (changed) {
                     emp.setLastSyncTime(LocalDateTime.now());
                     employeeRepo.save(emp);
@@ -110,6 +115,7 @@ public class EmployeeSyncService {
                     .name(name)
                     .department(dept)
                     .active(true)
+                    .wechatStatus(wechatStatus)
                     .lastSyncTime(LocalDateTime.now())
                     .build();
                 employeeRepo.save(emp);

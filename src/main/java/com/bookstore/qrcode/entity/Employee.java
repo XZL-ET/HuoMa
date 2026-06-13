@@ -43,6 +43,10 @@ public class Employee {
     @Builder.Default
     private Boolean active = true;
 
+    /** 企微侧用户状态: 1=已激活 2=禁用 4=未激活 5=已离职。null 表示尚未从企微 user/list 接口同步 */
+    @Column(name = "wechat_status")
+    private Integer wechatStatus;
+
     /** 最近一次同步时间 */
     @Column(nullable = false)
     @Builder.Default
