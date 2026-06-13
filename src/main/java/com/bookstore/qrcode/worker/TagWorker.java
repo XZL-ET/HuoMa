@@ -8,6 +8,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -55,8 +56,12 @@ public class TagWorker {
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
+    /** 打标并发线程数 */
     private static final int CONSUMER_THREADS = 8;
     private static final String CONSUMER_PREFIX = "tag-worker";
+    /** 每条消息间的间隔 ms，可通过 worker.tag.delay-ms 配置，默认 50ms 防限流 */
+    @Value("${worker.tag.delay-ms:50}")
+    private int tagDelayMs;
 
     /**
      * 启动 4 个并行打标消费线程。
@@ -137,8 +142,10 @@ public class TagWorker {
                             "TagWorker 处理失败");
                     }
 
-                    // 最小调用间隔 50ms，8 线程并发下约 160 QPS，防止触达企微 API 限流
-                    try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                    // 最小调用间隔，可通过 worker.tag.delay-ms 配置（默认 50ms 防限流）
+                    if (tagDelayMs > 0) {
+                        try { Thread.sleep(tagDelayMs); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                    }
                 }
 
                 // 消费后 trim，扩容到 50000 防止高峰期丢打标事件

@@ -154,23 +154,34 @@ public class AlertService {
      */
     @Transactional
     public void meltAgent(String userId, Long qrCodeId, String reason) {
-        Agent agent = agentRepo.findById(userId).orElse(null);
+        // 使用悲观写锁（SELECT ... FOR UPDATE）避免高并发下多线程同时更新同一行导致死锁
+        Agent agent = agentRepo.findByIdForUpdate(userId).orElse(null);
         if (agent != null) {
+            // 已封禁的不再重复更新，避免死锁和无谓的 DB 写
+            if (agent.getOverallStatus() == Agent.OverallStatus.blocked) {
+                log.debug("员工 {} 已封禁，跳过熔断", userId);
+                return;
+            }
+
             int meltCount = agent.getMeltedCount24h() + 1;
             agent.setOverallStatus(meltCount >= 3
                 ? Agent.OverallStatus.blocked
                 : Agent.OverallStatus.melted);
             agent.setMeltedCount24h(meltCount);
-            agent.setStatusReason(reason);
+            // status_reason 列类型为 JSON，需序列化而非存裸字符串
+            Map<String, Object> reasonMap = new HashMap<>();
+            reasonMap.put("reason", reason);
+            reasonMap.put("melted_at", LocalDateTime.now().toString());
+            reasonMap.put("melt_count_24h", meltCount);
+            agent.setStatusReason(objectMapper.valueToTree(reasonMap).toString());
             agentRepo.save(agent);
+
+            createAlert(userId, "melt", AgentAlert.AlertSeverity.high,
+                Map.of("reason", reason, "melt_count_24h", meltCount),
+                AgentAlert.AutoAction.melted, qrCodeId);
+
+            log.warn("员工 {} 已熔断: {}", userId, reason);
         }
-
-        createAlert(userId, "melt", AgentAlert.AlertSeverity.high,
-            Map.of("reason", reason, "melt_count_24h",
-                agent != null ? agent.getMeltedCount24h() : 1),
-            AgentAlert.AutoAction.melted, qrCodeId);
-
-        log.warn("员工 {} 已熔断: {}", userId, reason);
     }
 
     /**
@@ -256,7 +267,7 @@ public class AlertService {
      * @param userId 员工 userid
      */
     private void pauseAgent(String userId) {
-        Agent agent = agentRepo.findById(userId).orElse(null);
+        Agent agent = agentRepo.findByIdForUpdate(userId).orElse(null);
         if (agent != null) {
             agent.setOverallStatus(Agent.OverallStatus.warning);
             Map<String, Object> reason = new HashMap<>();

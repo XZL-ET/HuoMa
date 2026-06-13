@@ -1,8 +1,14 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.Agent;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 员工 数据访问层。
@@ -51,4 +57,18 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
      * @return 匹配该角色的员工列表
      */
     List<Agent> findByRole(Agent.AgentRole role);
+
+    /**
+     * 使用悲观写锁按 userid 查询员工。
+     *
+     * <p>在需要安全更新员工状态的场景（熔断、暂停等）使用此方法，
+     * 通过 {@code SELECT ... FOR UPDATE} 确保同一时刻只有一个事务可以修改该行，
+     * 避免高并发下多个线程同时读→改→写造成死锁。</p>
+     *
+     * @param userid 员工唯一标识
+     * @return 员工实体（可能为空）
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM Agent a WHERE a.userid = :userid")
+    Optional<Agent> findByIdForUpdate(@Param("userid") String userid);
 }

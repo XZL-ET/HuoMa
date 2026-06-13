@@ -76,8 +76,8 @@ spring:
     username: ${DB_USERNAME:bookstore}              # 数据库用户名（环境变量注入）
     password: ${DB_PASSWORD:<YOUR_DB_PASSWORD>}  # 数据库密码（环境变量注入）
     hikari:
-      maximum-pool-size: 30          # 连接池上限
-      minimum-idle: 4                # 最少空闲连接
+      maximum-pool-size: 50          # 连接池上限（≥ Worker+Undertow 总线程数 42）
+      minimum-idle: 8                # 最少空闲连接
       connection-timeout: 5000       # 获取连接超时 5s
       idle-timeout: 600000           # 空闲回收 10min
       max-lifetime: 1800000          # 最大存活 30min

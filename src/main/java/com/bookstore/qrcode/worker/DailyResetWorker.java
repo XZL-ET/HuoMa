@@ -2,11 +2,14 @@ package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -55,6 +58,7 @@ public class DailyResetWorker {
     private final QrCodeService qrCodeService;
     private final GlobalAgentPoolService poolService;
     private final com.bookstore.qrcode.service.AgentBindService agentBindService;
+    private final AlertService alertService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -73,42 +77,82 @@ public class DailyResetWorker {
         log.info("===== 每日重置 + 日报生成开始 =====");
         LocalDate today = LocalDate.now();
         LocalDate yesterday = today.minusDays(1);
+        int failures = 0;
+        StringBuilder failDetails = new StringBuilder();
 
         // 1. 清零 Redis 每日计数
-        clearRedisDailyCounters();
+        try {
+            clearRedisDailyCounters();
+        } catch (Exception e) {
+            failures++;
+            failDetails.append("Redis日计数清零失败; ");
+            log.error("清空日计数失败", e);
+        }
 
         // 2. 全局池日重置：full → standby
         try {
             poolService.dailyReset();
         } catch (Exception e) {
-            log.error("全局池日重置失败", e);
+            failures++;
+            failDetails.append("全局池日重置失败; ");
         }
 
         // 3. 恢复 full 状态的员工（非封号/熔断的）
-        recoverFullAgents();
+        try {
+            recoverFullAgents();
+        } catch (Exception e) {
+            failures++;
+            failDetails.append("full员工恢复失败; ");
+        }
 
         // 4. 生成昨日日报
-        generateDailyReport(yesterday, today);
+        try {
+            generateDailyReport(yesterday, today);
+        } catch (Exception e) {
+            failures++;
+            failDetails.append("日报生成失败; ");
+        }
 
-        log.info("===== 每日重置 + 日报生成完成 =====");
+        // 任一步骤失败均告警
+        if (failures > 0) {
+            String msg = String.format("每日重置 %d 项失败: %s", failures, failDetails);
+            log.error(msg);
+            try {
+                alertService.createAlert("system", "daily_reset_failure",
+                    AgentAlert.AlertSeverity.high, msg, AgentAlert.AutoAction.none, null);
+            } catch (Exception e) {
+                log.error("告警发送失败", e);
+            }
+        }
+
+        log.info("===== 每日重置 + 日报生成完成 (失败={}) =====", failures);
     }
 
     /**
-     * 清空 Redis 中所有 {@code agent:daily:*} 的 Key。
+     * 使用 SCAN 命令清空 Redis 中所有 {@code agent:daily:*} 的 Key。
      *
-     * <p>使用 {@code keys} 命令扫描匹配的 Key 并批量删除。由于 Key 数量通常不超过
-     * 数百个，不会对 Redis 性能造成明显影响。如果删除过程中抛出异常，仅记录错误日志，
-     * 不影响后续恢复和日报生成步骤。</p>
+     * <p>使用非阻塞 SCAN 替代 KEYS，避免 1800+ 员工规模的 O(N) 阻塞
+     * 影响 Redis 主线程中正在处理的回调/打标/去重操作。
+     * 每条 SCAN 迭代返回约 100 个 Key 后休眠 1ms，确保 Redis 有足够时间
+     * 处理其他命令。</p>
      */
     private void clearRedisDailyCounters() {
-        try {
-            Set<String> keys = redisTemplate.keys("agent:daily:*");
-            if (keys != null && !keys.isEmpty()) {
-                redisTemplate.delete(keys);
-                log.info("已清空 {} 个日计数 key", keys.size());
+        String pattern = "agent:daily:*";
+        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(100).build();
+        int total = 0;
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                String key = cursor.next();
+                redisTemplate.delete(key);
+                total++;
+                // 每 100 条让出 CPU/Redis 时间片
+                if (total % 100 == 0) {
+                    try { Thread.sleep(1); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                }
             }
-        } catch (Exception e) {
-            log.error("清空日计数失败", e);
+        }
+        if (total > 0) {
+            log.info("已清空 {} 个日计数 key", total);
         }
     }
 
@@ -175,37 +219,33 @@ public class DailyResetWorker {
      * @param today     今天的日期，用于计算统计时间范围 [yesterday 00:00, today 00:00)
      */
     private void generateDailyReport(LocalDate yesterday, LocalDate today) {
-        try {
-            LocalDateTime start = yesterday.atStartOfDay();
-            LocalDateTime end = today.atStartOfDay();
+        LocalDateTime start = yesterday.atStartOfDay();
+        LocalDateTime end = today.atStartOfDay();
 
-            long totalAdd = customerRepo.countByAddTimeBetween(start, end);
-            long totalAddFail = 0; // 从 alert 表统计
-            long totalTransfer = transferRepo.countByTransferTimeBetween(start, end);
-            long totalTransferOk = transferRepo.countByStatusAndTransferTimeBetween(
-                CustomerTransfer.TransferStatus.confirmed, start, end);
-            long totalAlert = alertRepo.countByCreatedAtBetween(start, end);
-            long activeQr = qrCodeRepo.countByStatus(QrCode.QrCodeStatus.active);
-            long fullQr = qrCodeRepo.countByStatus(QrCode.QrCodeStatus.full);
-            long blockedAgent = agentRepo.findByOverallStatus(Agent.OverallStatus.blocked).size();
-            long meltedAgent = agentRepo.findByOverallStatus(Agent.OverallStatus.melted).size();
+        long totalAdd = customerRepo.countByAddTimeBetween(start, end);
+        long totalAddFail = 0; // 从 alert 表统计
+        long totalTransfer = transferRepo.countByTransferTimeBetween(start, end);
+        long totalTransferOk = transferRepo.countByStatusAndTransferTimeBetween(
+            CustomerTransfer.TransferStatus.confirmed, start, end);
+        long totalAlert = alertRepo.countByCreatedAtBetween(start, end);
+        long activeQr = qrCodeRepo.countByStatus(QrCode.QrCodeStatus.active);
+        long fullQr = qrCodeRepo.countByStatus(QrCode.QrCodeStatus.full);
+        long blockedAgent = agentRepo.findByOverallStatus(Agent.OverallStatus.blocked).size();
+        long meltedAgent = agentRepo.findByOverallStatus(Agent.OverallStatus.melted).size();
 
-            DailyReport report = DailyReport.builder()
-                .date(yesterday)
-                .totalAdd((int) totalAdd)
-                .totalAddFail((int) totalAddFail)
-                .totalTransfer((int) totalTransfer)
-                .totalTransferOk((int) totalTransferOk)
-                .totalAlert((int) totalAlert)
-                .activeQr((int) activeQr)
-                .fullQr((int) fullQr)
-                .blockedAgent((int) blockedAgent)
-                .meltedAgent((int) meltedAgent)
-                .build();
-            dailyReportRepo.save(report);
-            log.info("日报已生成: {}", yesterday);
-        } catch (Exception e) {
-            log.error("生成日报失败", e);
-        }
+        DailyReport report = DailyReport.builder()
+            .date(yesterday)
+            .totalAdd((int) totalAdd)
+            .totalAddFail((int) totalAddFail)
+            .totalTransfer((int) totalTransfer)
+            .totalTransferOk((int) totalTransferOk)
+            .totalAlert((int) totalAlert)
+            .activeQr((int) activeQr)
+            .fullQr((int) fullQr)
+            .blockedAgent((int) blockedAgent)
+            .meltedAgent((int) meltedAgent)
+            .build();
+        dailyReportRepo.save(report);
+        log.info("日报已生成: {}", yesterday);
     }
 }
