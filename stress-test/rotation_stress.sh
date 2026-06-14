@@ -34,6 +34,7 @@
 # ============================================================
 
 set -e
+set +H  # 禁用历史扩展，防止密码中 ! 被解析
 
 # ============================================================
 # 配置
@@ -47,7 +48,9 @@ TEST_SCHOOL_ID="STRESS_TEST_000"
 TEST_DAILY_MAX=5                     # 测试代理日限（小值，快速触发轮转）
 REDIS_STREAM="wecom:callback:stream"
 
-MYSQL_CMD="mysql -u bookstore -p'<YOUR_DB_PASSWORD>' bookstore_qrcode"
+MYSQL_PASS='<YOUR_DB_PASSWORD>'
+MYSQL_USER='bookstore'
+MYSQL_DB='bookstore_qrcode'
 REDIS_CMD="redis-cli"
 
 mkdir -p "$RESULT_DIR"
@@ -80,8 +83,8 @@ log_title() {
 }
 log_metric() { echo -e "  ${BOLD}$1${NC}: $2"; }
 
-mysql_q()  { $MYSQL_CMD -N -e "$1" 2>/dev/null; }
-mysql_t()  { $MYSQL_CMD -e "$1" 2>/dev/null; }
+mysql_q()  { mysql -u "$MYSQL_USER" -p"$MYSQL_PASS" "$MYSQL_DB" -N -e "$1" 2>/dev/null; }
+mysql_t()  { mysql -u "$MYSQL_USER" -p"$MYSQL_PASS" "$MYSQL_DB" -e "$1" 2>/dev/null; }
 redis_cmd() { $REDIS_CMD "$@" 2>/dev/null; }
 
 # 测试活码
@@ -107,6 +110,7 @@ get_healthy_standby() {
 
 # HTTP 请求
 do_create_test_qr() {
+    local svc_userid=$1
     curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${BASE_URL}/qrcodes/create" \
         -d "schoolName=${TEST_SCHOOL_NAME}" \
@@ -115,6 +119,7 @@ do_create_test_qr() {
         -d "regionDistrict=压测区" \
         -d "studentCount=100" \
         -d "initialAgentCount=1" \
+        -d "serviceTeacherUserid=${svc_userid}" \
         -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
         --connect-timeout 10 --max-time 60
 }
@@ -134,34 +139,52 @@ cmd_init() {
     local agent_count=${ARG_N:-5}
     log_title "初始化轮转压测环境"
 
-    # 1. 检查/创建测试活码
+    # 1. 检查测试活码是否已存在
     local qr_id=$(get_test_qr_id)
     if [ -n "$qr_id" ]; then
-        log_info "测试活码已存在: ID=${qr_id}"
-    else
-        log_info "创建测试活码..."
-        local http_code=$(do_create_test_qr)
-        sleep 3
-        qr_id=$(get_test_qr_id)
-        if [ -z "$qr_id" ]; then
-            log_error "创建测试活码失败 (HTTP ${http_code})"
-            exit 1
-        fi
-        log_info "测试活码已创建: ID=${qr_id}"
+        log_info "测试活码已存在: ID=${qr_id}，先清理..."
+        cmd_cleanup
+        sleep 1
     fi
 
-    # 2. 取健康代理
-    log_info "从全局池取 ${agent_count} 个健康代理..."
-    local agents=$(get_healthy_standby "$agent_count")
-    local actual_count=$(echo "$agents" | wc -l)
-    if [ "$actual_count" -lt "$agent_count" ]; then
-        log_warn "可用代理不足: 需要 ${agent_count}, 实际 ${actual_count}"
-        agent_count=$actual_count
+    # 2. 取健康代理（多取 1 个作为服务老师）
+    local need_count=$((agent_count + 1))
+    log_info "从全局池取 ${need_count} 个健康代理 (1 服务老师 + ${agent_count} 接待员)..."
+    local all_agents=$(get_healthy_standby "$need_count")
+    local actual_count=$(echo "$all_agents" | wc -l)
+    if [ "$actual_count" -lt 2 ]; then
+        log_error "可用代理不足: 需要至少 2 个, 实际 ${actual_count}"
+        exit 1
     fi
 
-    # 3. 绑定代理到测试活码（设置 dailyMax=TEST_DAILY_MAX）
-    log_info "绑定代理到测试活码 (dailyMax=${TEST_DAILY_MAX})..."
+    # 第一个作为服务老师
+    local svc_userid=$(echo "$all_agents" | head -1)
+    log_info "服务老师: ${svc_userid}"
+
+    # 3. 创建测试活码（带上服务老师）
+    log_info "创建测试活码..."
+    local http_code=$(do_create_test_qr "$svc_userid")
+    sleep 3
+    qr_id=$(get_test_qr_id)
+    if [ -z "$qr_id" ]; then
+        log_error "创建测试活码失败 (HTTP ${http_code})"
+        # 检查是否有错误消息
+        curl -s -L -c /tmp/cookies.txt "http://localhost:8080/qrcodes/create" \
+            -d "schoolName=${TEST_SCHOOL_NAME}" \
+            -d "schoolId=${TEST_SCHOOL_ID}" \
+            -d "regionCity=压测市" \
+            -d "regionDistrict=压测区" \
+            -d "studentCount=100" \
+            -d "initialAgentCount=1" \
+            -d "serviceTeacherUserid=${svc_userid}" 2>&1 | grep -A2 'alert-danger' | tail -3
+        exit 1
+    fi
+    log_info "测试活码已创建: ID=${qr_id}"
+
+    # 4. 绑定剩余接待员到测试活码
+    local remaining_agents=$(echo "$all_agents" | tail -n +2)
     local added=0
+    log_info "绑定 ${agent_count} 个接待员 (dailyMax=${TEST_DAILY_MAX})..."
     while IFS= read -r userid; do
         [ -z "$userid" ] && continue
         http_code=$(do_add_agent "$qr_id" "$userid")
@@ -172,24 +195,25 @@ cmd_init() {
             log_warn "  ❌ ${userid} (HTTP ${http_code})"
         fi
         sleep 0.3
-    done <<< "$agents"
+    done <<< "$remaining_agents"
 
-    # 4. 更新代理 dailyMax 为测试值
+    # 5. 更新所有代理 dailyMax 为测试值
     log_info "设置代理 dailyMax=${TEST_DAILY_MAX}..."
     mysql_q "
         UPDATE qr_agent SET daily_max = ${TEST_DAILY_MAX}
         WHERE qr_code_id = ${qr_id} AND status = 'active';
     "
     # 同时更新全局池中的 dailyMax
-    while IFS= read -r userid; do
-        [ -z "$userid" ] && continue
-        mysql_q "UPDATE global_agent_pool SET daily_max = ${TEST_DAILY_MAX} WHERE agent_userid = '${userid}';"
-    done <<< "$agents"
+    for uid in $all_agents; do
+        [ -z "$uid" ] && continue
+        mysql_q "UPDATE global_agent_pool SET daily_max = ${TEST_DAILY_MAX} WHERE agent_userid = '${uid}';"
+    done
 
     echo ""
     log_info "初始化完成:"
     log_metric "测试活码 ID" "${qr_id}"
-    log_metric "绑定代理数" "${added}"
+    log_metric "服务老师"   "${svc_userid}"
+    log_metric "接待员数"   "${added}"
     log_metric "dailyMax"   "${TEST_DAILY_MAX}"
     log_metric "预计触发轮转" "每代理接收 ${TEST_DAILY_MAX}+ 客户即满"
 

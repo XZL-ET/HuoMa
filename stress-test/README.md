@@ -1,19 +1,28 @@
 # 活码系统压力测试
 
-## 安全原理
+## ⚠️ 环境隔离
 
-注入 `event_type=__stress_test__` 的消息到 `wecom:callback:stream`，CallbackWorker 走到 `processEvent()` 的 `default` 分支，只打 debug 日志 → ACK，**不调企微 API、不写数据库、不触发打标**。
+| 环境 | 可运行 |
+|------|--------|
+| **生产服务器** | `run_test.sh`（noop 压测）、`agent_bind_stress.sh`（仅只读分析）、`monitor.sh` |
+| **本地开发** | 全部脚本 |
+
+**原因：** `rotation_stress.sh` 和 `agent_bind_stress.sh --execute` 会写入 DB、调用企微 API，与生产数据混在一起。请仅在本地开发环境运行完整压测。
 
 ## 文件说明
 
-| 文件 | 用途 |
-|------|------|
-| `inject_noop.lua` | Redis Lua 脚本，注入 noop 测试消息 |
-| `inject_rotation.lua` | Redis Lua 脚本，注入模拟 add_external_contact 事件 |
-| `monitor.sh` | 实时监控 Stream/JVM/系统指标 |
-| `run_test.sh` | 一键分级压测 (Callback Worker 吞吐) |
-| `agent_bind_stress.sh` | 活码人员上下码压测（添加/移除/轮转审计） |
-| `rotation_stress.sh` | 轮转链路压测（回调→日限→下码→补人→同步） |
+| 文件 | 用途 | 生产可用 |
+|------|------|:--:|
+| `inject_noop.lua` | noop 消息注入（不调企微、不写库） | ✅ |
+| `inject_rotation.lua` | 模拟 add_external_contact 事件注入 | ❌ 本地 |
+| `monitor.sh` | 实时监控 Stream/JVM/系统 | ✅ |
+| `run_test.sh` | Callback Worker 吞吐压测 | ✅ |
+| `agent_bind_stress.sh` | 上下码分析/压测 | ⚠️ 仅只读 |
+| `rotation_stress.sh` | 轮转链路完整压测 | ❌ 本地 |
+
+## 安全原理 (run_test.sh / inject_noop.lua)
+
+注入 `event_type=__stress_test__` 的消息到 `wecom:callback:stream`，CallbackWorker 走到 `processEvent()` 的 `default` 分支，只打 debug 日志 → ACK，**不调企微 API、不写数据库、不触发打标**。
 
 ## 快速开始
 
@@ -76,14 +85,16 @@ redis-cli --eval /opt/HuoMa/stress-test/inject_noop.lua , 1000 0
 
 ## 活码人员上下码压测
 
+> ⚠️ **压测模式（`--execute`）仅限本地开发环境。** 生产服务器只能用只读分析。
+
 专门测试 `addAgent` / `removeAgent` / `takeStandby` 的性能和轮转公平性。
 
 **安全设计：**
-- **只读分析**（默认）—— 纯 SQL 查询，不调 HTTP 接口，零影响
-- **压测模式**（`--execute`）—— 自动创建专用测试活码 `__STRESS_TEST__`，不影响生产活码
+- **只读分析**（默认，生产可用）—— 纯 SQL 查询，不调 HTTP 接口，零影响
+- **压测模式**（`--execute`，仅本地）—— 自动创建专用测试活码 `__STRESS_TEST__`，不影响生产活码
 - **`--cleanup`** —— 测试完一键清理
 
-### 只读分析（安全）
+### 只读分析（生产可用 ✅）
 
 | 场景 | 命令 | 说明 |
 |------|------|------|
@@ -93,7 +104,7 @@ redis-cli --eval /opt/HuoMa/stress-test/inject_noop.lua , 1000 0
 | 活码画像 | `bash agent_bind_stress.sh qr-profile` | 每个活码的人员构成（角色/日限/状态） |
 | 全部分析 | `bash agent_bind_stress.sh all-audit` | 依次执行上述全部 |
 
-### 压测场景（需要 --execute）
+### 压测场景（仅本地 ❌）
 
 | 场景 | 命令 | 说明 |
 |------|------|------|
@@ -103,7 +114,7 @@ redis-cli --eval /opt/HuoMa/stress-test/inject_noop.lua , 1000 0
 | 混合负载 | `bash agent_bind_stress.sh http-mixed --execute 5` | 添加+移除交替 |
 | 全部压测 | `bash agent_bind_stress.sh bench-all --execute` | 依次执行所有压测场景 |
 
-### 管理命令
+### 管理命令（仅本地 ❌）
 
 | 命令 | 说明 |
 |------|------|
@@ -122,16 +133,13 @@ redis-cli --eval /opt/HuoMa/stress-test/inject_noop.lua , 1000 0
 
 ## 轮转链路压测
 
+> ⚠️ **仅限本地开发环境。** 生产服务器禁止运行。
+
 模拟大批用户扫码涌入 → 员工日限满 → 自动下码 → 全局池补人上码 → 企微同步的完整链路。
 
 **链路**: 注入 `add_external_contact` → CallbackWorker → incrementDailyCount → checkAndRotate → expandQrCodeUsers → takeStandby → afterCommit 同步企微
 
-**安全设计**:
-- 所有操作仅针对专用测试活码 (schoolId=`STRESS_TEST_000`)，与生产活码隔离
-- 注入的 `external_userid` 使用 `stress_` 前缀，与真实客户隔离
-- 测试代理 dailyMax 设为 5（小值快速触发轮转），测试完可清理恢复
-
-### 命令
+### 命令（本地环境）
 
 | 命令 | 说明 |
 |------|------|
@@ -155,9 +163,9 @@ redis-cli --eval /opt/HuoMa/stress-test/inject_noop.lua , 1000 0
 1. **轮转触发** — 每个代理满 dailyMax=5 后是否自动触发 expandQrCodeUsers
 2. **公平轮转** — 上码员工不应重复（被取后 sortOrder 移至队尾）
 3. **Redis 锁** — 并发轮转时 `qrCodeId:rotate` 锁是否防住了重复
-4. **企微同步** — afterCommit 同步是否成功（journalctl 查 `syncQrCodeToWechatAsync` 日志）
+4. **企微同步** — afterCommit 同步是否成功
 5. **CallbackWorker** — Pending 是否归零，Stream 不应积压
-6. **池不枯竭** — 1798 个 standby 足够支撑大量轮转
+6. **池不枯竭** — standby 数量足够支撑轮转
 
 ## 清理
 

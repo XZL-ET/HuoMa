@@ -39,6 +39,7 @@
 # ============================================================
 
 set -e
+set +H  # 禁用历史扩展，防止密码中 ! 被解析
 
 # ============================================================
 # 配置
@@ -50,7 +51,9 @@ TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 TEST_SCHOOL_NAME="__STRESS_TEST__"
 TEST_SCHOOL_ID="STRESS_TEST_000"
 
-MYSQL_CMD="mysql -u bookstore -p'<YOUR_DB_PASSWORD>' bookstore_qrcode"
+MYSQL_PASS='<YOUR_DB_PASSWORD>'
+MYSQL_USER='bookstore'
+MYSQL_DB='bookstore_qrcode'
 
 mkdir -p "$RESULT_DIR"
 
@@ -93,11 +96,11 @@ log_title() {
 log_metric() { echo -e "  ${BOLD}$1${NC}: $2"; }
 
 mysql_q() {
-    $MYSQL_CMD -N -e "$1" 2>/dev/null
+    mysql -u "$MYSQL_USER" -p"$MYSQL_PASS" "$MYSQL_DB" -N -e "$1" 2>/dev/null
 }
 
 mysql_table() {
-    $MYSQL_CMD -e "$1" 2>/dev/null
+    mysql -u "$MYSQL_USER" -p"$MYSQL_PASS" "$MYSQL_DB" -e "$1" 2>/dev/null
 }
 
 # 获取测试活码 ID
@@ -136,6 +139,8 @@ do_remove_agent() {
 }
 
 do_create_test_qr() {
+    # 先从池取一个可用 userid 作为服务老师（企微 API 要求至少一个 user）
+    local svc_userid=$(mysql_q "SELECT agent_userid FROM global_agent_pool WHERE status='standby' LIMIT 1;")
     curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${BASE_URL}/qrcodes/create" \
         -d "schoolName=${TEST_SCHOOL_NAME}" \
@@ -144,6 +149,7 @@ do_create_test_qr() {
         -d "regionDistrict=测试区" \
         -d "studentCount=100" \
         -d "initialAgentCount=1" \
+        -d "serviceTeacherUserid=${svc_userid}" \
         -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
         --connect-timeout 10 --max-time 60
 }
