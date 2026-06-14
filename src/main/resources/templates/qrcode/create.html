@@ -150,7 +150,7 @@
         <div class="row g-3 mb-3">
             <div class="col-md-4">
                 <label class="form-label">学校人数
-                    <small class="text-muted fw-normal">— 每120学生配1接待员</small>
+                    <small class="text-muted fw-normal">— 每100学生配1接待员</small>
                 </label>
                 <input type="number" name="studentCount" id="studentCountInput"
                        class="form-control" min="1" max="99999"
@@ -566,7 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
     studentCountInput.addEventListener('input', () => {
         const count = parseInt(studentCountInput.value);
         if (count && count > 0) {
-            const need = Math.max(1, Math.min(100, Math.ceil(count / 120)));
+            const need = Math.max(1, Math.min(100, Math.ceil(count / 100)));
             const svcSelected = svcPicker ? svcPicker.getSelected().length : 0;
             const fromPool = Math.max(0, need - svcSelected);
             previewEl.style.display = '';

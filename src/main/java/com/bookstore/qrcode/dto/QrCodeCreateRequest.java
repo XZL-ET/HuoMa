@@ -32,7 +32,7 @@ public class QrCodeCreateRequest {
     /** 学校所在区/县，用于更精细的区域运营管理 */
     private String regionDistrict;
 
-    /** 学校学生人数，用于自动计算所需接待员数量（每120学生配1人，最少1人，最多100人） */
+    /** 学校学生人数，用于自动计算所需接待员数量（每100学生配1人，最少1人，最多100人） */
     private Integer studentCount;
 
     /** 备注信息，灵活存储额外描述或内部说明 */
