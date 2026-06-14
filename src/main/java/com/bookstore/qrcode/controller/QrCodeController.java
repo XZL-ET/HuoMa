@@ -537,7 +537,9 @@ public class QrCodeController {
      * @return 模板视图名 {@code "qrcode/detail"}
      */
     @GetMapping("/{id}")
-    public String detail(@PathVariable Long id, Model model) {
+    public String detail(@PathVariable Long id,
+                         @RequestParam(defaultValue = "0") int page,
+                         Model model) {
         // ---- 1. 获取活码基本信息 ----
         QrCode qr = qrCodeService.getById(id);
         model.addAttribute("qr", qr);
@@ -553,16 +555,30 @@ public class QrCodeController {
         model.addAttribute("services",
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
 
-        // ---- 3. 获取全局员工池（全部状态） ----
-        List<GlobalAgentPool> backups = qrCodeService.getBackups(id);
-        model.addAttribute("backups", backups);
-        // 3a. 池状态统计
+        // ---- 3. 获取全局员工池（全部状态），分页展示 ----
+        List<GlobalAgentPool> allBackups = qrCodeService.getBackups(id);
+        // 3a. 池状态统计（基于全量数据）
         model.addAttribute("poolStandby",
-            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.standby).count());
+            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.standby).count());
         model.addAttribute("poolFull",
-            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.full).count());
+            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.full).count());
         model.addAttribute("poolBlocked",
-            backups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.blocked).count());
+            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.blocked).count());
+        // 3b. 分页切片（每页 100 人）
+        int pageSize = 100;
+        int totalItems = allBackups.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalItems / pageSize));
+        int clampedPage = Math.max(0, Math.min(page, totalPages - 1));
+        int fromIndex = clampedPage * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, totalItems);
+        model.addAttribute("backups", allBackups.subList(fromIndex, toIndex));
+        model.addAttribute("backupPage", clampedPage);
+        model.addAttribute("backupTotalPages", totalPages);
+        model.addAttribute("backupTotalItems", totalItems);
+        model.addAttribute("backupPageSize", pageSize);
+        // 3c. 全量 userid 集合供弹窗去重用
+        model.addAttribute("allPoolUserids",
+            allBackups.stream().map(GlobalAgentPool::getAgentUserid).toList());
 
         // ---- 4. 加载企业微信全员列表（供前端"新增联系人"/"新增后备"弹窗使用） ----
         // agentNameMap: userid -> 姓名，用于详情页列表展示中文姓名

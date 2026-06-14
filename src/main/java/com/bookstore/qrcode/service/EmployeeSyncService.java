@@ -144,7 +144,7 @@ public class EmployeeSyncService {
      *   <li>巡检发现全局池 standby 不足时自动触发</li>
      * </ul>
      *
-     * <p>新入池员工排在队尾（sortOrder = 当前最大 + 1），日上限默认 200。</p>
+     * <p>新入池员工排在队尾（sortOrder = 当前最大 + 1），日上限默认 100。</p>
      *
      * @return 新增入池的员工数
      */
@@ -210,7 +210,7 @@ public class EmployeeSyncService {
             maxOrder++;
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
-                .dailyMax(200)
+                .dailyMax(100)
                 .sortOrder(maxOrder)
                 .status(GlobalAgentPool.PoolStatus.standby)
                 .build());

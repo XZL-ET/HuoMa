@@ -60,7 +60,7 @@ public class QrCodeCreateRequest {
     private String serviceTeacherUserid;
 
     /**
-     * 服务老师每日添加客户上限，默认值 1000。
+     * 服务老师每日添加客户上限，默认值 30。
      * <p>
      * 当服务老师当日添加客户数达到此上限后，
      * 新增客户将自动分配给后备接待员，避免超负荷服务。

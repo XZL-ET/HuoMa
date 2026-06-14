@@ -88,7 +88,7 @@ public class AgentController {
     /**
      * POST {@code /agents/sync} — 手动触发：从企微通讯录同步新员工到全局池。
      *
-     * <p>已在池中的员工不会重复添加。新员工排在队尾，日上限默认 200。</p>
+     * <p>已在池中的员工不会重复添加。新员工排在队尾，日上限默认 100。</p>
      */
     @PostMapping("/sync")
     public String syncFromWecom(RedirectAttributes redirect) {

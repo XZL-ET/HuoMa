@@ -37,10 +37,10 @@ public class GlobalAgentPool {
     @Column(name = "agent_userid", nullable = false, length = 100, unique = true)
     private String agentUserid;
 
-    /** 全局日接待上限（所有活码合计），默认 200 */
+    /** 全局日接待上限（所有活码合计），默认 100 */
     @Column(name = "daily_max", nullable = false)
     @Builder.Default
-    private Integer dailyMax = 200;
+    private Integer dailyMax = 100;
 
     /** 今日已接待客户数（所有活码合计，由 Redis 同步） */
     @Column(name = "daily_current")

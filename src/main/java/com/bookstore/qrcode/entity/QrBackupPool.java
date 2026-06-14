@@ -67,7 +67,7 @@ public class QrBackupPool {
      */
     @Column(name = "daily_max")
     @Builder.Default
-    private Integer dailyMax = 200;
+    private Integer dailyMax = 100;
 
     /**
      * 后备池状态。

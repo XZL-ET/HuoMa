@@ -54,8 +54,16 @@ public class GlobalAgentPoolService {
      * <p>排除列表用于防止取到已在目标活码上的员工（同一员工可服务于多个活码，
      * 但不能在同一活码上重复添加）。按 sortOrder 升序遍历，返回第一个不在排除列表中的 standby。</p>
      *
+     * <h3>公平轮转</h3>
+     * <p>取走员工后自动将其 sortOrder 推至队尾（max+1），确保下次取人时优先选用
+     * 尚未被取过的员工，避免同一批人反复被选中。</p>
+     *
+     * <h3>懒清理</h3>
+     * <p>遍历过程中遇到不可用员工（离职、企微未激活/禁用、封号/熔断）时，
+     * 自动从全局池物理删除，防止堵塞队首影响后续取人效率。</p>
+     *
      * @param excludeUserids 需要排除的企微 userid 集合，可为 {@code null} 或空集
-     * @return 池中优先级最高的可用 standby 员工，池空或全部被排除时返回 {@code null}
+     * @return 池中优先级最高的可用 standby 员工，池空或全部不可用时返回 {@code null}
      */
     @Transactional
     public GlobalAgentPool takeStandby(Set<String> excludeUserids) {
@@ -71,32 +79,41 @@ public class GlobalAgentPoolService {
             if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
                 continue;
             }
-            // 过滤已离职员工（企微通讯录已标记 inactive）
+            // 过滤已离职员工（企微通讯录已标记 inactive）→ 懒清理出池
             Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
             if (emp != null && !emp.getActive()) {
                 skippedInactive++;
-                log.info("跳过离职员工: userid={}", p.getAgentUserid());
+                poolRepo.delete(p);
+                log.info("跳过并清理离职员工: userid={}", p.getAgentUserid());
                 continue;
             }
-            // 过滤企微侧不可用员工（未激活、已禁用、已离职等，Layer 1 主动防御）
+            // 过滤企微侧不可用员工（未激活、已禁用、已离职等，Layer 1 主动防御）→ 懒清理出池
             if (emp != null && emp.getWechatStatus() != null && emp.getWechatStatus() != 1) {
                 skippedWechatUnavailable++;
-                log.info("跳过企微不可用员工: userid={}, wechatStatus={}",
+                poolRepo.delete(p);
+                log.info("跳过并清理企微不可用员工: userid={}, wechatStatus={}",
                     p.getAgentUserid(), emp.getWechatStatus());
                 continue;
             }
-            // 过滤封号/熔断员工（企微侧已不可用）
+            // 过滤封号/熔断员工（企微侧已不可用）→ 懒清理出池
             Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
             if (agent != null && (
                 agent.getOverallStatus() == Agent.OverallStatus.blocked
                 || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
                 skippedBlocked++;
-                log.info("跳过封号/熔断员工: userid={}", p.getAgentUserid());
+                poolRepo.delete(p);
+                log.info("跳过并清理封号/熔断员工: userid={}", p.getAgentUserid());
                 continue;
             }
+            // 取走后移至队尾，确保下次活码创建时补充到不同员工（公平轮转）
+            int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
+                .map(GlobalAgentPool::getSortOrder).orElse(0);
+            p.setSortOrder(maxOrder + 1);
+            poolRepo.save(p);
+            log.info("全局池取走员工: userid={}, 移至队尾 sortOrder={}", p.getAgentUserid(), p.getSortOrder());
             return p;
         }
-        log.warn("全局员工池无可用 standby（排除={}, 跳过离职={}, 跳过企微不可用={}, 跳过封号/熔断={}）",
+        log.warn("全局员工池无可用 standby（排除={}, 清理离职={}, 清理企微不可用={}, 清理封号/熔断={}）",
             excludeUserids != null ? excludeUserids.size() : 0,
             skippedInactive, skippedWechatUnavailable, skippedBlocked);
         return null;

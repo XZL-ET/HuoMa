@@ -179,7 +179,7 @@
                                 <span th:text="${b.dailyCurrent}"
                                       th:classappend="${b.dailyCurrent >= b.dailyMax ? 'text-danger fw-bold' : ''}"></span>
                             </td>
-                            <td th:text="${b.dailyMax}">200</td>
+                            <td th:text="${b.dailyMax}">100</td>
                             <td>
                                 <span class="badge bg-success" th:if="${b.status.name() == 'standby'}">待命</span>
                                 <span class="badge bg-warning text-dark" th:if="${b.status.name() == 'full'}">已满</span>
@@ -220,6 +220,21 @@
                         </tr>
                     </tbody>
                 </table>
+                <!-- 分页导航 -->
+                <div th:if="${backupTotalPages > 1}" class="d-flex justify-content-between align-items-center mt-2">
+                    <small class="text-muted">共 <span th:text="${backupTotalItems}"></span> 人，每页 <span th:text="${backupPageSize}"></span> 人</small>
+                    <nav>
+                        <ul class="pagination pagination-sm mb-0">
+                            <li class="page-item" th:classappend="${backupPage == 0 ? 'disabled' : ''}">
+                                <a class="page-link" th:href="@{/qrcodes/{id}(id=${qr.id}, page=${backupPage - 1})}">上一页</a>
+                            </li>
+                            <li class="page-item disabled"><span class="page-link" th:text="${backupPage + 1} + ' / ' + ${backupTotalPages}"></span></li>
+                            <li class="page-item" th:classappend="${backupPage >= backupTotalPages - 1 ? 'disabled' : ''}">
+                                <a class="page-link" th:href="@{/qrcodes/{id}(id=${qr.id}, page=${backupPage + 1})}">下一页</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
             </div>
         </div>
 
@@ -276,11 +291,9 @@
                         <input type="text" id="backupSearchInput" class="form-control form-control-sm"
                                placeholder="🔍 搜索姓名或账号..." oninput="filterBackupCandidates()">
                     </div>
-                    <!-- 已在全局池中的员工列表提示 -->
-                    <div th:if="${!backups.isEmpty()}" class="alert alert-info py-1 small mb-2">
-                        已在全局池（无法重复添加）：
-                        <span th:each="b,stat : ${backups}"
-                              th:text="${agentNameMap.getOrDefault(b.agentUserid, b.agentUserid) + (stat.last ? '' : '、')}"></span>
+                    <!-- 已在全局池中的员工数量提示 -->
+                    <div th:if="${!allPoolUserids.isEmpty()}" class="alert alert-info py-1 small mb-2">
+                        已在全局池：<strong th:text="${allPoolUserids.size()}"></strong> 人（无法重复添加）
                     </div>
                     <!-- 所有员工列表，可点击加入后备池 -->
                     <div style="max-height: 400px; overflow-y: auto;">
@@ -299,7 +312,7 @@
                                         <form th:action="@{/qrcodes/{id}/backups(id=${qr.id})}" method="post" class="d-inline">
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success"
-                                                    th:disabled="${#lists.contains(backups.![agentUserid], u.userid)}">
+                                                    th:disabled="${#lists.contains(allPoolUserids, u.userid)}">
                                                 <i class="bi bi-plus-circle"></i> 加入后备
                                             </button>
                                         </form>

@@ -51,7 +51,7 @@ public class QrAgent {
     private AgentRole role = AgentRole.receptionist;
 
     /**
-     * 日接待总上限（含接待与服务），默认 200。
+     * 日接待总上限（含接待与服务），默认 100。
      * <p>
      * 当 {@code role = receptionist} 时，此字段控制当天最多可接待的客户总数；
      * 当 {@code role = service} 时，此字段作为总配额兜底（但通常由 serviceDailyMax 控制）。
@@ -59,7 +59,7 @@ public class QrAgent {
      */
     @Column(name = "daily_max", nullable = false)
     @Builder.Default
-    private Integer dailyMax = 200;
+    private Integer dailyMax = 100;
 
     /**
      * 当日已接待数（计数器），默认 0。
@@ -81,8 +81,8 @@ public class QrAgent {
      *   <li>{@code serviceDailyMax} — 服务上限，仅控制「服务」场景的配额；
      *       当此值为 null 时，服务场景复用 {@code dailyMax} 作为上限。</li>
      * </ul>
-     * 例如：某员工 dailyMax=200，serviceDailyMax=50，表示当天最多服务 50 个客户，
-     * 但总的（含接待）不超过 200。
+     * 例如：某员工 dailyMax=100，serviceDailyMax=30，表示当天最多服务 30 个客户，
+     * 但总的（含接待）不超过 100。
      * </p>
      */
     @Column(name = "service_daily_max")

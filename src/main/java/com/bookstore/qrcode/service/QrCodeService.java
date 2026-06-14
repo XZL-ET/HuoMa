@@ -650,7 +650,7 @@ public class QrCodeService {
             .qrCodeId(qrCodeId)
             .agentUserid(agentUserid)
             .role(QrAgent.AgentRole.receptionist)   // 手动添加的默认为接待员角色
-            .dailyMax(200)                            // 默认日接待上限 200 人
+            .dailyMax(100)                            // 默认日接待上限 100 人
             .sortOrder(maxOrder + 1)
             .status(QrAgent.AgentStatus.active)       // 添加即启用
             .build());
@@ -1074,7 +1074,7 @@ public class QrCodeService {
 
             // ① 确保在职继承目标在全局池中
             if (req.getTransferTargetUserid() != null && !req.getTransferTargetUserid().isBlank()) {
-                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 200);
+                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 100);
             }
 
             // ② 初始上码员工：优先使用 initialAgentUserids 列表
@@ -1107,12 +1107,13 @@ public class QrCodeService {
 
             // 确保指定员工在全局池中，并写入 QrAgent
             int defaultDailyMax = req.getServiceDailyMax() != null
-                ? req.getServiceDailyMax() : 200;
+                ? req.getServiceDailyMax() : 30;
+            // 手动指定的初始员工作为「服务老师」，其余从全局池补的作为「接待员」
             for (String uid : initialUserids) {
                 poolService.ensureInPool(uid, defaultDailyMax);
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(uid)
-                    .role(QrAgent.AgentRole.receptionist)
+                    .role(QrAgent.AgentRole.service)
                     .dailyMax(defaultDailyMax)
                     .sortOrder(sortOrder++)
                     .status(QrAgent.AgentStatus.active).build());
