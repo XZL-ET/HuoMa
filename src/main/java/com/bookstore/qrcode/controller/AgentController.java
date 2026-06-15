@@ -64,15 +64,17 @@ public class AgentController {
         long fullCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.full);
         long blockedCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.blocked);
 
-        // ── 构建员工姓名映射（Employee 表 + Agent 表双源互补）──
-        // Employee 表每 30 分钟从企微通讯录同步，姓名最新最全
+        // ── 构建员工姓名映射 + Employee/Agent 快照（供模板展示异常状态）──
         Map<String, String> agentNameMap = new LinkedHashMap<>();
+        Map<String, Employee> employeeMap = new LinkedHashMap<>();
         for (Employee emp : employeeRepo.findAll()) {
             agentNameMap.putIfAbsent(emp.getUserid(), emp.getName());
+            employeeMap.putIfAbsent(emp.getUserid(), emp);
         }
-        // Agent 表补漏：手工创建的员工可能不在 Employee 表中
+        Map<String, Agent> agentMap = new LinkedHashMap<>();
         for (Agent agent : agentRepo.findAll()) {
             agentNameMap.putIfAbsent(agent.getUserid(), agent.getName());
+            agentMap.putIfAbsent(agent.getUserid(), agent);
         }
 
         // ── 状态筛选参数解析 ──
@@ -135,9 +137,52 @@ public class AgentController {
             }
         }
 
+        // ── 构建异常状态标签映射（userid → 异常描述）──
+        // 优先级：Agent blocked/melted > Agent warning > Employee wechatStatus 异常
+        Map<String, String> agentAnomalyMap = new LinkedHashMap<>();
+        Map<String, String> agentAnomalyClassMap = new LinkedHashMap<>(); // bg-danger / bg-warning
+        for (GlobalAgentPool p : poolPage.getContent()) {
+            String uid = p.getAgentUserid();
+            Agent a = agentMap.get(uid);
+            Employee emp = employeeMap.get(uid);
+
+            if (a != null && a.getOverallStatus() == Agent.OverallStatus.blocked) {
+                String reason = a.getStatusReason();
+                if (reason != null && reason.contains("40098")) {
+                    agentAnomalyMap.put(uid, "未实名");
+                } else if (reason != null && reason.contains("41054")) {
+                    agentAnomalyMap.put(uid, "未加入组织");
+                } else {
+                    agentAnomalyMap.put(uid, "已停用");
+                }
+                agentAnomalyClassMap.put(uid, "bg-danger");
+            } else if (a != null && a.getOverallStatus() == Agent.OverallStatus.melted) {
+                agentAnomalyMap.put(uid, "已熔断");
+                agentAnomalyClassMap.put(uid, "bg-danger");
+            } else if (a != null && a.getOverallStatus() == Agent.OverallStatus.warning) {
+                agentAnomalyMap.put(uid, "预警");
+                agentAnomalyClassMap.put(uid, "bg-warning text-dark");
+            } else if (emp != null && emp.getWechatStatus() != null) {
+                int ws = emp.getWechatStatus();
+                if (ws == 5) {
+                    agentAnomalyMap.put(uid, "已离职");
+                    agentAnomalyClassMap.put(uid, "bg-danger");
+                } else if (ws == 4) {
+                    agentAnomalyMap.put(uid, "未激活");
+                    agentAnomalyClassMap.put(uid, "bg-warning text-dark");
+                } else if (ws == 2) {
+                    agentAnomalyMap.put(uid, "已禁用");
+                    agentAnomalyClassMap.put(uid, "bg-warning text-dark");
+                }
+                // ws == 1 (已激活) → 不添加异常标签
+            }
+        }
+
         model.addAttribute("poolPage", poolPage);
         model.addAttribute("agentNameMap", agentNameMap);
         model.addAttribute("agentQrNames", agentQrNames);
+        model.addAttribute("agentAnomalyMap", agentAnomalyMap);
+        model.addAttribute("agentAnomalyClassMap", agentAnomalyClassMap);
         model.addAttribute("standbyCount", standbyCount);
         model.addAttribute("fullCount", fullCount);
         model.addAttribute("blockedCount", blockedCount);

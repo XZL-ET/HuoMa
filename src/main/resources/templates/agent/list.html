@@ -82,6 +82,7 @@
                         <th>使用率</th>
                         <th>优先级</th>
                         <th>状态</th>
+                        <th>异常</th>
                         <th>所在活码</th>
                     </tr>
                 </thead>
@@ -113,11 +114,19 @@
                         </td>
                         <!-- 优先级 -->
                         <td><span class="badge bg-light text-dark" th:text="'#' + ${p.sortOrder}"></span></td>
-                        <!-- 状态 -->
+                        <!-- 池状态 -->
                         <td>
                             <span class="badge"
                                   th:classappend="${p.status.name() == 'standby' ? 'bg-success' : (p.status.name() == 'full' ? 'bg-warning text-dark' : 'bg-danger')}"
                                   th:text="${p.status.name() == 'standby' ? '待命' : (p.status.name() == 'full' ? '已满' : '暂停')}"></span>
+                        </td>
+                        <!-- 异常状态（企微侧不可用 / 未实名 / 未加入组织 等） -->
+                        <td>
+                            <span th:if="${agentAnomalyMap.containsKey(p.agentUserid)}"
+                                  class="badge" th:classappend="${agentAnomalyClassMap.get(p.agentUserid)}"
+                                  th:text="${agentAnomalyMap.get(p.agentUserid)}"></span>
+                            <span th:unless="${agentAnomalyMap.containsKey(p.agentUserid)}"
+                                  class="text-muted small">-</span>
                         </td>
                         <!-- 所在活码列表 -->
                         <td>
