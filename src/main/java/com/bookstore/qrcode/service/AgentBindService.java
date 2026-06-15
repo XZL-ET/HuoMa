@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -93,14 +94,24 @@ public class AgentBindService {
         redisTemplate.expire(key, getSecondsUntilMidnight(), TimeUnit.SECONDS);
         redisTemplate.expire(totalKey, getSecondsUntilMidnight(), TimeUnit.SECONDS);
 
-        // 同步到 DB：更新 qr_agent.daily_current 字段，用于系统重启后恢复计数
-        QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), userId).orElse(null);
-        if (qa != null) {
-            qa.setDailyCurrent((int) newCount);
-            qrAgentRepo.save(qa);
+        // 同步到 DB（best-effort，失败不影响阈值判断）
+        // Redis 是阈值判断的唯一数据源，DB 仅用于重启后恢复计数
+        try {
+            QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), userId).orElse(null);
+            if (qa != null) {
+                qa.setDailyCurrent((int) newCount);
+                qrAgentRepo.save(qa);
+            }
+        } catch (Exception e) {
+            log.error("同步 qr_agent.daily_current 失败: userId={}, qrId={}, count={}",
+                userId, qr.getId(), newCount, e);
         }
-        // 同步全局池的 daily_current
-        poolService.updateDailyCurrent(userId, (int) totalNew);
+        try {
+            poolService.updateDailyCurrent(userId, (int) totalNew);
+        } catch (Exception e) {
+            log.error("同步 global_agent_pool.daily_current 失败: userId={}, count={}",
+                userId, totalNew, e);
+        }
 
         // 递增后立即检查全局阈值，若达到日限则触发轮换
         // 通过 proxy 调用确保 @Transactional 生效
@@ -172,8 +183,9 @@ public class AgentBindService {
                                   QrCode qr, GlobalAgentPool fullPool) {
         // 与 preActivateBackup 共用同一把锁，防止并发时重复添加同一员工
         String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
+        String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
+            .setIfAbsent(lockKey, lockValue, Duration.ofSeconds(30));
         if (Boolean.FALSE.equals(locked)) {
             log.debug("轮换进行中（扩容等待），跳过: qr={}", qrCodeId);
             return;
@@ -244,7 +256,11 @@ public class AgentBindService {
 
             log.info("扩容完成: 活码{} 员工{}下码, {}上码", qrCodeId, fullUserId, backupUserid);
         } finally {
-            redisTemplate.delete(lockKey);
+            // 仅当锁仍属于当前线程时才释放，防止锁过期后误删其他线程持有的锁
+            String current = redisTemplate.opsForValue().get(lockKey);
+            if (lockValue.equals(current)) {
+                redisTemplate.delete(lockKey);
+            }
         }
     }
 
@@ -263,8 +279,9 @@ public class AgentBindService {
     public void preActivateBackup(Long qrCodeId, QrCode qr) {
         // 与 expandQrCodeUsers 共用同一把锁，防止并发时重复添加同一员工
         String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
+        String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(lockKey, "1", Duration.ofSeconds(10));
+            .setIfAbsent(lockKey, lockValue, Duration.ofSeconds(30));
         if (Boolean.FALSE.equals(locked)) {
             log.debug("轮换进行中（预激活等待），跳过: qr={}", qrCodeId);
             return;
@@ -310,7 +327,11 @@ public class AgentBindService {
 
             log.info("预激活: 活码{} 加入 {}", qrCodeId, backupUserid);
         } finally {
-            redisTemplate.delete(lockKey);
+            // 仅当锁仍属于当前线程时才释放，防止锁过期后误删其他线程持有的锁
+            String current = redisTemplate.opsForValue().get(lockKey);
+            if (lockValue.equals(current)) {
+                redisTemplate.delete(lockKey);
+            }
         }
     }
 
