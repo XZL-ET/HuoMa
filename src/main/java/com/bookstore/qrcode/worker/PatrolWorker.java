@@ -44,6 +44,8 @@ public class PatrolWorker {
     private final RateLimiterService rateLimiterService;
     private final MessageGuardService messageGuardService;
     private final com.bookstore.qrcode.service.EmployeeSyncService employeeSyncService;
+    private final EmployeeRepository employeeRepo;
+    private final AgentRepository agentRepo;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
@@ -58,7 +60,11 @@ public class PatrolWorker {
     public void patrol() {
         log.debug("定时巡检开始");
 
-        // 1. 检查全局池余量
+        // 0. 池健康扫描 — 提前清理已离职/未激活/已禁用/封号/熔断的员工，
+        //    避免阻塞队首导致后续 takeStandby 遍历浪费
+        cleanUnhealthyFromPool();
+
+        // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
         checkGlobalPoolLow();
 
         // 2. 检查全部高负载活码
@@ -78,6 +84,47 @@ public class PatrolWorker {
         }
 
         log.debug("定时巡检完成");
+    }
+
+    /**
+     * 池健康扫描 — 提前清理企微侧已不可用的员工。
+     *
+     * <p>扫描全局池所有记录，将以下异常员工物理删除：
+     * <ul>
+     *   <li>Employee.active = false（已离职）</li>
+     *   <li>Employee.wechatStatus ≠ 1（未激活 / 已禁用 / 已离职）</li>
+     *   <li>Agent.overallStatus = blocked / melted（封号 / 熔断）</li>
+     * </ul>
+     *
+     * <p><b>与 takeStandby 懒清理的关系：</b>此方法提前发现并移除异常员工，
+     * 避免队首被堵塞，每次 takeStandby 都要遍历到他们才发现不可用。
+     * blocked/melted 的员工在 {@code blockAgentForWechatIssue} 中已被同步清理，
+     * 此处作为兜底覆盖漏网之鱼。</p>
+     *
+     * <p><b>风险：</b>纯读操作（不调企微 API），无网络/限频风险。
+     * 删除后可能触发下游 {@link #checkGlobalPoolLow} 自动补充。</p>
+     */
+    private void cleanUnhealthyFromPool() {
+        List<GlobalAgentPool> all = poolRepo.findAll();
+        int removed = 0;
+        for (GlobalAgentPool p : all) {
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null && (!emp.getActive()
+                || (emp.getWechatStatus() != null && emp.getWechatStatus() != 1))) {
+                poolRepo.delete(p);
+                removed++;
+                continue;
+            }
+            Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
+            if (agent != null && (agent.getOverallStatus() == Agent.OverallStatus.blocked
+                || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
+                poolRepo.delete(p);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            log.info("池健康扫描：清理 {} 个异常员工", removed);
+        }
     }
 
     /**
