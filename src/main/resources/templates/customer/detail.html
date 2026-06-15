@@ -24,10 +24,11 @@
                     <div class="col-md-6"><strong>接待员：</strong><span th:text="${agentNameMap.getOrDefault(customer.addedAgent, customer.addedAgent ?: '-')}">-</span></div>
                     <div class="col-md-6"><strong>服务老师：</strong><span th:text="${agentNameMap.getOrDefault(customer.currentAgent, customer.currentAgent ?: '-')}">-</span></div>
                     <div class="col-md-6"><strong>学校：</strong><span th:text="${schoolNameMap.getOrDefault(customer.schoolId, customer.schoolId ?: '-')}">-</span></div>
-                    <div class="col-md-6"><strong>来源活码：</strong><span th:text="${customer.sourceQrId != null ? qrNameMap.getOrDefault(customer.sourceQrId, customer.sourceQrId.toString()) : '-'}">-</span></div>
+                    <div class="col-md-6"><strong>来源活码：</strong><span th:text="${customer.sourceQrId != null ? qrNameMap.getOrDefault(customer.sourceQrId, '活码#' + customer.sourceQrId) : '-'}">-</span></div>
                     <div class="col-md-6"><strong>状态：</strong>
-                        <span class="badge" th:classappend="${customer.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
-                              th:text="${customer.status.name()}"></span>
+                        <span class="badge"
+                              th:classappend="${customer.status != null && customer.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
+                              th:text="${customer.status != null ? customer.status.name() : '未知'}"></span>
                     </div>
                 </div>
             </div>

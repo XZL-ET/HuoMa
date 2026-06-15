@@ -133,4 +133,11 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      * @return 该活码在指定时间范围内添加的客户数
      */
     long countBySourceQrIdAndAddTimeBetween(Long sourceQrId, LocalDateTime start, LocalDateTime end);
+
+    /**
+     * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
+     * 仅返回需要修复的记录，避免全表扫描。
+     */
+    @Query("SELECT c FROM Customer c WHERE c.name = '未知' OR c.unionid IS NULL OR c.avatar IS NULL")
+    Page<Customer> findNeedingRepair(Pageable pageable);
 }

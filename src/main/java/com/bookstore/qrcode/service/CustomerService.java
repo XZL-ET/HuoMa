@@ -282,10 +282,11 @@ public class CustomerService {
      * @return 今日新增客户数量
      */
     public long countToday() {
-        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
-        LocalDateTime todayEnd = LocalDateTime.now();
+        // 单次捕获 now，避免两次调用跨午夜导致统计不准；同时截断纳秒确保包含午夜整点记录
+        LocalDateTime now = LocalDateTime.now().withNano(0);
+        LocalDateTime todayStart = now.withHour(0).withMinute(0).withSecond(0);
         // 仅统计 active 客户，排除已删除的记录
-        return customerRepo.countByAddTimeBetweenAndStatus(todayStart, todayEnd,
+        return customerRepo.countByAddTimeBetweenAndStatus(todayStart, now,
             Customer.CustomerStatus.active);
     }
 
@@ -315,14 +316,21 @@ public class CustomerService {
         int batchSize = 50;
         int page = 0;
         int repaired = 0;
+        int apiCalls = 0;
         org.springframework.data.domain.Page<Customer> customerPage;
         do {
-            customerPage = customerRepo.findAll(
+            customerPage = customerRepo.findNeedingRepair(
                 org.springframework.data.domain.PageRequest.of(page++, batchSize));
             for (Customer c : customerPage.getContent()) {
                 boolean changed = false;
                 try {
+                    // 企微 API 限频约 600 次/分钟，每 100 次调用后休息 10 秒
+                    if (apiCalls > 0 && apiCalls % 100 == 0) {
+                        try { Thread.sleep(10_000); }
+                        catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                    }
                     JsonNode detail = wecomApi.getExternalContact(c.getExternalUserid());
+                    apiCalls++;
                     if (detail.has("external_contact")) {
                         JsonNode ec = detail.get("external_contact");
                         if (c.getUnionid() == null && ec.has("unionid") && !ec.get("unionid").isNull()) {
@@ -351,7 +359,7 @@ public class CustomerService {
             entityManager.clear();
         } while (customerPage.hasNext());
 
-        log.info("客户数据修复完成: 修复{}条", repaired);
+        log.info("客户数据修复完成: 修复{}条, API调用{}次", repaired, apiCalls);
         return repaired;
     }
 

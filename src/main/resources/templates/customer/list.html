@@ -17,13 +17,15 @@
             <button class="btn btn-outline-success btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#testCustomerForm">
                 ➕ 快速添加测试客户
             </button>
-            <form method="post" th:action="@{/customers/sync-agent-names}" style="display:inline">
+            <form method="post" th:action="@{/customers/sync-agent-names}" style="display:inline"
+                  onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='同步中...'">
                 <button type="submit" class="btn btn-outline-secondary btn-sm">🔄 同步员工姓名</button>
             </form>
-            <form method="post" th:action="@{/customers/repair-data}" style="display:inline">
+            <form method="post" th:action="@{/customers/repair-data}" style="display:inline"
+                  onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='修复中...'">
                 <button type="submit" class="btn btn-outline-warning btn-sm">🔧 修复客户数据</button>
             </form>
-            <a th:href="@{/customers/export(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status})}" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
+            <a th:href="@{/customers/export(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},startTime=${startTime},endTime=${endTime})}" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
         </div>
     </div>
 
@@ -66,7 +68,7 @@
     <div class="card p-3 mb-3">
         <form class="row g-2" method="get" th:action="@{/customers}">
             <!-- 关键词搜索（昵称/手机号） -->
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <input type="text" name="keyword" class="form-control" placeholder="搜索昵称/手机"
                        th:value="${keyword}">
             </div>
@@ -91,12 +93,23 @@
                 </datalist>
             </div>
             <!-- 状态筛选 -->
-            <div class="col-md-2">
+            <div class="col-md-1">
                 <select name="status" class="form-select">
                     <option value="">全部状态</option>
                     <option value="active" th:selected="${status == 'active'}">活跃</option>
                     <option value="deleted" th:selected="${status == 'deleted'}">已删除</option>
                 </select>
+            </div>
+            <!-- 时间范围筛选 -->
+            <div class="col-md-2">
+                <input type="datetime-local" name="startTime" class="form-control form-control-sm"
+                       th:value="${startTime != null ? #temporals.format(startTime, 'yyyy-MM-dd''T''HH:mm') : ''}"
+                       placeholder="开始时间">
+            </div>
+            <div class="col-md-2">
+                <input type="datetime-local" name="endTime" class="form-control form-control-sm"
+                       th:value="${endTime != null ? #temporals.format(endTime, 'yyyy-MM-dd''T''HH:mm') : ''}"
+                       placeholder="结束时间">
             </div>
             <div class="col-md-1">
                 <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
@@ -136,10 +149,11 @@
                         <td th:text="${agentNameMap.getOrDefault(c.currentAgent, c.currentAgent ?: '-')}"></td>
                         <!-- 学校名称，通过 schoolNameMap 转换 -->
                         <td th:text="${schoolNameMap.getOrDefault(c.schoolId, c.schoolId ?: '-')}"></td>
-                        <!-- 状态徽标：活跃为绿色，已删除为灰色 -->
+                        <!-- 状态徽标：活跃为绿色，已删除为灰色；增加 null 防护 -->
                         <td>
-                            <span class="badge" th:classappend="${c.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
-                                  th:text="${c.status.name() == 'active' ? '活跃' : '已删除'}"></span>
+                            <span class="badge"
+                                  th:classappend="${c.status != null && c.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
+                                  th:text="${c.status != null ? (c.status.name() == 'active' ? '活跃' : '已删除') : '未知'}"></span>
                         </td>
                         <td>
                             <a th:href="@{/customers/{id}(id=${c.id})}" class="btn btn-sm btn-outline-secondary">详情</a>
@@ -157,18 +171,26 @@
     <!-- 分页导航，仅当总页数大于 1 时显示 -->
     <nav th:if="${customers.totalPages > 1}" class="mt-3">
         <ul class="pagination justify-content-center">
-            <!-- 上一页按钮，首页时禁用 -->
+            <!-- 上一页按钮：首页时隐藏链接而非仅 disabled 样式，防止点击产生 page=-1 -->
             <li class="page-item" th:classappend="${customers.first ? 'disabled' : ''}">
-                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number - 1})}">上一页</a>
+                <th:block th:if="${!customers.first}">
+                    <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},startTime=${startTime},endTime=${endTime},page=${customers.number - 1})}">上一页</a>
+                </th:block>
+                <th:block th:if="${customers.first}">
+                    <span class="page-link">上一页</span>
+                </th:block>
             </li>
             <!-- 页码跳转表单：GET 提交到 /customers，携带筛选条件 + 页码 -->
             <li class="page-item">
                 <form method="get" th:action="@{/customers}" class="page-link border-0 bg-transparent" style="display:inline-flex;align-items:center;gap:4px"
-                      onsubmit="this.page.value=parseInt(this.goto.value)-1">
+                      th:attr="data-max-page=${customers.totalPages}"
+                      onsubmit="var v=parseInt(this.goto.value);var m=parseInt(this.getAttribute('data-max-page'));if(isNaN(v)||v<1)v=1;if(v>m)v=m;this.page.value=v-1">
                     <input type="hidden" name="keyword" th:value="${keyword}">
                     <input type="hidden" name="schoolId" th:value="${schoolId}">
                     <input type="hidden" name="currentAgent" th:value="${currentAgent}">
                     <input type="hidden" name="status" th:value="${status}">
+                    <input type="hidden" name="startTime" th:value="${startTime != null ? #temporals.format(startTime, 'yyyy-MM-dd''T''HH:mm') : ''}">
+                    <input type="hidden" name="endTime" th:value="${endTime != null ? #temporals.format(endTime, 'yyyy-MM-dd''T''HH:mm') : ''}">
                     <input type="hidden" name="page" value="0">
                     <span>第</span>
                     <input type="number" name="goto" min="1" th:max="${customers.totalPages}"
@@ -178,10 +200,19 @@
                     <span>/ <span th:text="${customers.totalPages}"></span> 页</span>
                     <button type="submit" class="btn btn-outline-secondary btn-sm" style="padding:2px 8px; height:28px;">跳转</button>
                 </form>
+                <!-- JS 禁用时的后备：纯链接方式跳页 -->
+                <noscript>
+                    <span class="text-muted small ms-2">（需启用 JS 跳页，或使用上一页/下一页）</span>
+                </noscript>
             </li>
-            <!-- 下一页按钮，末页时禁用 -->
+            <!-- 下一页按钮：末页时隐藏链接 -->
             <li class="page-item" th:classappend="${customers.last ? 'disabled' : ''}">
-                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number + 1})}">下一页</a>
+                <th:block th:if="${!customers.last}">
+                    <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},startTime=${startTime},endTime=${endTime},page=${customers.number + 1})}">下一页</a>
+                </th:block>
+                <th:block th:if="${customers.last}">
+                    <span class="page-link">下一页</span>
+                </th:block>
             </li>
         </ul>
     </nav>

@@ -13,6 +13,7 @@ import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -42,6 +44,7 @@ import java.util.stream.Collectors;
  * @author Bookstore Dev
  * @since 1.0.0
  */
+@Slf4j
 @Controller
 @RequestMapping("/customers")
 @RequiredArgsConstructor
@@ -53,6 +56,11 @@ public class CustomerController {
     private final QrCodeRepository qrCodeRepo;
     private final TagRepository tagRepo;
     private final WecomApiClient wecomApiClient;
+
+    // 企微员工名单缓存（避免每次请求都调企微 API）
+    private volatile Map<String, String> cachedAgentNameMap;
+    private volatile Instant agentNameCacheExpiry = Instant.EPOCH;
+    private static final long AGENT_NAME_CACHE_TTL_SEC = 300; // 5 分钟
 
     /**
      * GET {@code /customers}
@@ -96,14 +104,23 @@ public class CustomerController {
         if (currentAgent != null && currentAgent.isBlank()) currentAgent = null;
         if (status != null && status.isBlank()) status = null;
 
+        // ---- 页码/每页条数校验，防止非法值导致 PageRequest 抛异常 ----
+        if (page < 0) page = 0;
+        if (size < 1) size = 20;
+        if (size > 200) size = 200; // 单页上限 200 条
+
         // ---- 智能输入转换：学校名 → schoolId，员工名 → userid ----
         // 用户可能输入学校名（如"前进小学"）而非 schoolId（如"SCH20260..."），
         // 也可能是 userid 格式。优先精确匹配，失败时模糊搜索学校名。
+        // 使用缓存避免重复 findAll()
+        List<QrCode> allQrCodes = qrCodeRepo.findAll();
+        List<Agent> allAgents = agentRepo.findAll();
+
         if (schoolId != null) {
-            schoolId = resolveSchoolId(schoolId);
+            schoolId = resolveSchoolId(schoolId, allQrCodes);
         }
         if (currentAgent != null) {
-            currentAgent = resolveAgentUserid(currentAgent);
+            currentAgent = resolveAgentUserid(currentAgent, allAgents);
         }
 
         // ---- 状态参数解析 ----
@@ -123,38 +140,24 @@ public class CustomerController {
         model.addAttribute("schoolId", schoolId);
         model.addAttribute("currentAgent", currentAgent);
         model.addAttribute("status", status);
+        model.addAttribute("startTime", startTime);
+        model.addAttribute("endTime", endTime);
 
         // ---- 统计数据 ----
         model.addAttribute("total", customerService.countTotal());
         model.addAttribute("todayCount", customerService.countToday());
 
         // ---- 员工列表（用于下拉筛选） ----
-        model.addAttribute("agents", agentRepo.findAll());
+        model.addAttribute("agents", allAgents);
         // 活码列表（用于下拉筛选）
-        model.addAttribute("qrCodes", qrCodeRepo.findAll());
+        model.addAttribute("qrCodes", allQrCodes);
 
-        // ---- 构建 userid → 姓名 映射 ----
-        // 优先从企业微信 API 获取员工姓名，确保名称与企微一致
-        Map<String, String> agentNameMap = new HashMap<>();
-        try {
-            JsonNode result = wecomApiClient.getUserSimplelist();
-            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                for (JsonNode u : result.get("userlist")) {
-                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
-                }
-            }
-        } catch (Exception ignored) {
-            // API 调用失败（网络/超时/权限），静默处理
-        }
-        // fallback：企微 API 未返回的员工，从本地 Agent 表补充
-        for (Agent a : agentRepo.findAll()) {
-            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
-        }
+        // ---- 构建 userid → 姓名 映射（带缓存） ----
+        Map<String, String> agentNameMap = getCachedAgentNameMap(allAgents);
         model.addAttribute("agentNameMap", agentNameMap);
 
-        // ---- 构建 schoolId → 学校名 映射 ----
-        // 用于在列表中展示学校名称而非 ID
-        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+        // ---- 构建 schoolId → 学校名 映射（复用已加载的 allQrCodes） ----
+        Map<String, String> schoolNameMap = allQrCodes.stream()
             .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
         model.addAttribute("schoolNameMap", schoolNameMap);
 
@@ -193,29 +196,24 @@ public class CustomerController {
         }
         model.addAttribute("tagNameMap", tagNameMap);
 
+        // 复用缓存，避免重复调企微 API
+        List<QrCode> allQrCodes = qrCodeRepo.findAll();
+        List<Agent> allAgents = agentRepo.findAll();
+
         // 构建 schoolId → 学校名 映射
-        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+        Map<String, String> schoolNameMap = allQrCodes.stream()
             .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
         model.addAttribute("schoolNameMap", schoolNameMap);
 
-        // 活码列表，用于展示来源活码信息
-        Map<Long, String> qrNameMap = qrCodeRepo.findAll().stream()
-            .collect(Collectors.toMap(QrCode::getId, QrCode::getSchoolName, (a, b) -> a));
+        // 活码列表，用于展示来源活码信息（显示为 "学校名(ID)" 格式，避免与学校字段重复）
+        Map<Long, String> qrNameMap = allQrCodes.stream()
+            .collect(Collectors.toMap(QrCode::getId,
+                q -> q.getSchoolName() + " (" + q.getSchoolId() + ")",
+                (a, b) -> a));
         model.addAttribute("qrNameMap", qrNameMap);
 
-        // 构建 userid → 姓名 映射，优先从企微 API 获取
-        Map<String, String> agentNameMap = new HashMap<>();
-        try {
-            JsonNode result = wecomApiClient.getUserSimplelist();
-            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                for (JsonNode u : result.get("userlist")) {
-                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
-                }
-            }
-        } catch (Exception ignored) {}
-        for (Agent a : agentRepo.findAll()) {
-            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
-        }
+        // 构建 userid → 姓名 映射（带缓存）
+        Map<String, String> agentNameMap = getCachedAgentNameMap(allAgents);
         model.addAttribute("agentNameMap", agentNameMap);
 
         return "customer/detail";
@@ -225,6 +223,7 @@ public class CustomerController {
      * GET {@code /customers/export}
      * <p>
      * 导出客户列表为 CSV 文件。支持与列表页相同的筛选条件。
+     * 采用分批查询写入，避免一次性加载全部数据导致 OOM。
      * 输出 UTF-8 BOM 头确保 Excel 正确识别中文。
      * </p>
      *
@@ -247,8 +246,10 @@ public class CustomerController {
         if (status != null && status.isBlank()) status = null;
 
         // 智能输入转换（同 list 方法）
-        if (schoolId != null) schoolId = resolveSchoolId(schoolId);
-        if (currentAgent != null) currentAgent = resolveAgentUserid(currentAgent);
+        List<QrCode> allQrCodes = qrCodeRepo.findAll();
+        List<Agent> allAgents = agentRepo.findAll();
+        if (schoolId != null) schoolId = resolveSchoolId(schoolId, allQrCodes);
+        if (currentAgent != null) currentAgent = resolveAgentUserid(currentAgent, allAgents);
 
         Customer.CustomerStatus cs = null;
         if (status != null && !status.isEmpty()) {
@@ -256,27 +257,10 @@ public class CustomerController {
             catch (IllegalArgumentException ignored) {}
         }
 
-        // 不限制条数，导出所有匹配结果
-        Page<Customer> customers = customerService.search(
-            keyword, schoolId, currentAgent, cs,
-            startTime, endTime, Pageable.unpaged());
-
-        // 构建名称映射
-        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+        // 构建名称映射（复用缓存）
+        Map<String, String> schoolNameMap = allQrCodes.stream()
             .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
-
-        Map<String, String> agentNameMap = new HashMap<>();
-        try {
-            JsonNode result = wecomApiClient.getUserSimplelist();
-            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                for (JsonNode u : result.get("userlist")) {
-                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
-                }
-            }
-        } catch (Exception ignored) {}
-        for (Agent a : agentRepo.findAll()) {
-            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
-        }
+        Map<String, String> agentNameMap = getCachedAgentNameMap(allAgents);
 
         response.setContentType("text/csv; charset=UTF-8");
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
@@ -287,25 +271,42 @@ public class CustomerController {
         w.write('﻿');
         w.println("ID,昵称,企微ID,类型,接待员,服务老师,学校,来源活码,添加时间,状态");
 
-        for (Customer c : customers.getContent()) {
-            w.printf("%d,\"%s\",\"%s\",%s,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%s%n",
-                c.getId(),
-                csvEscape(c.getName()),
-                csvEscape(c.getExternalUserid()),
-                c.getType() == 1 ? "微信" : "企业微信",
-                csvEscape(agentNameMap.getOrDefault(c.getAddedAgent(), c.getAddedAgent())),
-                csvEscape(agentNameMap.getOrDefault(c.getCurrentAgent(), c.getCurrentAgent())),
-                csvEscape(schoolNameMap.getOrDefault(c.getSchoolId(), c.getSchoolId())),
-                c.getSourceQrId() != null ? c.getSourceQrId().toString() : "",
-                c.getAddTime() != null ? c.getAddTime().toString() : "",
-                c.getStatus() != null ? c.getStatus().name() : "");
-        }
+        // 分批查询写入，每批 500 条，避免 OOM
+        int batchSize = 500;
+        int pageNum = 0;
+        Page<Customer> batch;
+        int totalWritten = 0;
+        do {
+            batch = customerService.search(keyword, schoolId, currentAgent, cs,
+                startTime, endTime, PageRequest.of(pageNum++, batchSize,
+                    Sort.by(Sort.Direction.DESC, "addTime")));
+            for (Customer c : batch.getContent()) {
+                w.printf("%d,\"%s\",\"%s\",%s,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%s%n",
+                    c.getId(),
+                    csvEscape(c.getName()),
+                    csvEscape(c.getExternalUserid()),
+                    c.getType() == 1 ? "微信" : "企业微信",
+                    csvEscape(agentNameMap.getOrDefault(c.getAddedAgent(), c.getAddedAgent())),
+                    csvEscape(agentNameMap.getOrDefault(c.getCurrentAgent(), c.getCurrentAgent())),
+                    csvEscape(schoolNameMap.getOrDefault(c.getSchoolId(), c.getSchoolId())),
+                    c.getSourceQrId() != null ? c.getSourceQrId().toString() : "",
+                    c.getAddTime() != null ? c.getAddTime().toString() : "",
+                    c.getStatus() != null ? c.getStatus().name() : "");
+                totalWritten++;
+            }
+        } while (batch.hasNext());
+
         w.flush();
+        log.info("CSV 导出完成: {} 条记录, keyword={}, schoolId={}, currentAgent={}, status={}",
+            totalWritten, keyword, schoolId, currentAgent, status);
     }
 
+    /** CSV 字段转义：双引号、换行符、回车符 */
     private static String csvEscape(String s) {
         if (s == null) return "";
-        return s.replace("\"", "\"\"");
+        return s.replace("\"", "\"\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r");
     }
 
     /**
@@ -321,6 +322,7 @@ public class CustomerController {
     @PostMapping("/repair-data")
     public String repairCustomerData() {
         int repaired = customerService.repairCustomerData();
+        log.info("客户数据修复完成: 共修复 {} 条", repaired);
         return "redirect:/customers";
     }
 
@@ -336,23 +338,29 @@ public class CustomerController {
      */
     @PostMapping("/sync-agent-names")
     public String syncAgentNames() {
+        int updated = 0;
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
             if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
                 for (JsonNode u : result.get("userlist")) {
                     String userid = u.get("userid").asText();
                     String name = u.get("name").asText();
-                    agentRepo.findById(userid).ifPresent(agent -> {
+                    updated += agentRepo.findById(userid).map(agent -> {
                         // 仅当本地 name 仍为 userid（未设置）时更新，不覆盖已手动配置的名称
                         if (userid.equals(agent.getName())) {
                             agent.setName(name);
                             agentRepo.save(agent);
+                            return 1;
                         }
-                    });
+                        return 0;
+                    }).orElse(0);
                 }
             }
+            log.info("员工姓名同步完成: 更新 {} 人", updated);
+            // 清除缓存，下次请求重新加载
+            agentNameCacheExpiry = Instant.EPOCH;
         } catch (Exception e) {
-            // 忽略同步失败，不影响主流程
+            log.warn("同步员工姓名失败，将在下次请求时重试", e);
         }
         return "redirect:/customers";
     }
@@ -376,6 +384,12 @@ public class CustomerController {
     public String createTest(@RequestParam String agentUserid,
                              @RequestParam(required = false) String qrCodeId,
                              @RequestParam(defaultValue = "测试客户") String name) {
+        // 校验接待员是否存在
+        if (!agentRepo.existsById(agentUserid)) {
+            log.warn("创建测试客户失败: 接待员不存在 userid={}", agentUserid);
+            return "redirect:/customers";
+        }
+
         // 生成唯一的外部 ID，以 "test_" 前缀标记为测试数据
         String externalId = "test_" + System.currentTimeMillis();
 
@@ -400,6 +414,7 @@ public class CustomerController {
             agentBindService.incrementDailyCount(agentUserid, schoolId);
         }
 
+        log.info("创建测试客户: name={}, agentUserid={}, schoolId={}", name, agentUserid, schoolId);
         return "redirect:/customers";
     }
 
@@ -407,41 +422,71 @@ public class CustomerController {
 
     /**
      * 智能解析学校输入：支持 schoolId 精确匹配、学校名精确匹配、学校名模糊匹配。
-     * <p>
-     * 用户在前端 datalist 中可以输入学校名（如"前进小学"）而非 schoolId（如"SCH2026..."），
-     * 此方法自动将可识别的输入转换为正确的 schoolId，确保 JPQL 精确匹配能生效。
-     * </p>
      */
-    private String resolveSchoolId(String input) {
+    private String resolveSchoolId(String input, List<QrCode> allQrCodes) {
         // 1) 精确匹配 schoolId
-        if (qrCodeRepo.findBySchoolId(input).isPresent()) return input;
+        for (QrCode q : allQrCodes) {
+            if (input.equals(q.getSchoolId())) return input;
+        }
         // 2) 精确匹配学校名
-        for (QrCode q : qrCodeRepo.findAll()) {
+        for (QrCode q : allQrCodes) {
             if (input.equals(q.getSchoolName())) return q.getSchoolId();
         }
         // 3) 模糊匹配学校名（包含）
-        for (QrCode q : qrCodeRepo.findAll()) {
+        for (QrCode q : allQrCodes) {
             if (q.getSchoolName() != null && q.getSchoolName().contains(input)) return q.getSchoolId();
         }
-        // 4) 无匹配 → 原样返回（查询大概率无结果）
+        // 4) 无匹配 → 原样返回
         return input;
     }
 
     /**
      * 智能解析员工输入：支持 userid 精确匹配、姓名精确匹配、姓名模糊匹配。
      */
-    private String resolveAgentUserid(String input) {
+    private String resolveAgentUserid(String input, List<Agent> allAgents) {
         // 1) 精确匹配 userid
-        if (agentRepo.existsById(input)) return input;
+        for (Agent a : allAgents) {
+            if (input.equals(a.getUserid())) return input;
+        }
         // 2) 精确匹配姓名
-        for (Agent a : agentRepo.findAll()) {
+        for (Agent a : allAgents) {
             if (input.equals(a.getName())) return a.getUserid();
         }
         // 3) 模糊匹配姓名（包含）
-        for (Agent a : agentRepo.findAll()) {
+        for (Agent a : allAgents) {
             if (a.getName() != null && a.getName().contains(input)) return a.getUserid();
         }
         // 4) 无匹配 → 原样返回
         return input;
+    }
+
+    // ==================== 名称缓存 ====================
+
+    /**
+     * 获取 agentNameMap（带缓存，5 分钟 TTL）。
+     * 优先从企微 API 获取，失败时回退到本地 Agent 表。
+     */
+    private Map<String, String> getCachedAgentNameMap(List<Agent> allAgents) {
+        if (cachedAgentNameMap != null && Instant.now().isBefore(agentNameCacheExpiry)) {
+            return cachedAgentNameMap;
+        }
+        Map<String, String> map = new HashMap<>();
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                for (JsonNode u : result.get("userlist")) {
+                    map.put(u.get("userid").asText(), u.get("name").asText());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("从企微 API 获取员工列表失败，回退到本地 Agent 表: {}", e.getMessage());
+        }
+        // fallback：企微 API 未返回的（或调用失败），从本地 Agent 表补充
+        for (Agent a : allAgents) {
+            map.putIfAbsent(a.getUserid(), a.getName());
+        }
+        cachedAgentNameMap = map;
+        agentNameCacheExpiry = Instant.now().plusSeconds(AGENT_NAME_CACHE_TTL_SEC);
+        return map;
     }
 }
