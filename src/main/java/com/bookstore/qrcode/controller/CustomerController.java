@@ -187,6 +187,21 @@ public class CustomerController {
             .collect(Collectors.toMap(QrCode::getId, QrCode::getSchoolName, (a, b) -> a));
         model.addAttribute("qrNameMap", qrNameMap);
 
+        // 构建 userid → 姓名 映射，优先从企微 API 获取
+        Map<String, String> agentNameMap = new HashMap<>();
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                for (JsonNode u : result.get("userlist")) {
+                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
+                }
+            }
+        } catch (Exception ignored) {}
+        for (Agent a : agentRepo.findAll()) {
+            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
+        }
+        model.addAttribute("agentNameMap", agentNameMap);
+
         return "customer/detail";
     }
 
