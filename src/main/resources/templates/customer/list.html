@@ -70,25 +70,25 @@
                 <input type="text" name="keyword" class="form-control" placeholder="搜索昵称/手机"
                        th:value="${keyword}">
             </div>
-            <!-- 学校筛选 -->
+            <!-- 学校筛选：可输入搜索也可下拉选择 -->
             <div class="col-md-2">
-                <select name="schoolId" class="form-select">
-                    <option value="">全部学校</option>
+                <input type="text" name="schoolId" class="form-control" list="schoolList"
+                       placeholder="搜索学校..." th:value="${schoolId}" autocomplete="off">
+                <datalist id="schoolList">
                     <option th:each="q : ${qrCodes}"
                             th:value="${q.schoolId}"
-                            th:selected="${schoolId == q.schoolId}"
                             th:text="${q.schoolName + ' (' + q.schoolId + ')'}"></option>
-                </select>
+                </datalist>
             </div>
-            <!-- 接待人筛选 -->
+            <!-- 接待人筛选：可输入搜索也可下拉选择 -->
             <div class="col-md-2">
-                <select name="currentAgent" class="form-select">
-                    <option value="">全部接待人</option>
+                <input type="text" name="currentAgent" class="form-control" list="agentList"
+                       placeholder="搜索接待人..." th:value="${currentAgent}" autocomplete="off">
+                <datalist id="agentList">
                     <option th:each="a : ${agents}"
                             th:value="${a.userid}"
-                            th:selected="${currentAgent == a.userid}"
                             th:text="${a.name + ' (' + a.userid + ')'}"></option>
-                </select>
+                </datalist>
             </div>
             <!-- 状态筛选 -->
             <div class="col-md-2">

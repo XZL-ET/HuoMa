@@ -90,12 +90,20 @@ public class CustomerController {
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
         // ---- 空字符串 → null 规范化 ----
-        // 前端下拉框未选中时会发送空字符串，JPQL 会把 "" 当作有效筛选值去匹配
-        // （WHERE schoolId = '' 永远匹配不到），导致翻页后结果为空
         if (keyword != null && keyword.isBlank()) keyword = null;
         if (schoolId != null && schoolId.isBlank()) schoolId = null;
         if (currentAgent != null && currentAgent.isBlank()) currentAgent = null;
         if (status != null && status.isBlank()) status = null;
+
+        // ---- 智能输入转换：学校名 → schoolId，员工名 → userid ----
+        // 用户可能输入学校名（如"前进小学"）而非 schoolId（如"SCH20260..."），
+        // 也可能是 userid 格式。优先精确匹配，失败时模糊搜索学校名。
+        if (schoolId != null) {
+            schoolId = resolveSchoolId(schoolId);
+        }
+        if (currentAgent != null) {
+            currentAgent = resolveAgentUserid(currentAgent);
+        }
 
         // ---- 状态参数解析 ----
         Customer.CustomerStatus cs = null;
@@ -224,11 +232,15 @@ public class CustomerController {
                           @RequestParam(required = false)
                               @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
                           HttpServletResponse response) throws IOException {
-        // 空字符串 → null 规范化（同 list 方法，防止空字符串被 JPQL 当作有效条件）
+        // 空字符串 → null 规范化
         if (keyword != null && keyword.isBlank()) keyword = null;
         if (schoolId != null && schoolId.isBlank()) schoolId = null;
         if (currentAgent != null && currentAgent.isBlank()) currentAgent = null;
         if (status != null && status.isBlank()) status = null;
+
+        // 智能输入转换（同 list 方法）
+        if (schoolId != null) schoolId = resolveSchoolId(schoolId);
+        if (currentAgent != null) currentAgent = resolveAgentUserid(currentAgent);
 
         Customer.CustomerStatus cs = null;
         if (status != null && !status.isEmpty()) {
@@ -381,5 +393,47 @@ public class CustomerController {
         }
 
         return "redirect:/customers";
+    }
+
+    // ==================== 智能输入解析 ====================
+
+    /**
+     * 智能解析学校输入：支持 schoolId 精确匹配、学校名精确匹配、学校名模糊匹配。
+     * <p>
+     * 用户在前端 datalist 中可以输入学校名（如"前进小学"）而非 schoolId（如"SCH2026..."），
+     * 此方法自动将可识别的输入转换为正确的 schoolId，确保 JPQL 精确匹配能生效。
+     * </p>
+     */
+    private String resolveSchoolId(String input) {
+        // 1) 精确匹配 schoolId
+        if (qrCodeRepo.findBySchoolId(input).isPresent()) return input;
+        // 2) 精确匹配学校名
+        for (QrCode q : qrCodeRepo.findAll()) {
+            if (input.equals(q.getSchoolName())) return q.getSchoolId();
+        }
+        // 3) 模糊匹配学校名（包含）
+        for (QrCode q : qrCodeRepo.findAll()) {
+            if (q.getSchoolName() != null && q.getSchoolName().contains(input)) return q.getSchoolId();
+        }
+        // 4) 无匹配 → 原样返回（查询大概率无结果）
+        return input;
+    }
+
+    /**
+     * 智能解析员工输入：支持 userid 精确匹配、姓名精确匹配、姓名模糊匹配。
+     */
+    private String resolveAgentUserid(String input) {
+        // 1) 精确匹配 userid
+        if (agentRepo.existsById(input)) return input;
+        // 2) 精确匹配姓名
+        for (Agent a : agentRepo.findAll()) {
+            if (input.equals(a.getName())) return a.getUserid();
+        }
+        // 3) 模糊匹配姓名（包含）
+        for (Agent a : agentRepo.findAll()) {
+            if (a.getName() != null && a.getName().contains(input)) return a.getUserid();
+        }
+        // 4) 无匹配 → 原样返回
+        return input;
     }
 }
