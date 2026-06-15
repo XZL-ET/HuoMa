@@ -70,18 +70,21 @@ public class Agent {
     private AgentRole role = AgentRole.receptionist;
 
     /**
-     * 每日接待客户总上限。
-     * 默认 500，表示该员工一天内最多可接待 500 位客户。
-     * 超过此上限后，系统不再将新客户分配至该员工。
+     * 每日接待客户总上限（参考值，供报表/管理后台展示）。
+     * <p>注意：实际日限判定不走此字段，而是由
+     * {@code GlobalAgentPool.dailyMax} + Redis {@code agent:daily:total:*}
+     * 联合驱动。此字段仅作为初始配置模板和历史参考保留。</p>
      */
     @Column(name = "daily_total_cap", nullable = false)
     @Builder.Default
     private Integer dailyTotalCap = 500;
 
     /**
-     * 当日已接待客户总数。
-     * 每日凌晨重置为 0，接待新客户时递增。
-     * 当达到 {@link #dailyTotalCap} 时，该员工当日不再接收新客户。
+     * 当日已接待客户总数（参考值，非实时）。
+     * <p>注意：实时计数走 Redis key {@code agent:daily:total:{userid}}，
+     * 由 {@code AgentBindService.incrementDailyCount} 异步同步到
+     * {@code GlobalAgentPool.dailyCurrent}。此字段可能滞后，
+     * 仅作为重启后恢复计数的持久化备份。</p>
      */
     @Column(name = "daily_total_used")
     @Builder.Default

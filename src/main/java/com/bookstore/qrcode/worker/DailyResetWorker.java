@@ -8,6 +8,7 @@ import com.bookstore.qrcode.service.QrCodeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -61,6 +62,10 @@ public class DailyResetWorker {
     private final com.bookstore.qrcode.service.AgentBindService agentBindService;
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
+    /** 自身代理引用 — 通过 @Lazy 延迟注入，确保 @Transactional 走 AOP 代理 */
+    @Lazy
+    @org.springframework.beans.factory.annotation.Autowired
+    private DailyResetWorker self;
 
     /**
      * 每日 00:00 定时触发的主入口方法。
@@ -73,7 +78,9 @@ public class DailyResetWorker {
      * @see #generateDailyReport(LocalDate, LocalDate)
      */
     @Scheduled(cron = "0 0 0 * * *")
-    @Transactional
+    // 不在此层加 @Transactional：各子步骤独立事务，任一步失败不波及他步。
+    // 步骤 1 操作 Redis（非事务资源），若被卷入 DB 事务回滚会连带回滚
+    // 步骤 2-3 的 DB 恢复逻辑，导致次日全员仍处于满员状态。
     public void resetAndReport() {
         log.info("===== 每日重置 + 日报生成开始 =====");
         LocalDate today = LocalDate.now();
@@ -81,7 +88,7 @@ public class DailyResetWorker {
         int failures = 0;
         StringBuilder failDetails = new StringBuilder();
 
-        // 1. 清零 Redis 每日计数
+        // 1. 清零 Redis 每日计数（非事务资源，无 @Transactional）
         try {
             clearRedisDailyCounters();
         } catch (Exception e) {
@@ -90,7 +97,7 @@ public class DailyResetWorker {
             log.error("清空日计数失败", e);
         }
 
-        // 2. 全局池日重置：full → standby
+        // 2. 全局池日重置：full → standby（poolService.dailyReset 自带 @Transactional）
         try {
             poolService.dailyReset();
         } catch (Exception e) {
@@ -98,17 +105,17 @@ public class DailyResetWorker {
             failDetails.append("全局池日重置失败; ");
         }
 
-        // 3. 恢复 full 状态的员工（非封号/熔断的）
+        // 3. 恢复 full 状态的员工（通过代理调用确保 @Transactional 生效）
         try {
-            recoverFullAgents();
+            self.recoverFullAgents();
         } catch (Exception e) {
             failures++;
             failDetails.append("full员工恢复失败; ");
         }
 
-        // 4. 生成昨日日报
+        // 4. 生成昨日日报（通过代理调用确保 @Transactional 生效）
         try {
-            generateDailyReport(yesterday, today);
+            self.generateDailyReport(yesterday, today);
         } catch (Exception e) {
             failures++;
             failDetails.append("日报生成失败; ");
@@ -169,7 +176,8 @@ public class DailyResetWorker {
      * <p><b>注意：</b>活码同步可能因网络等原因失败，此处逐条 try-catch 避免一个活码
      * 失败影响其他活码的同步。</p>
      */
-    private void recoverFullAgents() {
+    @Transactional
+    void recoverFullAgents() {
         // 1. 全部 QrAgent 日计数归零（不只是 full，active 的也要清）
         List<QrAgent> allAgents = qrAgentRepo.findAll();
         for (var qa : allAgents) {
@@ -230,7 +238,8 @@ public class DailyResetWorker {
      * @param yesterday 报表所属日期（昨天）
      * @param today     今天的日期，用于计算统计时间范围 [yesterday 00:00, today 00:00)
      */
-    private void generateDailyReport(LocalDate yesterday, LocalDate today) {
+    @Transactional
+    void generateDailyReport(LocalDate yesterday, LocalDate today) {
         LocalDateTime start = yesterday.atStartOfDay();
         LocalDateTime end = today.atStartOfDay();
 

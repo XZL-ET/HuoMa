@@ -23,6 +23,9 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     /** 查找全部在职员工，按姓名排序 */
     List<Employee> findAllByActiveTrueOrderByName();
 
+    /** 查找全部离职员工（active=false），仅返回 userid 用于清理 */
+    List<Employee> findByActiveFalse();
+
     /** 按姓名模糊搜索 */
     List<Employee> findByNameContaining(String keyword);
 

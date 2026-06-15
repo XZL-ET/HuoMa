@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<!-- 员工管理页面 — 全局员工池全景视图，按状态分组展示每位员工的日用量和所在活码 -->
+<!-- 员工管理页面 — 全局员工池全景视图，支持搜索筛选和分页 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='员工管理', content=~{::main})}">
 <main>
+    <!-- 页面标题与工具栏 -->
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4>全局员工池</h4>
         <div class="d-flex gap-2 align-items-center">
@@ -10,7 +11,7 @@
             <span class="badge bg-warning text-dark fs-6" th:text="'已满 ' + ${fullCount}"></span>
             <span class="badge bg-danger fs-6" th:text="'暂停 ' + ${blockedCount}"></span>
             <form th:action="@{/agents/sync}" method="post" class="d-inline ms-2"
-                  onsubmit="this.querySelector('button').disabled=true; return true;">
+                  onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='同步中...';">
                 <button class="btn btn-sm btn-outline-primary" title="从企微通讯录同步新员工到全局池">
                     🔄 从企微同步
                 </button>
@@ -18,23 +19,64 @@
         </div>
     </div>
 
-    <!-- 状态分布条 -->
-    <div class="card p-3 mb-3" th:if="${!poolEntries.isEmpty()}">
+    <!-- 同步结果消息 -->
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show py-2" role="alert">
+        <span th:text="${message}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- 状态分布条 + 总数 -->
+    <div class="card p-3 mb-3" th:if="${totalCount > 0}">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <small class="text-muted">共 <span th:text="${totalCount}"></span> 人</small>
+        </div>
         <div class="progress" style="height: 24px;">
-            <div class="progress-bar bg-success" th:style="'width:' + (${standbyCount * 100 / poolEntries.size()}) + '%'" th:text="${standbyCount > 0 ? '待命 ' + standbyCount : ''}"></div>
-            <div class="progress-bar bg-warning text-dark" th:style="'width:' + (${fullCount * 100 / poolEntries.size()}) + '%'" th:text="${fullCount > 0 ? '已满 ' + fullCount : ''}"></div>
-            <div class="progress-bar bg-danger" th:style="'width:' + (${blockedCount * 100 / poolEntries.size()}) + '%'" th:text="${blockedCount > 0 ? '暂停 ' + blockedCount : ''}"></div>
+            <div class="progress-bar bg-success" th:if="${standbyCount > 0}"
+                 th:style="'width:' + (${standbyCount * 100 / totalCount}) + '%'"
+                 th:text="'待命 ' + ${standbyCount}"></div>
+            <div class="progress-bar bg-warning text-dark" th:if="${fullCount > 0}"
+                 th:style="'width:' + (${fullCount * 100 / totalCount}) + '%'"
+                 th:text="'已满 ' + ${fullCount}"></div>
+            <div class="progress-bar bg-danger" th:if="${blockedCount > 0}"
+                 th:style="'width:' + (${blockedCount * 100 / totalCount}) + '%'"
+                 th:text="'暂停 ' + ${blockedCount}"></div>
         </div>
     </div>
 
+    <!-- 搜索筛选栏 -->
+    <div class="card p-3 mb-3">
+        <form class="row g-2" method="get" th:action="@{/agents}">
+            <div class="col-md-4">
+                <input type="text" name="keyword" class="form-control" placeholder="搜索姓名或账号..."
+                       th:value="${keyword}">
+            </div>
+            <div class="col-md-2">
+                <select name="status" class="form-select">
+                    <option value="">全部状态</option>
+                    <option value="standby" th:selected="${statusFilter == 'standby'}">待命</option>
+                    <option value="full" th:selected="${statusFilter == 'full'}">已满</option>
+                    <option value="blocked" th:selected="${statusFilter == 'blocked'}">暂停</option>
+                </select>
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
+            </div>
+        </form>
+    </div>
+
     <!-- 全局池表格 -->
-    <div class="card p-3">
+    <div class="card p-0">
         <div class="table-responsive">
-            <table class="table table-sm table-hover mb-0" th:if="${!poolEntries.isEmpty()}">
+            <table class="table table-sm table-hover mb-0" th:if="${!poolPage.isEmpty()}">
                 <thead class="table-light">
                     <tr>
                         <th>#</th>
-                        <th>员工账号</th>
+                        <th>员工姓名</th>
+                        <th>账号</th>
                         <th>日用量</th>
                         <th>日上限</th>
                         <th>使用率</th>
@@ -44,22 +86,25 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <tr th:each="p,iter : ${poolEntries}">
-                        <!-- 行号 -->
-                        <td class="text-muted small" th:text="${iter.count}"></td>
-                        <!-- 员工账号 -->
+                    <tr th:each="p,iter : ${poolPage.content}">
+                        <td class="text-muted small" th:text="${poolPage.number * poolPage.size + iter.count}"></td>
+                        <!-- 员工姓名（从 agentNameMap 取中文名，取不到则显示 userid） -->
                         <td>
-                            <code th:text="${p.agentUserid}"></code>
+                            <span class="fw-semibold" th:text="${agentNameMap.getOrDefault(p.agentUserid, p.agentUserid)}"></span>
                         </td>
+                        <!-- 账号 -->
+                        <td><code class="small" th:text="${p.agentUserid}"></code></td>
                         <!-- 今日接待量 -->
                         <td>
-                            <span th:text="${p.dailyCurrent}" th:classappend="${p.dailyCurrent >= p.dailyMax ? 'text-danger fw-bold' : ''}"></span>
+                            <span th:text="${p.dailyCurrent}"
+                                  th:classappend="${p.dailyCurrent >= p.dailyMax ? 'text-danger fw-bold' : ''}"></span>
                         </td>
                         <!-- 日上限 -->
                         <td th:text="${p.dailyMax}"></td>
                         <!-- 使用率进度条 -->
                         <td style="min-width: 100px;">
-                            <div class="progress" style="height: 16px;" th:with="pct=${p.dailyMax > 0 ? p.dailyCurrent * 100 / p.dailyMax : 0}">
+                            <div class="progress" style="height: 16px;"
+                                 th:with="pct=${p.dailyMax > 0 ? p.dailyCurrent * 100 / p.dailyMax : 0}">
                                 <div class="progress-bar"
                                      th:classappend="${pct >= 100 ? 'bg-danger' : (pct >= 80 ? 'bg-warning' : 'bg-success')}"
                                      th:style="'width:' + ${pct} + '%'"
@@ -70,26 +115,79 @@
                         <td><span class="badge bg-light text-dark" th:text="'#' + ${p.sortOrder}"></span></td>
                         <!-- 状态 -->
                         <td>
-                            <span class="badge" th:classappend="${p.status.name() == 'standby' ? 'bg-success' : (p.status.name() == 'full' ? 'bg-warning text-dark' : 'bg-danger')}"
+                            <span class="badge"
+                                  th:classappend="${p.status.name() == 'standby' ? 'bg-success' : (p.status.name() == 'full' ? 'bg-warning text-dark' : 'bg-danger')}"
                                   th:text="${p.status.name() == 'standby' ? '待命' : (p.status.name() == 'full' ? '已满' : '暂停')}"></span>
                         </td>
                         <!-- 所在活码列表 -->
                         <td>
                             <span th:each="name,stat : ${agentQrNames.getOrDefault(p.agentUserid, {})}"
                                   class="badge bg-light text-dark me-1" th:text="${name}"></span>
-                            <span th:if="${agentQrNames.getOrDefault(p.agentUserid, {}).isEmpty()}" class="text-muted small">-</span>
+                            <span th:if="${agentQrNames.getOrDefault(p.agentUserid, {}).isEmpty()}"
+                                  class="text-muted small">-</span>
                         </td>
                     </tr>
                 </tbody>
             </table>
 
-            <!-- 空池提示 -->
-            <div th:if="${poolEntries.isEmpty()}" class="text-center text-muted py-4">
-                <p class="mb-2">全局员工池为空</p>
-                <small>请先在活码详情页中将员工加入全局池，或通过企业微信通讯录同步导入</small>
+            <!-- 无匹配结果 -->
+            <div th:if="${poolPage.isEmpty()}" class="text-center text-muted py-4">
+                <p class="mb-1" th:if="${!keyword.isBlank() || !statusFilter.isBlank()}">
+                    无匹配员工，请调整筛选条件
+                </p>
+                <p class="mb-1" th:if="${keyword.isBlank() && statusFilter.isBlank()}">
+                    全局员工池为空
+                </p>
+                <small>请先在活码详情页中将员工加入全局池，或点击「从企微同步」导入</small>
             </div>
         </div>
     </div>
+
+    <!-- 分页导航，仅当总页数 > 1 时显示 -->
+    <nav th:if="${poolPage.totalPages > 1}" class="mt-3">
+        <ul class="pagination justify-content-center">
+            <!-- 上一页：首页时用 span 替代链接，防止 page=-1 -->
+            <li class="page-item" th:classappend="${poolPage.first ? 'disabled' : ''}">
+                <th:block th:if="${!poolPage.first}">
+                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},page=${poolPage.number - 1},size=${poolPage.size})}">上一页</a>
+                </th:block>
+                <th:block th:if="${poolPage.first}">
+                    <span class="page-link">上一页</span>
+                </th:block>
+            </li>
+            <!-- 页码跳转表单 -->
+            <li class="page-item">
+                <form method="get" th:action="@{/agents}" class="page-link border-0 bg-transparent"
+                      style="display:inline-flex;align-items:center;gap:4px"
+                      th:attr="data-max-page=${poolPage.totalPages}"
+                      onsubmit="var v=parseInt(this.goto.value);var m=parseInt(this.getAttribute('data-max-page'));if(isNaN(v)||v<1)v=1;if(v>m)v=m;this.page.value=v-1">
+                    <input type="hidden" name="keyword" th:value="${keyword}">
+                    <input type="hidden" name="status" th:value="${statusFilter}">
+                    <input type="hidden" name="size" th:value="${poolPage.size}">
+                    <input type="hidden" name="page" value="0">
+                    <span>第</span>
+                    <input type="number" name="goto" min="1" th:max="${poolPage.totalPages}"
+                           th:value="${poolPage.number + 1}"
+                           class="form-control form-control-sm text-center"
+                           style="width:55px; padding:2px 4px; height:28px;">
+                    <span>/ <span th:text="${poolPage.totalPages}"></span> 页</span>
+                    <button type="submit" class="btn btn-outline-secondary btn-sm" style="padding:2px 8px; height:28px;">跳转</button>
+                </form>
+                <noscript>
+                    <span class="text-muted small ms-2">（需启用 JS 跳页，或使用上一页/下一页）</span>
+                </noscript>
+            </li>
+            <!-- 下一页：末页时用 span 替代链接 -->
+            <li class="page-item" th:classappend="${poolPage.last ? 'disabled' : ''}">
+                <th:block th:if="${!poolPage.last}">
+                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},page=${poolPage.number + 1},size=${poolPage.size})}">下一页</a>
+                </th:block>
+                <th:block th:if="${poolPage.last}">
+                    <span class="page-link">下一页</span>
+                </th:block>
+            </li>
+        </ul>
+    </nav>
 
     <!-- 说明 -->
     <small class="text-muted mt-2 d-block">

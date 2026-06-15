@@ -163,19 +163,26 @@ public class GlobalAgentPoolService {
 
         // 确保 Agent 全局表存在
         if (!agentRepo.existsById(userid)) {
-            String name = userid;
-            try {
-                JsonNode result = wecomApi.getUserSimplelist();
-                if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                    for (JsonNode u : result.get("userlist")) {
-                        if (userid.equals(u.get("userid").asText())) {
-                            name = u.get("name").asText();
-                            break;
+            // 优先从本地 Employee 表取姓名（每 30 分钟从企微同步，命中率极高）
+            String name = employeeRepo.findByUserid(userid)
+                .map(Employee::getName)
+                .orElse(null);
+            // 本地没有则回退到企微 API（仅新员工首次同步时可能走到此分支）
+            if (name == null || name.isEmpty()) {
+                name = userid;
+                try {
+                    JsonNode result = wecomApi.getUserSimplelist();
+                    if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                        for (JsonNode u : result.get("userlist")) {
+                            if (userid.equals(u.get("userid").asText())) {
+                                name = u.get("name").asText();
+                                break;
+                            }
                         }
                     }
+                } catch (Exception e) {
+                    log.warn("获取员工姓名失败: userid={}", userid, e);
                 }
-            } catch (Exception e) {
-                log.warn("获取员工姓名失败: userid={}", userid, e);
             }
             agentRepo.save(Agent.builder()
                 .userid(userid).name(name)

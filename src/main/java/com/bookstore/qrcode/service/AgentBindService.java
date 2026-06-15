@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -86,13 +87,15 @@ public class AgentBindService {
         // 员工全局维度 key：该员工在所有活码下的今日总添加量（用于后台全局监管）
         String totalKey = RedisConfig.AGENT_DAILY_TOTAL_PREFIX + userId;
 
-        long newCount = redisTemplate.opsForValue().increment(key);
-        long totalNew = redisTemplate.opsForValue().increment(totalKey);
-
-        // 设置过期时间为次日凌晨 00:00，确保日计数每天自动归零
-        // 选用 TTL 自过期而非定时任务清理，降低实现复杂度
-        redisTemplate.expire(key, getSecondsUntilMidnight(), TimeUnit.SECONDS);
-        redisTemplate.expire(totalKey, getSecondsUntilMidnight(), TimeUnit.SECONDS);
+        long ttl = Math.max(getSecondsUntilMidnight(), 60);
+        // Lua 脚本保证 INCR + EXPIRE 原子执行，防止进程在 INCR 成功后、
+        // EXPIRE 执行前崩溃导致 key 永不过期
+        String lua = "local v = redis.call('INCR', KEYS[1]) "
+                   + "redis.call('EXPIRE', KEYS[1], ARGV[1]) "
+                   + "return v";
+        DefaultRedisScript<Long> incrScript = new DefaultRedisScript<>(lua, Long.class);
+        long newCount = redisTemplate.execute(incrScript, List.of(key), String.valueOf(ttl));
+        long totalNew = redisTemplate.execute(incrScript, List.of(totalKey), String.valueOf(ttl));
 
         // 同步到 DB（best-effort，失败不影响阈值判断）
         // Redis 是阈值判断的唯一数据源，DB 仅用于重启后恢复计数
@@ -143,17 +146,22 @@ public class AgentBindService {
         if (qr == null) return;
 
         int dailyMax = pool.getDailyMax();
+        // 防御：dailyMax ≤ 0 表示配置异常，跳过所有阈值检查避免误触发
+        if (dailyMax <= 0) {
+            log.warn("员工 {} dailyMax={} 异常，跳过阈值检查", userId, dailyMax);
+            return;
+        }
         int warnThreshold = (dailyMax * qr.getWarnRatio()) / 100;
         int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
 
         if (globalCount >= dailyMax) {
             log.warn("员工 {} 全局日限到达 {}/{}，从活码 {} 下码", userId, globalCount, dailyMax, qrCodeId);
             expandQrCodeUsers(qrCodeId, userId, qr, pool);
-        } else if (globalCount >= urgentThreshold) {
+        } else if (urgentThreshold > 0 && globalCount >= urgentThreshold) {
             log.warn("员工 {} 全局紧急阈值 {}/{}，活码 {} 提前激活后备",
                 userId, globalCount, dailyMax, qrCodeId);
             preActivateBackup(qrCodeId, qr);
-        } else if (globalCount >= warnThreshold) {
+        } else if (warnThreshold > 0 && globalCount >= warnThreshold) {
             log.info("员工 {} 全局预警阈值 {}/{}", userId, globalCount, dailyMax);
         }
     }
@@ -234,13 +242,11 @@ public class AgentBindService {
                 .status(QrAgent.AgentStatus.active).build();
             qrAgentRepo.save(newAgent);
 
-            // 满员员工下码
-            if (fullAgent != null) {
-                fullAgent.setStatus(QrAgent.AgentStatus.full);
-                fullAgent.setReplacedBy(backupUserid);
-                fullAgent.setUpdatedAt(LocalDateTime.now());
-                qrAgentRepo.save(fullAgent);
-            }
+            // 满员员工下码（fullAgent 在前面已做过 null 检查+return，此处必然非 null）
+            fullAgent.setStatus(QrAgent.AgentStatus.full);
+            fullAgent.setReplacedBy(backupUserid);
+            fullAgent.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(fullAgent);
 
             // 全局池标记满员
             poolService.markFull(fullUserId);
@@ -376,108 +382,113 @@ public class AgentBindService {
 
     /**
      * Layer 2 自愈（异步版）：同步联系人到企微，遇到 40098/41054 自动定位并替换。
+     * 使用 while 循环代替递归，防止重试次数配置错误导致栈溢出。
      */
     private void syncQrCodeToWechatWithHealing(Long qrCodeId, String configId,
-                                                List<String> userIds, int attempt) {
-        if (userIds.isEmpty()) {
-            log.warn("活码 {} 无可用联系人，跳过异步同步", configId);
-            return;
-        }
-        if (attempt >= 5) {
-            log.error("活码 {} 异步自愈重试已达上限({}次)。当前用户: {}",
-                configId, attempt, userIds);
-            alertService.createAlert("system", "async_sync_heal_exhausted",
-                AgentAlert.AlertSeverity.high,
-                String.format("活码 %s 异步自愈重试 %d 次后仍失败，需人工介入。当前用户: %s",
-                    configId, attempt, userIds),
-                AgentAlert.AutoAction.none, qrCodeId);
-            return;
-        }
+                                                List<String> userIds, int startAttempt) {
+        int attempt = startAttempt;
+        List<String> currentUserIds = new ArrayList<>(userIds);
 
-        try {
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("config_id", configId);
-            body.put("user", new ArrayList<>(userIds));
-            String json = objectMapper.writeValueAsString(body);
-            JsonNode result = wecomApi.updateContactWay(json);
-            int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
-
-            if (errcode == 0) {
-                log.info("企微活码异步同步完成: config_id={}, users={}", configId, userIds);
+        while (attempt < 5) {
+            if (currentUserIds.isEmpty()) {
+                log.warn("活码 {} 无可用联系人，跳过异步同步", configId);
                 return;
             }
 
-            // 非可自愈错误：记录告警后放弃
-            if (errcode != 40098 && errcode != 41054) {
-                String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
-                log.error("异步同步企微活码失败(不可自愈): config_id={}, errcode={}, errmsg={}",
-                    configId, errcode, errmsg);
-                alertService.createAlert("system", "sync_wecom_fail",
-                    AgentAlert.AlertSeverity.high,
-                    String.format("企微活码同步失败 config_id=%s errcode=%d errmsg=%s",
-                        configId, errcode, errmsg),
-                    AgentAlert.AutoAction.none, qrCodeId);
+            try {
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("config_id", configId);
+                body.put("user", new ArrayList<>(currentUserIds));
+                String json = objectMapper.writeValueAsString(body);
+                JsonNode result = wecomApi.updateContactWay(json);
+                int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
+
+                if (errcode == 0) {
+                    log.info("企微活码异步同步完成: config_id={}, users={}", configId, currentUserIds);
+                    return;
+                }
+
+                // 非可自愈错误：记录告警后放弃
+                if (errcode != 40098 && errcode != 41054) {
+                    String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
+                    log.error("异步同步企微活码失败(不可自愈): config_id={}, errcode={}, errmsg={}",
+                        configId, errcode, errmsg);
+                    alertService.createAlert("system", "sync_wecom_fail",
+                        AgentAlert.AlertSeverity.high,
+                        String.format("企微活码同步失败 config_id=%s errcode=%d errmsg=%s",
+                            configId, errcode, errmsg),
+                        AgentAlert.AutoAction.none, qrCodeId);
+                    return;
+                }
+
+                log.error("异步同步企微活码失败 (errcode={}): config_id={}, users={}",
+                    errcode, configId, currentUserIds);
+
+                // 二分查找定位不可用用户
+                String badUserid = findFailingUser(configId, currentUserIds);
+                if (badUserid == null) {
+                    log.error("活码 {} 无法定位不可用用户 (errcode={})", configId, errcode);
+                    return;
+                }
+
+                log.warn("Layer2自愈(异步): 活码 {} 定位到不可用用户 userid={}, errcode={}",
+                    configId, badUserid, errcode);
+
+                // ① 从 qr_agent 移除
+                qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, badUserid).ifPresent(qa -> {
+                    qa.setStatus(QrAgent.AgentStatus.removed);
+                    qrAgentRepo.save(qa);
+                });
+
+                // ② 封锁 agent 并从全局池移除
+                poolService.blockAgentForWechatIssue(badUserid, errcode);
+
+                // ③ 从当前用户列表中移除
+                currentUserIds.remove(badUserid);
+
+                // ④ 从全局池选取替代员工
+                Set<String> exclude = new HashSet<>(currentUserIds);
+                GlobalAgentPool replacement = poolService.takeStandby(exclude);
+                if (replacement != null) {
+                    currentUserIds.add(replacement.getAgentUserid());
+                    int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId)
+                        .stream().mapToInt(QrAgent::getSortOrder).max().orElse(0);
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(replacement.getAgentUserid())
+                        .role(QrAgent.AgentRole.receptionist)
+                        .dailyMax(replacement.getDailyMax())
+                        .sortOrder(maxOrder + 1)
+                        .status(QrAgent.AgentStatus.active).build());
+                    log.info("Layer2自愈(异步): 活码 {} 替代 {} -> {} (attempt={})",
+                        qrCodeId, badUserid, replacement.getAgentUserid(), attempt + 1);
+                } else {
+                    log.warn("Layer2自愈(异步): 活码 {} 无替代员工可用", qrCodeId);
+                }
+
+                // ⑤ 创建告警
+                alertService.createAlert(badUserid, "wechat_unavailable",
+                    AgentAlert.AlertSeverity.medium,
+                    String.format("企微不可用员工已被自愈移除(异步): userid=%s errcode=%d 活码=%d 替换=%s",
+                        badUserid, errcode, qrCodeId,
+                        replacement != null ? replacement.getAgentUserid() : "无"),
+                    AgentAlert.AutoAction.removed, qrCodeId);
+
+                attempt++;
+
+            } catch (Exception e) {
+                log.error("异步自愈同步异常: config_id={}", configId, e);
                 return;
             }
-
-            log.error("异步同步企微活码失败 (errcode={}): config_id={}, users={}",
-                errcode, configId, userIds);
-
-            // 二分查找定位不可用用户
-            String badUserid = findFailingUser(configId, userIds);
-            if (badUserid == null) {
-                log.error("活码 {} 无法定位不可用用户 (errcode={})", configId, errcode);
-                return;
-            }
-
-            log.warn("Layer2自愈(异步): 活码 {} 定位到不可用用户 userid={}, errcode={}",
-                configId, badUserid, errcode);
-
-            // ① 从 qr_agent 移除
-            qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, badUserid).ifPresent(qa -> {
-                qa.setStatus(QrAgent.AgentStatus.removed);
-                qrAgentRepo.save(qa);
-            });
-
-            // ② 封锁 agent 并从全局池移除
-            poolService.blockAgentForWechatIssue(badUserid, errcode);
-
-            // ③ 从当前用户列表中移除
-            userIds.remove(badUserid);
-
-            // ④ 从全局池选取替代员工
-            Set<String> exclude = new HashSet<>(userIds);
-            GlobalAgentPool replacement = poolService.takeStandby(exclude);
-            if (replacement != null) {
-                userIds.add(replacement.getAgentUserid());
-                int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId)
-                    .stream().mapToInt(QrAgent::getSortOrder).max().orElse(0);
-                qrAgentRepo.save(QrAgent.builder()
-                    .qrCodeId(qrCodeId).agentUserid(replacement.getAgentUserid())
-                    .role(QrAgent.AgentRole.receptionist)
-                    .dailyMax(replacement.getDailyMax())
-                    .sortOrder(maxOrder + 1)
-                    .status(QrAgent.AgentStatus.active).build());
-                log.info("Layer2自愈(异步): 活码 {} 替代 {} -> {} (attempt={})",
-                    qrCodeId, badUserid, replacement.getAgentUserid(), attempt + 1);
-            } else {
-                log.warn("Layer2自愈(异步): 活码 {} 无替代员工可用", qrCodeId);
-            }
-
-            // ⑤ 创建告警
-            alertService.createAlert(badUserid, "wechat_unavailable",
-                AgentAlert.AlertSeverity.medium,
-                String.format("企微不可用员工已被自愈移除(异步): userid=%s errcode=%d 活码=%d 替换=%s",
-                    badUserid, errcode, qrCodeId,
-                    replacement != null ? replacement.getAgentUserid() : "无"),
-                AgentAlert.AutoAction.removed, qrCodeId);
-
-            // 递归重试
-            syncQrCodeToWechatWithHealing(qrCodeId, configId, userIds, attempt + 1);
-
-        } catch (Exception e) {
-            log.error("异步自愈同步异常: config_id={}", configId, e);
         }
+
+        // 重试耗尽
+        log.error("活码 {} 异步自愈重试已达上限({}次)。当前用户: {}",
+            configId, attempt, currentUserIds);
+        alertService.createAlert("system", "async_sync_heal_exhausted",
+            AgentAlert.AlertSeverity.high,
+            String.format("活码 %s 异步自愈重试 %d 次后仍失败，需人工介入。当前用户: %s",
+                configId, attempt, currentUserIds),
+            AgentAlert.AutoAction.none, qrCodeId);
     }
 
     /**
@@ -555,8 +566,8 @@ public class AgentBindService {
      * @return 距离午夜还剩余的秒数
      */
     private long getSecondsUntilMidnight() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now().withNano(0);
         LocalDateTime midnight = now.plusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
-        return Duration.between(now, midnight).getSeconds();
+        return Math.max(Duration.between(now, midnight).getSeconds(), 60);
     }
 }

@@ -151,12 +151,13 @@ public class EmployeeSyncService {
     @Transactional
     public int syncToGlobalPool() {
         // 1. 清理已在池中的离职员工（企微通讯录已标记 inactive 但仍留在池中）
-        Set<String> inactiveUserIds = employeeRepo.findAll().stream()
-            .filter(e -> !e.getActive())
+        //    使用轻量投影查询，避免加载完整 Employee 实体
+        Set<String> inactiveUserIds = employeeRepo.findByActiveFalse().stream()
             .map(Employee::getUserid)
             .collect(Collectors.toSet());
         int cleaned = 0;
         if (!inactiveUserIds.isEmpty()) {
+            // 池中离职员工：直接用 JPQL 查询，无需加载全部池记录再过滤
             List<GlobalAgentPool> toRemove = poolRepo.findAll().stream()
                 .filter(p -> inactiveUserIds.contains(p.getAgentUserid()))
                 .toList();
@@ -168,10 +169,8 @@ public class EmployeeSyncService {
             }
         }
 
-        // 2. 已在池中的 userid 集合（刷新，因为上面可能删了）
-        Set<String> pooledUserIds = poolRepo.findAll().stream()
-            .map(GlobalAgentPool::getAgentUserid)
-            .collect(Collectors.toSet());
+        // 2. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
+        Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
         // 在职但不在池中的员工
         List<Employee> activeNotInPool = employeeRepo.findAllByActiveTrueOrderByName().stream()
