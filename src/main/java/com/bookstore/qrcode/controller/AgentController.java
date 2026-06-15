@@ -6,6 +6,7 @@ import com.bookstore.qrcode.service.EmployeeSyncService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.stereotype.Controller;
@@ -57,6 +58,7 @@ public class AgentController {
     public String list(Model model,
                        @RequestParam(defaultValue = "") String keyword,
                        @RequestParam(defaultValue = "") String status,
+                       @RequestParam(defaultValue = "") String anomaly,
                        @PageableDefault(size = 50) Pageable pageable) {
 
         // ── 统计（COUNT 查询，不依赖分页）──
@@ -77,23 +79,27 @@ public class AgentController {
             agentMap.putIfAbsent(agent.getUserid(), agent);
         }
 
-        // ── 状态筛选参数解析 ──
-        GlobalAgentPool.PoolStatus statusFilter = null;
+        // ── 参数解析 ──
+        final GlobalAgentPool.PoolStatus statusFilter;
         if (!status.isBlank()) {
+            GlobalAgentPool.PoolStatus parsed = null;
             try {
-                statusFilter = GlobalAgentPool.PoolStatus.valueOf(status);
-            } catch (IllegalArgumentException ignored) {
-                // 非法状态值 → 忽略，等同于"全部"
-            }
+                parsed = GlobalAgentPool.PoolStatus.valueOf(status);
+            } catch (IllegalArgumentException ignored) {}
+            statusFilter = parsed;
+        } else {
+            statusFilter = null;
         }
 
-        // ── 分页查询（按筛选条件选择查询方法）──
+        // ── 分页查询 ──
+        // 异常筛选需要计算每条记录的异常标签，无法下推到 DB，因此走
+        // "全量加载 → 标签计算 → Java 过滤 → 手动分页" 路径。
+        // 无异常筛选时走 DB 分页，避免加载全量。
         Page<GlobalAgentPool> poolPage;
+        boolean anomalyFilterActive = !anomaly.isBlank();
+
         if (!keyword.isBlank()) {
-            // 收集匹配 userid 集合：
-            // 1) 池中 userid 模糊匹配（DB 层 LIKE，不加载全量实体）
-            // 2) Agent 表姓名搜索
-            // 3) Employee 表姓名搜索
+            // 收集匹配 userid 集合
             Set<String> keywordUserIds = new LinkedHashSet<>();
             for (GlobalAgentPool p : poolRepo.findByAgentUseridContaining(keyword)) {
                 keywordUserIds.add(p.getAgentUserid());
@@ -107,15 +113,38 @@ public class AgentController {
                 keywordUserIds.add(emp.getUserid());
             }
 
-            if (!keywordUserIds.isEmpty()) {
+            if (keywordUserIds.isEmpty()) {
+                poolPage = Page.empty(pageable);
+            } else if (anomalyFilterActive) {
+                // 关键词 + 异常 双筛选 → 全量加载后 Java 过滤 + 手动分页
+                List<GlobalAgentPool> matched = poolRepo.findAll().stream()
+                    .filter(p -> keywordUserIds.contains(p.getAgentUserid()))
+                    .filter(p -> statusFilter == null || p.getStatus() == statusFilter)
+                    .filter(p -> anomaly.equals(getAnomalyLabel(p.getAgentUserid(), agentMap, employeeMap)))
+                    .sorted(Comparator.comparingInt(GlobalAgentPool::getSortOrder))
+                    .toList();
+                int start = (int) pageable.getOffset();
+                int end = Math.min(start + pageable.getPageSize(), matched.size());
+                List<GlobalAgentPool> slice = start < matched.size()
+                    ? matched.subList(start, end) : Collections.emptyList();
+                poolPage = new PageImpl<>(slice, pageable, matched.size());
+            } else {
                 List<String> matchList = new ArrayList<>(keywordUserIds);
                 poolPage = statusFilter != null
                     ? poolRepo.findByAgentUseridInAndStatusOrderBySortOrder(matchList, statusFilter, pageable)
                     : poolRepo.findByAgentUseridInOrderBySortOrder(matchList, pageable);
-            } else {
-                // 无匹配 → 返回空页
-                poolPage = Page.empty(pageable);
             }
+        } else if (anomalyFilterActive) {
+            // 仅异常筛选 → 全量加载后 Java 过滤 + 手动分页
+            List<GlobalAgentPool> matched = poolRepo.findAll().stream()
+                .filter(p -> anomaly.equals(getAnomalyLabel(p.getAgentUserid(), agentMap, employeeMap)))
+                .sorted(Comparator.comparingInt(GlobalAgentPool::getSortOrder))
+                .toList();
+            int start = (int) pageable.getOffset();
+            int end = Math.min(start + pageable.getPageSize(), matched.size());
+            List<GlobalAgentPool> slice = start < matched.size()
+                ? matched.subList(start, end) : Collections.emptyList();
+            poolPage = new PageImpl<>(slice, pageable, matched.size());
         } else {
             poolPage = statusFilter != null
                 ? poolRepo.findByStatusOrderBySortOrder(statusFilter, pageable)
@@ -137,44 +166,17 @@ public class AgentController {
             }
         }
 
-        // ── 构建异常状态标签映射（userid → 异常描述）──
-        // 优先级：Agent blocked/melted > Agent warning > Employee wechatStatus 异常
+        // ── 构建当前页的异常状态标签映射（复用 getAnomalyLabel 统一逻辑）──
         Map<String, String> agentAnomalyMap = new LinkedHashMap<>();
-        Map<String, String> agentAnomalyClassMap = new LinkedHashMap<>(); // bg-danger / bg-warning
+        Map<String, String> agentAnomalyClassMap = new LinkedHashMap<>();
         for (GlobalAgentPool p : poolPage.getContent()) {
-            String uid = p.getAgentUserid();
-            Agent a = agentMap.get(uid);
-            Employee emp = employeeMap.get(uid);
-
-            if (a != null && a.getOverallStatus() == Agent.OverallStatus.blocked) {
-                String reason = a.getStatusReason();
-                if (reason != null && reason.contains("40098")) {
-                    agentAnomalyMap.put(uid, "未实名");
-                } else if (reason != null && reason.contains("41054")) {
-                    agentAnomalyMap.put(uid, "未加入组织");
-                } else {
-                    agentAnomalyMap.put(uid, "已停用");
-                }
-                agentAnomalyClassMap.put(uid, "bg-danger");
-            } else if (a != null && a.getOverallStatus() == Agent.OverallStatus.melted) {
-                agentAnomalyMap.put(uid, "已熔断");
-                agentAnomalyClassMap.put(uid, "bg-danger");
-            } else if (a != null && a.getOverallStatus() == Agent.OverallStatus.warning) {
-                agentAnomalyMap.put(uid, "预警");
-                agentAnomalyClassMap.put(uid, "bg-warning text-dark");
-            } else if (emp != null && emp.getWechatStatus() != null) {
-                int ws = emp.getWechatStatus();
-                if (ws == 5) {
-                    agentAnomalyMap.put(uid, "已离职");
-                    agentAnomalyClassMap.put(uid, "bg-danger");
-                } else if (ws == 4) {
-                    agentAnomalyMap.put(uid, "未激活");
-                    agentAnomalyClassMap.put(uid, "bg-warning text-dark");
-                } else if (ws == 2) {
-                    agentAnomalyMap.put(uid, "已禁用");
-                    agentAnomalyClassMap.put(uid, "bg-warning text-dark");
-                }
-                // ws == 1 (已激活) → 不添加异常标签
+            String label = getAnomalyLabel(p.getAgentUserid(), agentMap, employeeMap);
+            if (label != null) {
+                agentAnomalyMap.put(p.getAgentUserid(), label);
+                agentAnomalyClassMap.put(p.getAgentUserid(),
+                    "已离职".equals(label) || "已熔断".equals(label)
+                    || "已停用".equals(label) || "未实名".equals(label)
+                    || "未加入组织".equals(label) ? "bg-danger" : "bg-warning text-dark");
             }
         }
 
@@ -183,6 +185,7 @@ public class AgentController {
         model.addAttribute("agentQrNames", agentQrNames);
         model.addAttribute("agentAnomalyMap", agentAnomalyMap);
         model.addAttribute("agentAnomalyClassMap", agentAnomalyClassMap);
+        model.addAttribute("anomalyFilter", anomaly);
         model.addAttribute("standbyCount", standbyCount);
         model.addAttribute("fullCount", fullCount);
         model.addAttribute("blockedCount", blockedCount);
@@ -213,5 +216,43 @@ public class AgentController {
             redirect.addFlashAttribute("error", "同步失败，请稍后重试或联系管理员");
         }
         return "redirect:/agents";
+    }
+
+    /**
+     * 计算员工的异常状态标签（供筛选和展示共用）。
+     *
+     * <p>判定优先级：Agent blocked（含 40098/41054 细分）> Agent melted >
+     * Agent warning > Employee wechatStatus 异常。正常员工返回 {@code null}。</p>
+     *
+     * @param userid      企微员工 userid
+     * @param agentMap    全量 Agent 快照
+     * @param employeeMap 全量 Employee 快照
+     * @return 异常标签如"未实名"，正常则返回 {@code null}
+     */
+    private String getAnomalyLabel(String userid,
+                                   Map<String, Agent> agentMap,
+                                   Map<String, Employee> employeeMap) {
+        Agent a = agentMap.get(userid);
+        Employee emp = employeeMap.get(userid);
+
+        if (a != null && a.getOverallStatus() == Agent.OverallStatus.blocked) {
+            String reason = a.getStatusReason();
+            if (reason != null && reason.contains("40098")) return "未实名";
+            if (reason != null && reason.contains("41054")) return "未加入组织";
+            return "已停用";
+        }
+        if (a != null && a.getOverallStatus() == Agent.OverallStatus.melted) {
+            return "已熔断";
+        }
+        if (a != null && a.getOverallStatus() == Agent.OverallStatus.warning) {
+            return "预警";
+        }
+        if (emp != null && emp.getWechatStatus() != null) {
+            int ws = emp.getWechatStatus();
+            if (ws == 5) return "已离职";
+            if (ws == 4) return "未激活";
+            if (ws == 2) return "已禁用";
+        }
+        return null; // 正常
     }
 }

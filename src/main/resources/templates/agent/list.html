@@ -62,6 +62,19 @@
                     <option value="blocked" th:selected="${statusFilter == 'blocked'}">暂停</option>
                 </select>
             </div>
+            <div class="col-md-2">
+                <select name="anomaly" class="form-select">
+                    <option value="">全部异常</option>
+                    <option value="未实名" th:selected="${anomalyFilter == '未实名'}">未实名</option>
+                    <option value="未加入组织" th:selected="${anomalyFilter == '未加入组织'}">未加入组织</option>
+                    <option value="已停用" th:selected="${anomalyFilter == '已停用'}">已停用</option>
+                    <option value="已熔断" th:selected="${anomalyFilter == '已熔断'}">已熔断</option>
+                    <option value="预警" th:selected="${anomalyFilter == '预警'}">预警</option>
+                    <option value="已离职" th:selected="${anomalyFilter == '已离职'}">已离职</option>
+                    <option value="未激活" th:selected="${anomalyFilter == '未激活'}">未激活</option>
+                    <option value="已禁用" th:selected="${anomalyFilter == '已禁用'}">已禁用</option>
+                </select>
+            </div>
             <div class="col-md-1">
                 <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
             </div>
@@ -141,10 +154,10 @@
 
             <!-- 无匹配结果 -->
             <div th:if="${poolPage.isEmpty()}" class="text-center text-muted py-4">
-                <p class="mb-1" th:if="${!keyword.isBlank() || !statusFilter.isBlank()}">
+                <p class="mb-1" th:if="${!keyword.isBlank() || !statusFilter.isBlank() || !anomalyFilter.isBlank()}">
                     无匹配员工，请调整筛选条件
                 </p>
-                <p class="mb-1" th:if="${keyword.isBlank() && statusFilter.isBlank()}">
+                <p class="mb-1" th:if="${keyword.isBlank() && statusFilter.isBlank() && anomalyFilter.isBlank()}">
                     全局员工池为空
                 </p>
                 <small>请先在活码详情页中将员工加入全局池，或点击「从企微同步」导入</small>
@@ -158,7 +171,7 @@
             <!-- 上一页：首页时用 span 替代链接，防止 page=-1 -->
             <li class="page-item" th:classappend="${poolPage.first ? 'disabled' : ''}">
                 <th:block th:if="${!poolPage.first}">
-                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},page=${poolPage.number - 1},size=${poolPage.size})}">上一页</a>
+                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number - 1},size=${poolPage.size})}">上一页</a>
                 </th:block>
                 <th:block th:if="${poolPage.first}">
                     <span class="page-link">上一页</span>
@@ -172,6 +185,7 @@
                       onsubmit="var v=parseInt(this.goto.value);var m=parseInt(this.getAttribute('data-max-page'));if(isNaN(v)||v<1)v=1;if(v>m)v=m;this.page.value=v-1">
                     <input type="hidden" name="keyword" th:value="${keyword}">
                     <input type="hidden" name="status" th:value="${statusFilter}">
+                    <input type="hidden" name="anomaly" th:value="${anomalyFilter}">
                     <input type="hidden" name="size" th:value="${poolPage.size}">
                     <input type="hidden" name="page" value="0">
                     <span>第</span>
@@ -189,7 +203,7 @@
             <!-- 下一页：末页时用 span 替代链接 -->
             <li class="page-item" th:classappend="${poolPage.last ? 'disabled' : ''}">
                 <th:block th:if="${!poolPage.last}">
-                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},page=${poolPage.number + 1},size=${poolPage.size})}">下一页</a>
+                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number + 1},size=${poolPage.size})}">下一页</a>
                 </th:block>
                 <th:block th:if="${poolPage.last}">
                     <span class="page-link">下一页</span>
