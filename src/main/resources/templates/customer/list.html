@@ -162,7 +162,7 @@
                 <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number - 1})}">上一页</a>
             </li>
             <!-- 页码信息：当前页 / 总页数 -->
-            <li class="page-item disabled">
+            <li class="page-item">
                 <span class="page-link border-0 bg-transparent">
                     第 <span th:text="${customers.number + 1}"></span> / <span th:text="${customers.totalPages}"></span> 页
                     <input type="number" id="pageInput" min="1" th:max="${customers.totalPages}"
