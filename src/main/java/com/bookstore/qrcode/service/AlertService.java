@@ -212,9 +212,9 @@ public class AlertService {
                                    AgentAlert.AutoAction autoAction,
                                    Long qrCodeId) {
         try {
-            String detailJson = detail instanceof String
-                ? (String) detail
-                : objectMapper.writeValueAsString(detail);
+            // 统一经 Jackson 序列化，确保字符串也会被 JSON 编码（加引号），
+            // 否则 MySQL JSON 列会拒绝裸中文字符串（Invalid JSON text）
+            String detailJson = objectMapper.writeValueAsString(detail);
 
             AgentAlert alert = AgentAlert.builder()
                 .agentUserid(agentUserid)
