@@ -158,6 +158,12 @@ public class CustomerController {
             .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
         model.addAttribute("schoolNameMap", schoolNameMap);
 
+        // 搜索框回显：把 schoolId/currentAgent 转成可读名称
+        model.addAttribute("schoolDisplay", schoolId != null
+            ? schoolNameMap.getOrDefault(schoolId, schoolId) : null);
+        model.addAttribute("agentDisplay", currentAgent != null
+            ? agentNameMap.getOrDefault(currentAgent, currentAgent) : null);
+
         return "customer/list";
     }
 

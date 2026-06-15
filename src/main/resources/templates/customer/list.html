@@ -73,7 +73,7 @@
             <!-- 学校筛选：可输入搜索也可下拉选择 -->
             <div class="col-md-2">
                 <input type="text" name="schoolId" class="form-control" list="schoolList"
-                       placeholder="搜索学校..." th:value="${schoolId}" autocomplete="off">
+                       placeholder="搜索学校..." th:value="${schoolDisplay}" autocomplete="off">
                 <datalist id="schoolList">
                     <option th:each="q : ${qrCodes}"
                             th:value="${q.schoolId}"
@@ -83,7 +83,7 @@
             <!-- 接待人筛选：可输入搜索也可下拉选择 -->
             <div class="col-md-2">
                 <input type="text" name="currentAgent" class="form-control" list="agentList"
-                       placeholder="搜索接待人..." th:value="${currentAgent}" autocomplete="off">
+                       placeholder="搜索接待人..." th:value="${agentDisplay}" autocomplete="off">
                 <datalist id="agentList">
                     <option th:each="a : ${agents}"
                             th:value="${a.userid}"
