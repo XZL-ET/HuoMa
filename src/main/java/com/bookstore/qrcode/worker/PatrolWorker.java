@@ -10,7 +10,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 定时巡检任务 —— 每 5 分钟扫描全系统异常状态。
@@ -106,16 +107,26 @@ public class PatrolWorker {
      */
     private void cleanUnhealthyFromPool() {
         List<GlobalAgentPool> all = poolRepo.findAll();
+        if (all.isEmpty()) return;
+
+        // 批量加载 — 避免 N+1 查询（池 500 人 → 1000 次 DB 查询）
+        Map<String, Employee> empMap = employeeRepo.findAll().stream()
+            .collect(Collectors.toMap(
+                Employee::getUserid, e -> e, (a, b) -> a));
+        Map<String, Agent> agentMap = agentRepo.findAll().stream()
+            .collect(Collectors.toMap(
+                Agent::getUserid, a -> a, (a, b) -> a));
+
         int removed = 0;
         for (GlobalAgentPool p : all) {
-            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            Employee emp = empMap.get(p.getAgentUserid());
             if (emp != null && (!emp.getActive()
                 || (emp.getWechatStatus() != null && emp.getWechatStatus() != 1))) {
                 poolRepo.delete(p);
                 removed++;
                 continue;
             }
-            Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
+            Agent agent = agentMap.get(p.getAgentUserid());
             if (agent != null && (agent.getOverallStatus() == Agent.OverallStatus.blocked
                 || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
                 poolRepo.delete(p);
