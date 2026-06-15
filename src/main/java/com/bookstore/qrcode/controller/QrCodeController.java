@@ -37,6 +37,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLConnection;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.zip.ZipEntry;
@@ -1039,10 +1041,12 @@ public class QrCodeController {
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(10000);
         conn.connect();
+        // 手动构建 Content-Disposition 头，用 RFC 5987 编码确保中文文件名不乱码
         String filename = qr.getRegionDistrict() + "-" + qr.getSchoolName() + "-" + qr.getRegionCity() + ".png";
+        String encodedFilename = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20");
         response.setContentType(MediaType.IMAGE_PNG_VALUE);
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.attachment().filename(filename).build().toString());
+            "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename);
         response.setContentLength(conn.getContentLength());
         try (InputStream in = conn.getInputStream()) {
             in.transferTo(response.getOutputStream());
