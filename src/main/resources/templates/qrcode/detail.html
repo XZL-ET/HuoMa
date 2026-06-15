@@ -52,10 +52,8 @@
                 </div>
                 <!-- 下载和操作按钮 -->
                 <div class="mt-3 d-flex gap-2 justify-content-center">
-                    <a th:href="@{/qrcodes/{id}/download(id=${qr.id},dpi=72)}"
-                       class="btn btn-sm btn-outline-primary">📥 下载 72dpi（线上）</a>
-                    <a th:href="@{/qrcodes/{id}/download(id=${qr.id},dpi=300)}"
-                       class="btn btn-sm btn-outline-secondary">🖨️ 下载 300dpi（打印）</a>
+                    <a th:href="@{/qrcodes/{id}/download(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-primary">📥 下载原图</a>
                     <button class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#styleModal">
                         🎨 自定义样式
                     </button>

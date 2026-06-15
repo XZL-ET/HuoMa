@@ -1024,27 +1024,14 @@ public class QrCodeController {
      */
     @GetMapping("/{id}/download")
     public void downloadSingle(@PathVariable Long id,
-                               @RequestParam(defaultValue = "72") int dpi,
                                HttpServletResponse response) throws IOException {
-        // 获取活码信息（主要用于构建文件名）
+        // 获取活码信息，直接跳转企微原图进行下载
         QrCode qr = qrCodeService.getById(id);
-        // 调用图片服务生成二维码字节数组
-        byte[] imageBytes = qrImageService.generateQrImage(id, dpi);
-
-        // 构建下载文件名：学校名称_分辨率dpi.png
-        String filename = qr.getSchoolName() + "_" + dpi + "dpi.png";
-
-        // 设置响应头：PNG 图片，附件下载
-        response.setContentType(MediaType.IMAGE_PNG_VALUE);
-        // Content-Disposition: attachment 触发浏览器下载对话框
-        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.attachment().filename(filename).build().toString());
-        // 设置 Content-Length 以便浏览器显示下载进度
-        response.setContentLength(imageBytes.length);
-
-        // 写入字节流并刷新
-        response.getOutputStream().write(imageBytes);
-        response.getOutputStream().flush();
+        if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "该活码暂无二维码图片");
+            return;
+        }
+        response.sendRedirect(qr.getQrUrl());
     }
 
     /**
