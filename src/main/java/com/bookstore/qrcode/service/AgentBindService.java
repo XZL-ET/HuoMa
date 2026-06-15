@@ -200,7 +200,11 @@ public class AgentBindService {
             // 重入守卫: 如果该员工在此活码上已经下码（被之前的扩容处理过），直接跳过
             // 场景: 同一员工的延迟回调/重推消息在首次扩容完成后到达，dailyCount 可能 > dailyMax
             QrAgent fullAgent = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, fullUserId).orElse(null);
-            if (fullAgent != null && fullAgent.getStatus() == QrAgent.AgentStatus.full) {
+            if (fullAgent == null) {
+                log.warn("员工不在活码上，跳过扩容（可能已被手动移除）: qr={}, user={}", qrCodeId, fullUserId);
+                return;
+            }
+            if (fullAgent.getStatus() == QrAgent.AgentStatus.full) {
                 log.info("员工已下码，跳过重复扩容: qr={}, user={}", qrCodeId, fullUserId);
                 return;
             }
