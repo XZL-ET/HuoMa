@@ -172,9 +172,10 @@ public class EmployeeSyncService {
         // 2. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
         Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
-        // 在职但不在池中的员工
+        // 在职但不在池中的员工（排除企微侧明确不可用的：已禁用/未激活/已离职）
         List<Employee> activeNotInPool = employeeRepo.findAllByActiveTrueOrderByName().stream()
             .filter(e -> !pooledUserIds.contains(e.getUserid()))
+            .filter(e -> e.getWechatStatus() == null || e.getWechatStatus() == 1)
             .toList();
 
         if (activeNotInPool.isEmpty()) {
