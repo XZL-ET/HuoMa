@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ContentDisposition;
@@ -115,7 +116,8 @@ public class CustomerController {
         // ---- 执行分页搜索 ----
         Page<Customer> customers = customerService.search(
             keyword, schoolId, currentAgent, cs,
-            startTime, endTime, PageRequest.of(page, size));
+            startTime, endTime,
+            PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "addTime")));
         model.addAttribute("customers", customers);
         model.addAttribute("keyword", keyword);
         model.addAttribute("schoolId", schoolId);
