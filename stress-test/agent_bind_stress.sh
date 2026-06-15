@@ -12,8 +12,9 @@
 #
 # 只读场景（安全，不影响任何数据）:
 #   pool-scan      扫描全局池健康度（离职/不可用/封号占比）
-#   rotation-audit 审计轮转公平性（池前20名的 sortOrder 分布）
+#   rotation-audit 审计轮转公平性（池前30名的 sortOrder 分布）
 #   bind-sim       模拟 bindAgents 选人过程（纯 SQL，不写入）
+#   rotation-sim   轮转链路推演：模拟 N 轮上下码（纯 SQL）
 #   qr-profile     分析活码人员构成（角色/日限/来源分布）
 #   all-audit      依次执行上述所有只读分析
 #
@@ -375,8 +376,8 @@ simulate_bind() {
     fi
     log_info "基于活码 ID=${qr_id} 模拟"
 
-    # 获取该活码已有的联系人
-    local existing=$(mysql_q "SELECT GROUP_CONCAT(agent_userid) FROM qr_agent WHERE qr_code_id = ${qr_id} AND status = 'active';")
+    # 活码上已有联系人的子查询
+    local exclude_sql="SELECT a2.agent_userid FROM qr_agent a2 WHERE a2.qr_code_id = ${qr_id} AND a2.status = 'active'"
 
     echo ""
     echo ">>> 模拟 takeStandby 选 ${count} 人（已在活码上的排除）:"
@@ -391,7 +392,7 @@ simulate_bind() {
         LEFT JOIN employee e ON e.userid = p.agent_userid
         LEFT JOIN agent a ON a.userid = p.agent_userid
         WHERE p.status = 'standby'
-          AND p.agent_userid NOT IN (${existing:-''})
+          AND p.agent_userid NOT IN (${exclude_sql})
         ORDER BY p.sort_order ASC
         LIMIT ${count};
     "
@@ -401,7 +402,7 @@ simulate_bind() {
         SELECT COUNT(*) FROM global_agent_pool p
         JOIN employee e ON e.userid = p.agent_userid
         WHERE p.status = 'standby' AND e.active = 0
-          AND p.agent_userid NOT IN (${existing:-''})
+          AND p.agent_userid NOT IN (${exclude_sql})
         ORDER BY p.sort_order
         LIMIT ${count};
     ")
@@ -409,7 +410,7 @@ simulate_bind() {
         SELECT COUNT(*) FROM global_agent_pool p
         JOIN employee e ON e.userid = p.agent_userid
         WHERE p.status = 'standby' AND e.wechat_status IS NOT NULL AND e.wechat_status != 1
-          AND p.agent_userid NOT IN (${existing:-''})
+          AND p.agent_userid NOT IN (${exclude_sql})
         ORDER BY p.sort_order
         LIMIT ${count};
     ")
@@ -418,6 +419,128 @@ simulate_bind() {
     log_info "在前 ${count} 名中会被懒清理跳过:"
     log_metric "离职"   "${skip_inactive:-0}"
     log_metric "企微不可用" "${skip_wx:-0}"
+}
+
+# ============================================================
+# 只读场景: 轮转链路模拟
+# ============================================================
+simulate_rotation_chain() {
+    local rounds=${PARAM:-10}
+    log_title "轮转链路模拟（纯 SQL 推演 ${rounds} 轮上下码）"
+
+    local qr_id=$(get_prod_qr_ids | head -1)
+    if [ -z "$qr_id" ]; then
+        log_warn "无生产活码，跳过"
+        return
+    fi
+
+    local qr_name=$(mysql_q "SELECT school_name FROM qr_code WHERE id=${qr_id};")
+    log_info "基于活码: ${qr_name} (ID=${qr_id})"
+    log_info "模拟: 每轮取 1 人 → 满员 → 再取 1 人替换，共 ${rounds} 轮"
+
+    # 取当前池的快照（按 sortOrder 排序，过滤不可用的）
+    echo ""
+    echo ">>> 全局池前 50 名健康度预览:"
+    mysql_table "
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY p.sort_order ASC) AS 队列位置,
+            p.agent_userid AS 员工,
+            p.sort_order AS 排序号,
+            CASE WHEN e.wechat_status != 1 AND e.wechat_status IS NOT NULL
+                 THEN CONCAT('❌ wx=', e.wechat_status)
+                 WHEN a.overall_status IN ('blocked','melted')
+                 THEN '❌ 封号/熔断'
+                 ELSE '✅'
+            END AS 健康状态,
+            COALESCE(e.name, '?') AS 姓名
+        FROM global_agent_pool p
+        LEFT JOIN employee e ON e.userid = p.agent_userid
+        LEFT JOIN agent a ON a.userid = p.agent_userid
+        WHERE p.status = 'standby'
+        ORDER BY p.sort_order ASC
+        LIMIT 50;
+    "
+
+    # 模拟轮转链
+    echo ""
+    echo ">>> 轮转链路推演（每轮 = 1人满员 → 池取1人替换）:"
+    echo ""
+
+    local skip_count=0
+    local take_count=0
+    local prev_userid="(首个)"
+
+    # 取池中前N个（含不可用的，以模拟真实遍历）
+    local pool_snapshot=$(mysql_q "
+        SELECT CONCAT(p.agent_userid, '|', p.sort_order, '|',
+               COALESCE(e.name,'?'), '|',
+               CASE WHEN e.wechat_status != 1 AND e.wechat_status IS NOT NULL THEN 'skip'
+                    WHEN a.overall_status IN ('blocked','melted') THEN 'skip'
+                    ELSE 'take' END)
+        FROM global_agent_pool p
+        LEFT JOIN employee e ON e.userid = p.agent_userid
+        LEFT JOIN agent a ON a.userid = p.agent_userid
+        WHERE p.status = 'standby'
+        ORDER BY p.sort_order ASC;
+    ")
+
+    local round=0
+    local skipped_list=""
+    local taken_list=""
+
+    while IFS='|' read -r uid sort name verdict; do
+        [ -z "$uid" ] && continue
+
+        if [ "$verdict" = "skip" ]; then
+            skip_count=$((skip_count + 1))
+            if [ $skip_count -le 5 ]; then
+                echo "  ⏭️  跳过 #${skip_count}: ${uid}(${name}) sort=${sort} — 懒清理出池"
+            fi
+            if [ $skip_count -eq 6 ]; then
+                echo "  ... (后续跳过省略，共 $(echo "$pool_snapshot" | grep -c 'skip$') 人将被懒清理)"
+            fi
+            continue
+        fi
+
+        # 这是一个可用的员工
+        take_count=$((take_count + 1))
+        round=$((round + 1))
+
+        # 模拟：该员工被取走 → sortOrder 移至队尾
+        local new_sort=$(( $(mysql_q "SELECT MAX(sort_order) FROM global_agent_pool;") + take_count ))
+
+        if [ $round -le $rounds ]; then
+            printf "  🔄 轮转 #%-2d: %s(%s) 上码 (sort=%s→%s) 替换 %s\n" \
+                "$round" "$uid" "$name" "$sort" "$new_sort" "$prev_userid"
+            prev_userid="${uid}(${name})"
+        fi
+
+        [ $round -ge $rounds ] && break
+    done <<< "$pool_snapshot"
+
+    echo ""
+    log_info "推演结果:"
+
+    local total_healthy=$(echo "$pool_snapshot" | grep -c 'take$')
+    local total_skip=$(echo "$pool_snapshot" | grep -c 'skip$')
+
+    log_metric "池中 standby 总数" "$(echo "$pool_snapshot" | wc -l)"
+    log_metric "可用 (take)"   "${total_healthy}"
+    log_metric "不可用 (skip)" "${total_skip}"
+    log_metric "懒清理比例"   "$(( total_skip * 100 / (total_healthy + total_skip) )) %"
+    log_metric "可支撑轮转"   "${total_healthy} 轮（${rounds} 轮模拟完成）"
+
+    if [ "$total_skip" -gt 0 ]; then
+        echo ""
+        log_warn "队首有 ${total_skip} 个不可用员工会被懒清理，首次 takeStandby 需遍历跳过它们"
+        log_info "建议: 触发员工同步清理企微侧不可用账号，减少无效遍历"
+    fi
+
+    if [ "$total_healthy" -lt "$((rounds * 2))" ]; then
+        log_warn "⚠️ 可用员工不足支撑 ${rounds} 轮轮转的 2 倍余量"
+    else
+        log_info "✅ 池容量充足"
+    fi
 }
 
 # ============================================================
@@ -712,6 +835,7 @@ show_help() {
     echo "  pool-scan       扫描全局池健康度（离职/不可用/封号占比）"
     echo "  rotation-audit  审计轮转公平性（池前30名的 sortOrder 分布）"
     echo "  bind-sim        模拟 bindAgents 选人过程（纯 SQL）"
+    echo "  rotation-sim [N] 轮转链路推演 N 轮上下码（默认 10）"
     echo "  qr-profile      分析活码人员构成（角色/日限/来源分布）"
     echo "  all-audit       依次执行上述所有只读分析"
     echo ""
@@ -750,6 +874,7 @@ case ${SCENARIO} in
     status)     cmd_status; exit 0 ;;
 
     # 只读分析
+    rotation-sim)   simulate_rotation_chain ;;
     pool-scan)      scan_pool_health ;;
     rotation-audit) audit_rotation ;;
     bind-sim)       simulate_bind ;;
@@ -760,6 +885,8 @@ case ${SCENARIO} in
         audit_rotation
         echo "" && sleep 1
         simulate_bind
+        echo "" && sleep 1
+        simulate_rotation_chain
         echo "" && sleep 1
         analyze_qr_profile
         ;;
