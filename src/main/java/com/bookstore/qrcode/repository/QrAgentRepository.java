@@ -119,4 +119,7 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
      * @param agentUserid 接待员的企业微信用户 ID
      */
     void deleteByQrCodeIdAndAgentUserid(Long qrCodeId, String agentUserid);
+
+    /** 按 agentUserid 列表批量查询 — 替代 findAll 全表加载 */
+    List<QrAgent> findByAgentUseridIn(Collection<String> agentUserids);
 }

@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,4 +38,7 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     @Transactional
     @Query("UPDATE Employee e SET e.active = false WHERE e.userid NOT IN :activeUserIds")
     int deactivateNotIn(List<String> activeUserIds);
+
+    /** 按 userid 列表批量查询 — 替代 findAll 全表加载 */
+    List<Employee> findByUseridIn(Collection<String> userids);
 }

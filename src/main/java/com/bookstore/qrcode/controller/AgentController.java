@@ -66,15 +66,18 @@ public class AgentController {
         long fullCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.full);
         long blockedCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.blocked);
 
-        // ── 构建员工姓名映射 + Employee/Agent 快照（供模板展示异常状态）──
+        // ── 构建员工姓名映射 + Employee/Agent 快照（仅加载池中 userid，避免全表扫描）──
+        Set<String> poolUserIds = new LinkedHashSet<>(poolRepo.findAllAgentUserids());
         Map<String, String> agentNameMap = new LinkedHashMap<>();
         Map<String, Employee> employeeMap = new LinkedHashMap<>();
-        for (Employee emp : employeeRepo.findAll()) {
-            agentNameMap.putIfAbsent(emp.getUserid(), emp.getName());
-            employeeMap.putIfAbsent(emp.getUserid(), emp);
+        if (!poolUserIds.isEmpty()) {
+            for (Employee emp : employeeRepo.findByUseridIn(poolUserIds)) {
+                agentNameMap.putIfAbsent(emp.getUserid(), emp.getName());
+                employeeMap.putIfAbsent(emp.getUserid(), emp);
+            }
         }
         Map<String, Agent> agentMap = new LinkedHashMap<>();
-        for (Agent agent : agentRepo.findAll()) {
+        for (Agent agent : agentRepo.findAllById(poolUserIds)) {
             agentNameMap.putIfAbsent(agent.getUserid(), agent.getName());
             agentMap.putIfAbsent(agent.getUserid(), agent);
         }
@@ -104,10 +107,8 @@ public class AgentController {
             for (GlobalAgentPool p : poolRepo.findByAgentUseridContaining(keyword)) {
                 keywordUserIds.add(p.getAgentUserid());
             }
-            for (Agent a : agentRepo.findAll()) {
-                if (a.getName() != null && a.getName().contains(keyword)) {
-                    keywordUserIds.add(a.getUserid());
-                }
+            for (Agent a : agentRepo.findByNameContaining(keyword)) {
+                keywordUserIds.add(a.getUserid());
             }
             for (Employee emp : employeeRepo.findByNameContaining(keyword)) {
                 keywordUserIds.add(emp.getUserid());
@@ -151,18 +152,25 @@ public class AgentController {
                 : poolRepo.findAllByOrderBySortOrder(pageable);
         }
 
-        // ── 每人对应的活码列表（userid -> 活码名称列表）──
+        // ── 每人对应的活码列表（仅加载池中 userid 的 QrAgent 和关联的 QrCode）──
         Map<String, List<String>> agentQrNames = new LinkedHashMap<>();
-        List<QrAgent> allQrAgents = qrAgentRepo.findAll();
-        Map<Long, String> qrNameMap = qrCodeRepo.findAll().stream()
-            .collect(Collectors.toMap(QrCode::getId, QrCode::getSchoolName, (a, b) -> a));
-
-        for (QrAgent qa : allQrAgents) {
-            if (qa.getStatus() == QrAgent.AgentStatus.active) {
-                String schoolName = qrNameMap.getOrDefault(qa.getQrCodeId(),
-                    "活码#" + qa.getQrCodeId());
-                agentQrNames.computeIfAbsent(qa.getAgentUserid(), k -> new ArrayList<>())
-                    .add(schoolName);
+        if (!poolUserIds.isEmpty()) {
+            List<QrAgent> poolQrAgents = qrAgentRepo.findByAgentUseridIn(poolUserIds);
+            Set<Long> qrCodeIds = poolQrAgents.stream()
+                .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.active)
+                .map(QrAgent::getQrCodeId)
+                .collect(Collectors.toSet());
+            Map<Long, String> qrNameMap = qrCodeIds.isEmpty()
+                ? Collections.emptyMap()
+                : qrCodeRepo.findAllById(qrCodeIds).stream()
+                    .collect(Collectors.toMap(QrCode::getId, QrCode::getSchoolName, (a, b) -> a));
+            for (QrAgent qa : poolQrAgents) {
+                if (qa.getStatus() == QrAgent.AgentStatus.active) {
+                    String schoolName = qrNameMap.getOrDefault(qa.getQrCodeId(),
+                        "活码#" + qa.getQrCodeId());
+                    agentQrNames.computeIfAbsent(qa.getAgentUserid(), k -> new ArrayList<>())
+                        .add(schoolName);
+                }
             }
         }
 

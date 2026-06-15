@@ -6,8 +6,11 @@ import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.config.RedisConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -48,6 +51,11 @@ public class PatrolWorker {
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
 
+    /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
+    @Lazy
+    @Autowired
+    private PatrolWorker self;
+
     /**
      * 每 5 分钟执行一次的主巡检入口。
      *
@@ -63,7 +71,7 @@ public class PatrolWorker {
 
         // 0. 池健康扫描 — 提前清理已离职/未激活/已禁用/封号/熔断的员工，
         //    避免阻塞队首导致后续 takeStandby 遍历浪费
-        cleanUnhealthyFromPool();
+        self.cleanUnhealthyFromPool();
 
         // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
         checkGlobalPoolLow();
@@ -105,7 +113,8 @@ public class PatrolWorker {
      * <p><b>风险：</b>纯读操作（不调企微 API），无网络/限频风险。
      * 删除后可能触发下游 {@link #checkGlobalPoolLow} 自动补充。</p>
      */
-    private void cleanUnhealthyFromPool() {
+    @Transactional
+    void cleanUnhealthyFromPool() {
         List<GlobalAgentPool> all = poolRepo.findAll();
         if (all.isEmpty()) return;
 
@@ -117,24 +126,23 @@ public class PatrolWorker {
             .collect(Collectors.toMap(
                 Agent::getUserid, a -> a, (a, b) -> a));
 
-        int removed = 0;
+        List<GlobalAgentPool> toRemove = new ArrayList<>();
         for (GlobalAgentPool p : all) {
             Employee emp = empMap.get(p.getAgentUserid());
             if (emp != null && (!emp.getActive()
                 || (emp.getWechatStatus() != null && emp.getWechatStatus() != 1))) {
-                poolRepo.delete(p);
-                removed++;
+                toRemove.add(p);
                 continue;
             }
             Agent agent = agentMap.get(p.getAgentUserid());
             if (agent != null && (agent.getOverallStatus() == Agent.OverallStatus.blocked
                 || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
-                poolRepo.delete(p);
-                removed++;
+                toRemove.add(p);
             }
         }
-        if (removed > 0) {
-            log.info("池健康扫描：清理 {} 个异常员工", removed);
+        if (!toRemove.isEmpty()) {
+            poolRepo.deleteAll(toRemove);
+            log.info("池健康扫描：清理 {} 个异常员工", toRemove.size());
         }
     }
 
@@ -191,9 +199,15 @@ public class PatrolWorker {
      */
     private void checkOverloadedQrCodes() {
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+        if (activeQrs.isEmpty()) return;
+
+        // 一次查全部 active QrAgent，按 qrCodeId 分组 — 避免 N+1
+        Map<Long, List<QrAgent>> qrAgentMap = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active)
+            .stream()
+            .collect(Collectors.groupingBy(QrAgent::getQrCodeId));
+
         for (QrCode qr : activeQrs) {
-            List<QrAgent> receptionists = qrAgentRepo.findByQrCodeIdAndStatus(
-                qr.getId(), QrAgent.AgentStatus.active);
+            List<QrAgent> receptionists = qrAgentMap.getOrDefault(qr.getId(), Collections.emptyList());
             if (receptionists.isEmpty()) continue;
 
             boolean allOverloaded = receptionists.stream().allMatch(a -> {

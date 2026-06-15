@@ -71,4 +71,7 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT a FROM Agent a WHERE a.userid = :userid")
     Optional<Agent> findByIdForUpdate(@Param("userid") String userid);
+
+    /** 按姓名模糊搜索 — 替代 findAll 后 Java 过滤 */
+    List<Agent> findByNameContaining(String name);
 }
