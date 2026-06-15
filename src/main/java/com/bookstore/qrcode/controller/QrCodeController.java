@@ -34,6 +34,9 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.URLConnection;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.zip.ZipEntry;
@@ -1025,13 +1028,26 @@ public class QrCodeController {
     @GetMapping("/{id}/download")
     public void downloadSingle(@PathVariable Long id,
                                HttpServletResponse response) throws IOException {
-        // 获取活码信息，直接跳转企微原图进行下载
         QrCode qr = qrCodeService.getById(id);
         if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "该活码暂无二维码图片");
             return;
         }
-        response.sendRedirect(qr.getQrUrl());
+        // 服务端代理抓取企微原图，设置 attachment 强制浏览器下载
+        URL url = new URL(qr.getQrUrl());
+        URLConnection conn = url.openConnection();
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(10000);
+        conn.connect();
+        String filename = qr.getSchoolName() + ".png";
+        response.setContentType(MediaType.IMAGE_PNG_VALUE);
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+            ContentDisposition.attachment().filename(filename).build().toString());
+        response.setContentLength(conn.getContentLength());
+        try (InputStream in = conn.getInputStream()) {
+            in.transferTo(response.getOutputStream());
+        }
+        response.getOutputStream().flush();
     }
 
     /**
