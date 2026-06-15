@@ -656,6 +656,20 @@ public class QrCodeService {
             .build());
 
         log.info("联系人已添加: qrCodeId={}, agentUserid={}", qrCodeId, agentUserid);
+
+        // 同步企微侧联系人列表，确保企微配置与本地一致
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncQrUsersToWechat(qrCodeId);
+                    } catch (Exception e) {
+                        log.error("添加联系人后同步企微失败: qrCodeId={}, agentUserid={}",
+                            qrCodeId, agentUserid, e);
+                    }
+                }
+            });
     }
 
     /**
@@ -684,6 +698,20 @@ public class QrCodeService {
         agent.setStatus(QrAgent.AgentStatus.removed);
         qrAgentRepo.save(agent);
         log.info("联系人已移除: qrCodeId={}, agentUserid={}", qrCodeId, agent.getAgentUserid());
+
+        // 同步企微侧联系人列表，确保企微配置与本地一致
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncQrUsersToWechat(qrCodeId);
+                    } catch (Exception e) {
+                        log.error("移除联系人后同步企微失败: qrCodeId={}, agentUserid={}",
+                            qrCodeId, agent.getAgentUserid(), e);
+                    }
+                }
+            });
     }
 
     /**
