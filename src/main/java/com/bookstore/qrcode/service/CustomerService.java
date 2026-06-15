@@ -284,7 +284,9 @@ public class CustomerService {
     public long countToday() {
         LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
         LocalDateTime todayEnd = LocalDateTime.now();
-        return customerRepo.countByAddTimeBetween(todayStart, todayEnd);
+        // 仅统计 active 客户，排除已删除的记录
+        return customerRepo.countByAddTimeBetweenAndStatus(todayStart, todayEnd,
+            Customer.CustomerStatus.active);
     }
 
     /**
@@ -309,40 +311,47 @@ public class CustomerService {
      */
     @Transactional
     public int repairCustomerData() {
-        List<Customer> all = customerRepo.findAll();
+        // 分批处理，每批 50 条，避免全量加载到内存
+        int batchSize = 50;
+        int page = 0;
         int repaired = 0;
-        for (Customer c : all) {
-            boolean changed = false;
-            try {
-                JsonNode detail = wecomApi.getExternalContact(c.getExternalUserid());
-                if (detail.has("external_contact")) {
-                    JsonNode ec = detail.get("external_contact");
-                    // 仅当 unionid 为空时回填（unionid 是跨应用识别客户的重要标识）
-                    if (c.getUnionid() == null && ec.has("unionid") && !ec.get("unionid").isNull()) {
-                        c.setUnionid(ec.get("unionid").asText());
-                        changed = true;
+        org.springframework.data.domain.Page<Customer> customerPage;
+        do {
+            customerPage = customerRepo.findAll(
+                org.springframework.data.domain.PageRequest.of(page++, batchSize));
+            for (Customer c : customerPage.getContent()) {
+                boolean changed = false;
+                try {
+                    JsonNode detail = wecomApi.getExternalContact(c.getExternalUserid());
+                    if (detail.has("external_contact")) {
+                        JsonNode ec = detail.get("external_contact");
+                        if (c.getUnionid() == null && ec.has("unionid") && !ec.get("unionid").isNull()) {
+                            c.setUnionid(ec.get("unionid").asText());
+                            changed = true;
+                        }
+                        if (c.getAvatar() == null && ec.has("avatar") && !ec.get("avatar").isNull()) {
+                            c.setAvatar(ec.get("avatar").asText());
+                            changed = true;
+                        }
+                        if ("未知".equals(c.getName()) && ec.has("name")) {
+                            c.setName(ec.get("name").asText());
+                            changed = true;
+                        }
                     }
-                    // 仅当头像为空时回填
-                    if (c.getAvatar() == null && ec.has("avatar") && !ec.get("avatar").isNull()) {
-                        c.setAvatar(ec.get("avatar").asText());
-                        changed = true;
-                    }
-                    // 仅当名称为默认值"未知"时回填实际名称
-                    if ("未知".equals(c.getName()) && ec.has("name")) {
-                        c.setName(ec.get("name").asText());
-                        changed = true;
-                    }
+                } catch (Exception e) {
+                    log.warn("修复客户数据失败: external={}", c.getExternalUserid(), e);
                 }
-            } catch (Exception e) {
-                // 单个客户修复失败不影响整体流程，记录 WARN 日志继续处理下一个
-                log.warn("修复客户数据失败: external={}", c.getExternalUserid(), e);
+                if (changed) {
+                    customerRepo.save(c);
+                    repaired++;
+                }
             }
-            if (changed) {
-                customerRepo.save(c);
-                repaired++;
-            }
-        }
-        log.info("客户数据修复完成: 共{}条, 修复{}条", all.size(), repaired);
+            // 每批处理完 flush + clear，释放持久化上下文内存
+            entityManager.flush();
+            entityManager.clear();
+        } while (customerPage.hasNext());
+
+        log.info("客户数据修复完成: 修复{}条", repaired);
         return repaired;
     }
 

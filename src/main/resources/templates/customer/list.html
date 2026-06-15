@@ -23,7 +23,7 @@
             <form method="post" th:action="@{/customers/repair-data}" style="display:inline">
                 <button type="submit" class="btn btn-outline-warning btn-sm">🔧 修复客户数据</button>
             </form>
-            <a href="/customers/export" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
+            <a th:href="@{/customers/export(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status})}" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
         </div>
     </div>
 
@@ -70,10 +70,24 @@
                 <input type="text" name="keyword" class="form-control" placeholder="搜索昵称/手机"
                        th:value="${keyword}">
             </div>
-            <!-- 学校筛选（待实现选项） -->
+            <!-- 学校筛选 -->
             <div class="col-md-2">
                 <select name="schoolId" class="form-select">
                     <option value="">全部学校</option>
+                    <option th:each="q : ${qrCodes}"
+                            th:value="${q.schoolId}"
+                            th:selected="${schoolId == q.schoolId}"
+                            th:text="${q.schoolName + ' (' + q.schoolId + ')'}"></option>
+                </select>
+            </div>
+            <!-- 接待人筛选 -->
+            <div class="col-md-2">
+                <select name="currentAgent" class="form-select">
+                    <option value="">全部接待人</option>
+                    <option th:each="a : ${agents}"
+                            th:value="${a.userid}"
+                            th:selected="${currentAgent == a.userid}"
+                            th:text="${a.name + ' (' + a.userid + ')'}"></option>
                 </select>
             </div>
             <!-- 状态筛选 -->
@@ -145,7 +159,7 @@
         <ul class="pagination justify-content-center">
             <!-- 上一页按钮，首页时禁用 -->
             <li class="page-item" th:classappend="${customers.first ? 'disabled' : ''}">
-                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},status=${status},page=${customers.number - 1})}">上一页</a>
+                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number - 1})}">上一页</a>
             </li>
             <!-- 页码信息：当前页 / 总页数 -->
             <li class="page-item disabled">
@@ -153,7 +167,7 @@
             </li>
             <!-- 下一页按钮，末页时禁用 -->
             <li class="page-item" th:classappend="${customers.last ? 'disabled' : ''}">
-                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},status=${status},page=${customers.number + 1})}">下一页</a>
+                <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number + 1})}">下一页</a>
             </li>
         </ul>
     </nav>

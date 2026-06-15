@@ -7,23 +7,29 @@
         <h5>客户详情</h5>
         <!-- 客户基本资料 -->
         <div class="row g-3 mt-2">
-            <div class="col-md-6"><strong>昵称：</strong><span th:text="${customer.name}">-</span></div>
-            <!-- 企微外部联系人 ID（external_userid） -->
-            <div class="col-md-6"><strong>企微ID：</strong><code th:text="${customer.externalUserid}">-</code></div>
-            <!-- 客户类型：1=微信，其他=企业微信 -->
-            <div class="col-md-6"><strong>类型：</strong><span th:text="${customer.type == 1 ? '微信' : '企业微信'}">-</span></div>
-            <!-- 首次添加时间 -->
-            <div class="col-md-6"><strong>首次添加：</strong><span th:text="${customer.addTime != null ? #temporals.format(customer.addTime, 'yyyy-MM-dd HH:mm') : '-'}">-</span></div>
-            <!-- 最初添加该客户的接待员 -->
-            <div class="col-md-6"><strong>接待员：</strong><span th:text="${customer.addedAgent ?: '-'}">-</span></div>
-            <!-- 当前服务的老师 -->
-            <div class="col-md-6"><strong>服务老师：</strong><span th:text="${customer.currentAgent ?: '-'}">-</span></div>
-            <!-- 所属学校 -->
-            <div class="col-md-6"><strong>学校ID：</strong><span th:text="${customer.schoolId ?: '-'}">-</span></div>
-            <!-- 客户状态徽标 -->
-            <div class="col-md-6"><strong>状态：</strong>
-                <span class="badge" th:classappend="${customer.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
-                      th:text="${customer.status.name()}"></span>
+            <!-- 客户头像：通过企微 API 获取的微信头像 URL -->
+            <div class="col-md-3 text-center mb-2">
+                <img th:if="${customer.avatar != null}"
+                     th:src="${customer.avatar}" class="rounded-circle" style="width:80px;height:80px;object-fit:cover" alt="头像">
+                <div th:unless="${customer.avatar != null}" class="rounded-circle bg-secondary d-inline-flex align-items-center justify-content-center" style="width:80px;height:80px">
+                    <span class="text-white small">无头像</span>
+                </div>
+            </div>
+            <div class="col-md-9">
+                <div class="row">
+                    <div class="col-md-6"><strong>昵称：</strong><span th:text="${customer.name}">-</span></div>
+                    <div class="col-md-6"><strong>企微ID：</strong><code th:text="${customer.externalUserid}">-</code></div>
+                    <div class="col-md-6"><strong>类型：</strong><span th:text="${customer.type == 1 ? '微信' : '企业微信'}">-</span></div>
+                    <div class="col-md-6"><strong>首次添加：</strong><span th:text="${customer.addTime != null ? #temporals.format(customer.addTime, 'yyyy-MM-dd HH:mm') : '-'}">-</span></div>
+                    <div class="col-md-6"><strong>接待员：</strong><span th:text="${customer.addedAgent ?: '-'}">-</span></div>
+                    <div class="col-md-6"><strong>服务老师：</strong><span th:text="${customer.currentAgent ?: '-'}">-</span></div>
+                    <div class="col-md-6"><strong>学校：</strong><span th:text="${schoolNameMap.getOrDefault(customer.schoolId, customer.schoolId ?: '-')}">-</span></div>
+                    <div class="col-md-6"><strong>来源活码：</strong><span th:text="${customer.sourceQrId != null ? qrNameMap.getOrDefault(customer.sourceQrId, customer.sourceQrId.toString()) : '-'}">-</span></div>
+                    <div class="col-md-6"><strong>状态：</strong>
+                        <span class="badge" th:classappend="${customer.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
+                              th:text="${customer.status.name()}"></span>
+                    </div>
+                </div>
             </div>
         </div>
 

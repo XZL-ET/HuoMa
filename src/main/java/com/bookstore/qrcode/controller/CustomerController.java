@@ -11,14 +11,21 @@ import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.TagRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -156,14 +163,101 @@ public class CustomerController {
         model.addAttribute("customer", customer);
         model.addAttribute("tags", customerService.getTags(id));
 
-        // 构建 tagId → 标签名 映射，用于在详情页显示标签名称
+        // 构建 tagId → 标签名 映射
         Map<Long, String> tagNameMap = new HashMap<>();
         for (Tag t : tagRepo.findAll()) {
             tagNameMap.put(t.getId(), t.getName());
         }
         model.addAttribute("tagNameMap", tagNameMap);
 
+        // 构建 schoolId → 学校名 映射
+        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+            .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
+        model.addAttribute("schoolNameMap", schoolNameMap);
+
+        // 活码列表，用于展示来源活码信息
+        Map<Long, String> qrNameMap = qrCodeRepo.findAll().stream()
+            .collect(Collectors.toMap(QrCode::getId, QrCode::getSchoolName, (a, b) -> a));
+        model.addAttribute("qrNameMap", qrNameMap);
+
         return "customer/detail";
+    }
+
+    /**
+     * GET {@code /customers/export}
+     * <p>
+     * 导出客户列表为 CSV 文件。支持与列表页相同的筛选条件。
+     * 输出 UTF-8 BOM 头确保 Excel 正确识别中文。
+     * </p>
+     *
+     * @param response {@link HttpServletResponse}，CSV 内容直接写入其输出流
+     */
+    @GetMapping("/export")
+    public void exportCsv(@RequestParam(required = false) String keyword,
+                          @RequestParam(required = false) String schoolId,
+                          @RequestParam(required = false) String currentAgent,
+                          @RequestParam(required = false) String status,
+                          @RequestParam(required = false)
+                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startTime,
+                          @RequestParam(required = false)
+                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endTime,
+                          HttpServletResponse response) throws IOException {
+        Customer.CustomerStatus cs = null;
+        if (status != null && !status.isEmpty()) {
+            try { cs = Customer.CustomerStatus.valueOf(status); }
+            catch (IllegalArgumentException ignored) {}
+        }
+
+        // 不限制条数，导出所有匹配结果
+        Page<Customer> customers = customerService.search(
+            keyword, schoolId, currentAgent, cs,
+            startTime, endTime, Pageable.unpaged());
+
+        // 构建名称映射
+        Map<String, String> schoolNameMap = qrCodeRepo.findAll().stream()
+            .collect(Collectors.toMap(QrCode::getSchoolId, QrCode::getSchoolName, (a, b) -> a));
+
+        Map<String, String> agentNameMap = new HashMap<>();
+        try {
+            JsonNode result = wecomApiClient.getUserSimplelist();
+            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
+                for (JsonNode u : result.get("userlist")) {
+                    agentNameMap.put(u.get("userid").asText(), u.get("name").asText());
+                }
+            }
+        } catch (Exception ignored) {}
+        for (Agent a : agentRepo.findAll()) {
+            agentNameMap.putIfAbsent(a.getUserid(), a.getName());
+        }
+
+        response.setContentType("text/csv; charset=UTF-8");
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+            ContentDisposition.attachment().filename("customers.csv").build().toString());
+
+        PrintWriter w = new PrintWriter(response.getOutputStream(), true, StandardCharsets.UTF_8);
+        // UTF-8 BOM（U+FEFF），确保 Excel 正确识别中文
+        w.write('﻿');
+        w.println("ID,昵称,企微ID,类型,接待员,服务老师,学校,来源活码,添加时间,状态");
+
+        for (Customer c : customers.getContent()) {
+            w.printf("%d,\"%s\",\"%s\",%s,\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%s%n",
+                c.getId(),
+                csvEscape(c.getName()),
+                csvEscape(c.getExternalUserid()),
+                c.getType() == 1 ? "微信" : "企业微信",
+                csvEscape(agentNameMap.getOrDefault(c.getAddedAgent(), c.getAddedAgent())),
+                csvEscape(agentNameMap.getOrDefault(c.getCurrentAgent(), c.getCurrentAgent())),
+                csvEscape(schoolNameMap.getOrDefault(c.getSchoolId(), c.getSchoolId())),
+                c.getSourceQrId() != null ? c.getSourceQrId().toString() : "",
+                c.getAddTime() != null ? c.getAddTime().toString() : "",
+                c.getStatus() != null ? c.getStatus().name() : "");
+        }
+        w.flush();
+    }
+
+    private static String csvEscape(String s) {
+        if (s == null) return "";
+        return s.replace("\"", "\"\"");
     }
 
     /**
