@@ -1039,7 +1039,7 @@ public class QrCodeController {
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(10000);
         conn.connect();
-        String filename = qr.getSchoolName() + ".png";
+        String filename = qr.getRegionDistrict() + "-" + qr.getSchoolName() + "-" + qr.getRegionCity() + ".png";
         response.setContentType(MediaType.IMAGE_PNG_VALUE);
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
             ContentDisposition.attachment().filename(filename).build().toString());
