@@ -161,18 +161,23 @@
             <li class="page-item" th:classappend="${customers.first ? 'disabled' : ''}">
                 <a class="page-link" th:href="@{/customers(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},page=${customers.number - 1})}">上一页</a>
             </li>
-            <!-- 页码信息：当前页 / 总页数 -->
+            <!-- 页码跳转表单：GET 提交到 /customers，携带筛选条件 + 页码 -->
             <li class="page-item">
-                <span class="page-link border-0 bg-transparent">
-                    第 <span th:text="${customers.number + 1}"></span> / <span th:text="${customers.totalPages}"></span> 页
-                    <input type="number" id="pageInput" min="1" th:max="${customers.totalPages}"
+                <form method="get" th:action="@{/customers}" class="page-link border-0 bg-transparent" style="display:inline-flex;align-items:center;gap:4px"
+                      onsubmit="this.page.value=parseInt(this.goto.value)-1">
+                    <input type="hidden" name="keyword" th:value="${keyword}">
+                    <input type="hidden" name="schoolId" th:value="${schoolId}">
+                    <input type="hidden" name="currentAgent" th:value="${currentAgent}">
+                    <input type="hidden" name="status" th:value="${status}">
+                    <input type="hidden" name="page" value="0">
+                    <span>第</span>
+                    <input type="number" name="goto" min="1" th:max="${customers.totalPages}"
                            th:value="${customers.number + 1}"
-                           class="form-control form-control-sm d-inline-block text-center"
-                           style="width:65px; padding:2px 4px; height:28px; margin:0 4px;"
-                           onkeydown="if(event.key==='Enter')jumpPage()">
-                    <button type="button" class="btn btn-outline-secondary btn-sm" style="padding:2px 8px; height:28px;"
-                            onclick="jumpPage()">跳转</button>
-                </span>
+                           class="form-control form-control-sm text-center"
+                           style="width:55px; padding:2px 4px; height:28px;">
+                    <span>/ <span th:text="${customers.totalPages}"></span> 页</span>
+                    <button type="submit" class="btn btn-outline-secondary btn-sm" style="padding:2px 8px; height:28px;">跳转</button>
+                </form>
             </li>
             <!-- 下一页按钮，末页时禁用 -->
             <li class="page-item" th:classappend="${customers.last ? 'disabled' : ''}">
@@ -180,29 +185,5 @@
             </li>
         </ul>
     </nav>
-
-    <!-- 页码跳转脚本 -->
-    <script th:if="${customers.totalPages > 1}" th:inline="javascript">
-        /*<![CDATA[*/
-        function jumpPage() {
-            var input = document.getElementById('pageInput');
-            var page = parseInt(input.value);
-            var max = parseInt("[[${customers.totalPages}]]");
-            if (isNaN(page) || page < 1) page = 1;
-            if (page > max) page = max;
-            var params = new URLSearchParams();
-            var keyword = [[${keyword}]];
-            var schoolId = [[${schoolId}]];
-            var currentAgent = [[${currentAgent}]];
-            var status = [[${status}]];
-            if (keyword) params.set('keyword', keyword);
-            if (schoolId) params.set('schoolId', schoolId);
-            if (currentAgent) params.set('currentAgent', currentAgent);
-            if (status) params.set('status', status);
-            params.set('page', page - 1);
-            window.location.href = '/customers?' + params.toString();
-        }
-        /*]]>*/
-    </script>
 </main>
 </html>
