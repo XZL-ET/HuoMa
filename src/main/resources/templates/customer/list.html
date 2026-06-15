@@ -191,10 +191,10 @@
             if (isNaN(page) || page < 1) page = 1;
             if (page > max) page = max;
             var params = new URLSearchParams();
-            var keyword = "[[${keyword}]]";
-            var schoolId = "[[${schoolId}]]";
-            var currentAgent = "[[${currentAgent}]]";
-            var status = "[[${status}]]";
+            var keyword = [[${keyword}]];
+            var schoolId = [[${schoolId}]];
+            var currentAgent = [[${currentAgent}]];
+            var status = [[${status}]];
             if (keyword) params.set('keyword', keyword);
             if (schoolId) params.set('schoolId', schoolId);
             if (currentAgent) params.set('currentAgent', currentAgent);
