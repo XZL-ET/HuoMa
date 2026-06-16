@@ -42,6 +42,9 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
      */
     List<Agent> findByOverallStatus(Agent.OverallStatus status);
 
+    /** 按综合状态统计数量（无需加载实体到内存） */
+    long countByOverallStatus(Agent.OverallStatus status);
+
     /**
      * 按员工角色查询员工列表。
      * <p>

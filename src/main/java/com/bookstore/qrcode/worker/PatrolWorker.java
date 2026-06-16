@@ -56,6 +56,9 @@ public class PatrolWorker {
     @Autowired
     private PatrolWorker self;
 
+    /** 上次 DLQ 自动重放时间戳 — 限流：每 30 分钟最多重放一次 */
+    private long lastDlqReplayTime = 0L;
+
     /**
      * 每 5 分钟执行一次的主巡检入口。
      *
@@ -82,14 +85,21 @@ public class PatrolWorker {
         // 3. 统计今日异常
         countTodayAlerts();
 
-        // 4. 检查死信队列积压
+        // 4. 死信队列自动重放（每 30 分钟最多重放一次，防消息永久堆积）
         try {
             long dlq = messageGuardService.dlqSize();
-            if (dlq > 0) {
-                log.warn("死信队列积压: {} 条", dlq);
+            if (dlq > 0 && System.currentTimeMillis() - lastDlqReplayTime > 30 * 60 * 1000L) {
+                int replayed = messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY);
+                if (replayed > 0) {
+                    log.info("死信队列自动重放: {} 条", replayed);
+                    lastDlqReplayTime = System.currentTimeMillis();
+                }
+            } else if (dlq > 0) {
+                log.debug("死信队列积压: {} 条（距上次重放 {} 秒，跳过）",
+                    dlq, (System.currentTimeMillis() - lastDlqReplayTime) / 1000);
             }
         } catch (Exception e) {
-            log.debug("DLQ 积压检查跳过: {}", e.getMessage());
+            log.debug("DLQ 重放跳过: {}", e.getMessage());
         }
 
         log.debug("定时巡检完成");

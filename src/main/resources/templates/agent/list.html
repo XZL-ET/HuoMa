@@ -32,7 +32,20 @@
     <!-- 状态分布条 + 总数 -->
     <div class="card p-3 mb-3" th:if="${totalCount > 0}">
         <div class="d-flex justify-content-between align-items-center mb-2">
-            <small class="text-muted">共 <span th:text="${totalCount}"></span> 人</small>
+            <div>
+                <small class="text-muted">
+                    员工总数 <strong class="text-dark" th:text="${totalEmployeeCount}">0</strong> 人
+                    <span th:if="${totalEmployeeCount != null && totalEmployeeCount > totalCount}">
+                        ，可用池 <strong th:text="${totalCount}">0</strong> 人
+                        <span class="text-warning">
+                            （已排除 <strong th:text="${totalEmployeeCount - totalCount}">0</strong> 人：已禁用/未激活/已离职）
+                        </span>
+                    </span>
+                    <span th:unless="${totalEmployeeCount != null && totalEmployeeCount > totalCount}">
+                        ，池内 <strong th:text="${totalCount}">0</strong> 人
+                    </span>
+                </small>
+            </div>
         </div>
         <div class="progress" style="height: 24px;">
             <div class="progress-bar bg-success" th:if="${standbyCount > 0}"

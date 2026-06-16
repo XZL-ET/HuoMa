@@ -1,25 +1,170 @@
 <!DOCTYPE html>
-<!-- 数据看板页面 — 展示平台整体运营数据概览，包括活码总数、全局池余量、新增趋势和异常事件 -->
+<!-- 数据看板页面 — 趋势图、漏斗、排行榜、导出、自动刷新 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='数据看板', content=~{::main})}">
 <main>
-    <h4>数据看板</h4>
-
-    <!-- 活码统计行 -->
-    <div class="row g-3 mb-3">
-        <div class="col-md-3"><div class="card p-3 text-center"><h6>总活码</h6><h2 th:text="${totalQr}">-</h2><small class="text-muted">活跃 <span th:text="${activeQr}">-</span> / 满员 <span th:text="${fullQr}">-</span></small></div></div>
-        <div class="col-md-3"><div class="card p-3 text-center"><h6>全局池待命</h6><h2 th:text="${poolStandby}" th:classappend="${poolStandby < 5 ? 'text-danger' : ''}">-</h2><small class="text-muted">🟢 待命 <span th:text="${poolStandby}">-</span> / 🟡 已满 <span th:text="${poolFull}">-</span> / 🔴 暂停 <span th:text="${poolBlocked}">-</span></small></div></div>
-        <div class="col-md-3"><div class="card p-3 text-center"><h6>今日新增客户</h6><h2 th:text="${todayAdd}">-</h2><small class="text-muted">截至当前</small></div></div>
-        <div class="col-md-3"><div class="card p-3 text-center"><h6>今日告警</h6><h2 th:text="${todayAlerts}" th:classappend="${todayAlerts > 0 ? 'text-warning' : ''}">-</h2><small class="text-muted">异常 <span th:text="${blockedAgents + meltedAgents}">-</span> 人（封号 <span th:text="${blockedAgents}">-</span> / 熔断 <span th:text="${meltedAgents}">-</span>）</small></div></div>
+    <!-- 标题栏 + 时间范围 + 操作按钮 -->
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h4 class="mb-0">数据看板</h4>
+        <div class="d-flex align-items-center gap-2">
+            <!-- 时间范围切换 -->
+            <div class="btn-group btn-group-sm" role="group">
+                <button class="btn btn-range btn-primary" data-range="today">今天</button>
+                <button class="btn btn-range btn-outline-primary" data-range="7days">近 7 天</button>
+                <button class="btn btn-range btn-outline-primary" data-range="30days">近 30 天</button>
+            </div>
+            <!-- 导出按钮 -->
+            <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#exportModal" title="导出日报 Excel">
+                <i class="bi bi-download"></i> 导出
+            </button>
+            <!-- 刷新控制 -->
+            <small id="refreshStatus" class="text-muted" style="min-width:100px;"></small>
+            <button id="refreshToggle" class="btn btn-sm btn-outline-secondary" title="开启自动刷新">
+                <i class="bi bi-arrow-repeat"></i> <span id="refreshLabel">自动刷新</span>
+            </button>
+            <button id="manualRefresh" class="btn btn-sm btn-outline-primary" title="立即刷新">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
     </div>
 
-    <!-- 全局池状态条 -->
-    <div class="card p-3 mb-3">
-        <h6>全局员工池分布（共 <span th:text="${poolTotal}">-</span> 人）</h6>
-        <div class="progress" style="height: 28px;">
-            <div class="progress-bar bg-success" th:style="'width:' + (${poolTotal > 0 ? poolStandby * 100 / poolTotal : 0}) + '%'" th:text="'待命 ' + ${poolStandby}"></div>
-            <div class="progress-bar bg-warning text-dark" th:style="'width:' + (${poolTotal > 0 ? poolFull * 100 / poolTotal : 0}) + '%'" th:text="'已满 ' + ${poolFull}"></div>
-            <div class="progress-bar bg-danger" th:style="'width:' + (${poolTotal > 0 ? poolBlocked * 100 / poolTotal : 0}) + '%'" th:text="'暂停 ' + ${poolBlocked}"></div>
+    <!-- 统计卡片行 -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <div class="card p-3 text-center">
+                <h6>总活码</h6>
+                <h2 id="stat-totalQr" th:text="${totalQr}">-</h2>
+                <small class="text-muted">
+                    活跃 <span id="stat-activeQr" th:text="${activeQr}">-</span>
+                    / 满员 <span id="stat-fullQr" th:text="${fullQr}">-</span>
+                    <span id="stat-avgQr" style="display:none;"></span>
+                </small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center">
+                <h6>全局池待命</h6>
+                <h2 id="stat-poolStandby" th:text="${poolStandby}"
+                    th:classappend="${poolStandby < 5 ? 'text-danger' : ''}">-</h2>
+                <small class="text-muted">
+                    🟢 <span id="stat-poolStandby2" th:text="${poolStandby}">-</span>
+                    / 🟡 <span id="stat-poolFull" th:text="${poolFull}">-</span>
+                    / 🔴 <span id="stat-poolBlocked" th:text="${poolBlocked}">-</span>
+                </small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center">
+                <h6>今日新增客户</h6>
+                <h2 id="stat-todayAdd" th:text="${todayAdd}">-</h2>
+                <small class="text-muted" id="stat-avgAdd" style="display:none;"></small>
+                <small class="text-muted" id="stat-addLabel">截至当前</small>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card p-3 text-center">
+                <h6>今日告警</h6>
+                <h2 id="stat-todayAlerts" th:text="${todayAlerts}"
+                    th:classappend="${todayAlerts > 0 ? 'text-warning' : ''}">-</h2>
+                <small class="text-muted">
+                    异常 <span id="stat-abnormalTotal">-</span> 人
+                    （封号 <span id="stat-blockedAgents" th:text="${blockedAgents}">-</span>
+                    / 熔断 <span id="stat-meltedAgents" th:text="${meltedAgents}">-</span>）
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局池分布进度条 -->
+    <div class="card p-3 mb-3" id="poolBarCard">
+        <h6 id="poolBarTitle">
+            全局员工池分布（企微共 <span id="stat-totalEmployee" th:text="${totalEmployeeCount}">-</span> 人，
+            池内 <span id="stat-poolTotal" th:text="${poolTotal}">-</span> 人）
+        </h6>
+        <div class="progress" style="height:28px;" id="poolBar">
+            <div class="progress-bar bg-success" id="bar-standby"
+                 th:style="'width:' + (${poolTotal > 0 ? poolStandby * 100 / poolTotal : 0}) + '%'"
+                 th:text="'待命 ' + ${poolStandby}"></div>
+            <div class="progress-bar bg-warning text-dark" id="bar-full"
+                 th:style="'width:' + (${poolTotal > 0 ? poolFull * 100 / poolTotal : 0}) + '%'"
+                 th:text="'已满 ' + ${poolFull}"></div>
+            <div class="progress-bar bg-danger" id="bar-blocked"
+                 th:style="'width:' + (${poolTotal > 0 ? poolBlocked * 100 / poolTotal : 0}) + '%'"
+                 th:text="'暂停 ' + ${poolBlocked}"></div>
+        </div>
+    </div>
+
+    <!-- 趋势图表行 -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-8">
+            <div class="card p-3">
+                <h6>📈 新增客户 & 告警趋势</h6>
+                <div style="height:260px;">
+                    <canvas id="chartAddAlerts"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card p-3">
+                <h6>📊 活码池利用</h6>
+                <div style="height:260px;">
+                    <canvas id="chartPool"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 漏斗行 -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h6>🔽 员工池效率漏斗</h6>
+                <div id="funnelPool" class="funnel-container">
+                    <!-- JS 动态填充 -->
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card p-3">
+                <h6>🔽 活码利用漏斗</h6>
+                <div id="funnelQr" class="funnel-container">
+                    <!-- JS 动态填充 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 排行榜行 -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header"><h6 class="mb-0">🏆 员工添加排行 Top 10</h6></div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
+                            <tr><th class="text-center" style="width:50px;">#</th><th>员工</th><th class="text-end" style="width:80px;">添加数</th></tr>
+                        </thead>
+                        <tbody id="leaderboardEmployees">
+                            <tr><td colspan="3" class="text-center text-muted py-3">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header"><h6 class="mb-0">🏆 活码添加排行 Top 10</h6></div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
+                            <tr><th class="text-center" style="width:50px;">#</th><th>活码</th><th class="text-end" style="width:80px;">添加数</th></tr>
+                        </thead>
+                        <tbody id="leaderboardQr">
+                            <tr><td colspan="3" class="text-center text-muted py-3">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -29,5 +174,215 @@
         <div class="col-md-4"><a href="/agents" class="card p-3 text-center text-decoration-none"><h6>👥 员工管理</h6><small class="text-muted">全局员工池及日限配置</small></a></div>
         <div class="col-md-4"><a href="/alerts" class="card p-3 text-center text-decoration-none"><h6>🚨 告警中心</h6><small class="text-muted">查看和处理系统告警</small></a></div>
     </div>
+
+    <!-- 导出弹窗 -->
+    <div class="modal fade" id="exportModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">导出日报 Excel</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">起始日期</label>
+                        <input type="date" id="exportStart" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">结束日期</label>
+                        <input type="date" id="exportEnd" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-sm btn-success" id="exportBtn">
+                        <i class="bi bi-download"></i> 导出
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 漏斗 CSS -->
+    <style>
+        .funnel-container { padding: 10px 0; }
+        .funnel-step {
+            color: #fff; text-align: center; padding: 10px 16px;
+            margin: 4px auto; border-radius: 6px; font-size: 14px;
+            min-width: 60px; max-width: 100%;
+            display: flex; justify-content: space-between; align-items: center;
+            transition: width 0.3s ease;
+        }
+    </style>
+
+    <!-- 导出脚本 -->
+    <script>
+        document.getElementById('exportBtn').addEventListener('click', function () {
+            var s = document.getElementById('exportStart').value;
+            var e = document.getElementById('exportEnd').value;
+            if (!s || !e) { alert('请选择起始和结束日期'); return; }
+            if (s > e) { alert('起始日期不能晚于结束日期'); return; }
+            window.location.href = '/dashboard/export?start=' + s + '&end=' + e;
+        });
+    </script>
+
+    <!-- 自动刷新脚本（与 dashboard-charts.js 协作） -->
+    <script th:inline="javascript">
+    (function() {
+        var INTERVAL_SEC = 30;
+        var timerId = null;
+        var lastUpdated = null;
+
+        var toggle = document.getElementById('refreshToggle');
+        var label = document.getElementById('refreshLabel');
+        var statusEl = document.getElementById('refreshStatus');
+        var manualBtn = document.getElementById('manualRefresh');
+
+        var storageKey = 'dashboard_autorefresh';
+        var autoOn = localStorage.getItem(storageKey) === 'true';
+
+        function setAuto(on) {
+            autoOn = on;
+            localStorage.setItem(storageKey, on);
+            if (on) {
+                toggle.classList.remove('btn-outline-secondary');
+                toggle.classList.add('btn-success');
+                toggle.title = '自动刷新已开启（' + INTERVAL_SEC + ' 秒）';
+                label.textContent = '自动刷新 ON';
+                startTimer();
+            } else {
+                toggle.classList.remove('btn-success');
+                toggle.classList.add('btn-outline-secondary');
+                toggle.title = '开启自动刷新';
+                label.textContent = '自动刷新';
+                stopTimer();
+                statusEl.textContent = '';
+            }
+        }
+
+        function startTimer() {
+            stopTimer();
+            refreshAll();
+            timerId = setInterval(refreshAll, INTERVAL_SEC * 1000);
+        }
+
+        function stopTimer() {
+            if (timerId) { clearInterval(timerId); timerId = null; }
+        }
+
+        function refreshAll() {
+            fetchStatsAndUpdate();
+            if (window.dashboardRefreshAll) window.dashboardRefreshAll();
+        }
+
+        function fetchStatsAndUpdate() {
+            var range = localStorage.getItem('dashboard_timerange') || 'today';
+            fetch('/dashboard/api/stats?range=' + range, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(function(d) {
+                    updateStatsCards(d);
+                    lastUpdated = new Date();
+                    statusEl.textContent = '更新于 ' + formatTime(lastUpdated);
+                })
+                .catch(function() {
+                    if (lastUpdated) {
+                        statusEl.textContent = '更新于 ' + formatTime(lastUpdated) + '（下次重试）';
+                    }
+                });
+        }
+
+        function updateStatsCards(d) {
+            setText('stat-totalQr', d.totalQr);
+            setText('stat-activeQr', d.activeQr);
+            setText('stat-fullQr', d.fullQr);
+            setText('stat-poolStandby', d.poolStandby);
+            setText('stat-poolStandby2', d.poolStandby);
+            setText('stat-poolFull', d.poolFull);
+            setText('stat-poolBlocked', d.poolBlocked);
+            setText('stat-poolTotal', d.poolTotal);
+            setText('stat-totalEmployee', d.totalEmployeeCount);
+            setText('stat-todayAdd', d.todayAdd);
+            setText('stat-todayAlerts', d.todayAlerts);
+            setText('stat-blockedAgents', d.blockedAgents);
+            setText('stat-meltedAgents', d.meltedAgents);
+            setText('stat-abnormalTotal', d.blockedAgents + d.meltedAgents);
+
+            var el = document.getElementById('stat-poolStandby');
+            if (el) {
+                if (d.poolStandby < 5) el.classList.add('text-danger');
+                else el.classList.remove('text-danger');
+            }
+            var alertEl = document.getElementById('stat-todayAlerts');
+            if (alertEl) {
+                if (d.todayAlerts > 0) alertEl.classList.add('text-warning');
+                else alertEl.classList.remove('text-warning');
+            }
+
+            // 进度条
+            var pt = d.poolTotal;
+            if (pt > 0) {
+                updateBar('bar-standby', 'bg-success', '待命 ' + d.poolStandby, d.poolStandby * 100 / pt);
+                updateBar('bar-full', 'bg-warning text-dark', '已满 ' + d.poolFull, d.poolFull * 100 / pt);
+                updateBar('bar-blocked', 'bg-danger', '暂停 ' + d.poolBlocked, d.poolBlocked * 100 / pt);
+            }
+            // 池标题
+            var titleEl = document.getElementById('poolBarTitle');
+            if (titleEl) {
+                titleEl.innerHTML = '全局员工池分布（企微共 <span id="stat-totalEmployee">' + d.totalEmployeeCount +
+                    '</span> 人，池内 <span id="stat-poolTotal">' + d.poolTotal + '</span> 人）';
+            }
+
+            // 范围标签
+            var range = localStorage.getItem('dashboard_timerange') || 'today';
+            var addLabel = document.getElementById('stat-addLabel');
+            var avgAdd = document.getElementById('stat-avgAdd');
+            if (range !== 'today' && d.avgDailyAdd !== undefined) {
+                if (addLabel) addLabel.style.display = 'none';
+                if (avgAdd) {
+                    avgAdd.style.display = '';
+                    avgAdd.textContent = '日均 ' + d.avgDailyAdd;
+                }
+            } else {
+                if (addLabel) addLabel.style.display = '';
+                if (avgAdd) avgAdd.style.display = 'none';
+            }
+        }
+
+        function setText(id, val) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = val;
+        }
+
+        function updateBar(id, cls, text, pct) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.className = 'progress-bar ' + cls;
+            el.style.width = pct + '%';
+            el.textContent = text;
+        }
+
+        function formatTime(d) {
+            return [d.getHours(), d.getMinutes(), d.getSeconds()]
+                .map(function(n) { return n.toString().padStart(2, '0'); }).join(':');
+        }
+
+        // 暴露 fetchStats 给 dashboard-charts.js
+        window.fetchStats = fetchStatsAndUpdate;
+
+        // 事件绑定
+        toggle.addEventListener('click', function() { setAuto(!autoOn); });
+        manualBtn.addEventListener('click', refreshAll);
+
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) { stopTimer(); }
+            else if (autoOn) { refreshAll(); timerId = setInterval(refreshAll, INTERVAL_SEC * 1000); }
+        });
+
+        if (autoOn) { setAuto(true); }
+    })();
+    </script>
+
+    <!-- 加载图表/漏斗/排行榜 JS -->
+    <script th:src="@{/js/dashboard-charts.js}"></script>
 </main>
 </html>

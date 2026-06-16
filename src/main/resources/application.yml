@@ -35,6 +35,12 @@ management:
       probes:
         enabled: true
 
+# ===== 应用配置 =====
+app:
+  admin:
+    default-username: admin
+    default-password: ${ADMIN_DEFAULT_PASSWORD:admin123}
+
 ---
 spring:
   config:

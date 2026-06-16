@@ -65,6 +65,7 @@ public class AgentController {
         long standbyCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby);
         long fullCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.full);
         long blockedCount = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.blocked);
+        long totalEmployeeCount = employeeRepo.count();  // 企微同步的员工总数（含不可用）
 
         // ── 构建员工姓名映射 + Employee/Agent 快照（仅加载池中 userid，避免全表扫描）──
         Set<String> poolUserIds = new LinkedHashSet<>(poolRepo.findAllAgentUserids());
@@ -200,6 +201,7 @@ public class AgentController {
         model.addAttribute("keyword", keyword);
         model.addAttribute("statusFilter", status);
         model.addAttribute("totalCount", standbyCount + fullCount + blockedCount);
+        model.addAttribute("totalEmployeeCount", totalEmployeeCount);
         model.addAttribute("title", "员工管理");
         return "agent/list";
     }

@@ -18,7 +18,7 @@ echo "========================================="
 # 1. 本地编译
 echo "[1/4] 编译项目..."
 cd "$(dirname "$0")/.."
-mvn clean package -DskipTests -P${PROFILE}
+./mvnw clean package -DskipTests -P${PROFILE}
 echo "  ✅ 编译完成"
 
 # 2. 上传 jar

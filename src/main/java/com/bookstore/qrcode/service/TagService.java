@@ -524,6 +524,7 @@ public class TagService {
             }
             // 按 group_name → group_id 建立索引，后续创建标签时使用
             Map<String, String> groupIdMap = new LinkedHashMap<>();
+            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // tag_name → wecomTagId，防缓存不一致
             for (JsonNode group : resp.get("tag_group")) {
                 String groupName = group.has("group_name") ? group.get("group_name").asText() : "";
                 String groupId = group.has("group_id") ? group.get("group_id").asText() : "";
@@ -534,6 +535,7 @@ public class TagService {
                     for (JsonNode t : group.get("tag")) {
                         String tagName = t.get("name").asText();
                         String wecomId = t.get("id").asText();
+                        tagNameToIdMap.put(tagName, wecomId);  // 同时记录 name→id 映射
                         // 按名称查本地 DB
                         Tag existing = tagRepo.findByName(tagName);
                         if (existing != null) {
@@ -562,9 +564,10 @@ public class TagService {
                     }
                 }
             }
-            // 刷新标签组 ID 缓存
+            // 刷新标签组 ID 缓存 和 标签名→ID 缓存
             if (!groupIdMap.isEmpty()) {
                 cachedGroupIdMap = groupIdMap;
+                cachedTagNameToId = tagNameToIdMap;  // 保持两个缓存一致，防止 getOrCreateTag 写过期 ID
                 groupCacheTime = java.time.LocalDateTime.now();
             }
             log.info("标签同步完成: 跳过{}个, 导入{}个", skipped, imported);
@@ -591,6 +594,7 @@ public class TagService {
                 return Map.of("skipped", skipped, "imported", imported);
             }
             Map<String, String> groupIdMap = new LinkedHashMap<>();
+            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // tag_name → wecomTagId，防缓存不一致
             for (JsonNode group : resp.get("tag_group")) {
                 String groupName = group.has("group_name") ? group.get("group_name").asText() : "";
                 String groupId = group.has("group_id") ? group.get("group_id").asText() : "";
@@ -601,6 +605,7 @@ public class TagService {
                     for (JsonNode t : group.get("tag")) {
                         String tagName = t.get("name").asText();
                         String wecomId = t.get("id").asText();
+                        tagNameToIdMap.put(tagName, wecomId);  // 同时记录 name→id 映射
                         Tag existing = tagRepo.findByName(tagName);
                         if (existing != null) {
                             // 企微 API 是唯一数据源：若 wecomTagId 与 API 不一致则更新
@@ -628,9 +633,10 @@ public class TagService {
                     }
                 }
             }
-            // 刷新标签组 ID 缓存
+            // 刷新标签组 ID 缓存 和 标签名→ID 缓存
             if (!groupIdMap.isEmpty()) {
                 cachedGroupIdMap = groupIdMap;
+                cachedTagNameToId = tagNameToIdMap;  // 保持两个缓存一致，防止 getOrCreateTag 写过期 ID
                 groupCacheTime = java.time.LocalDateTime.now();
             }
             log.info("标签同步完成: 跳过{}个, 导入{}个", skipped, imported);

@@ -291,3 +291,17 @@ CREATE TABLE IF NOT EXISTS operation_log (
     INDEX idx_created (created_at),
     INDEX idx_target (target_type, target_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作日志表';
+
+-- users：系统用户
+-- 系统用户表，用于管理后台登录认证
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE COMMENT '登录用户名',
+    password_hash VARCHAR(255) NOT NULL COMMENT 'BCrypt 密码哈希',
+    display_name VARCHAR(100) NOT NULL COMMENT '显示名称',
+    role ENUM('admin','operator') NOT NULL DEFAULT 'operator' COMMENT '角色: admin/operator',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_username (username),
+    INDEX idx_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';

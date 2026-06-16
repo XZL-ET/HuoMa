@@ -255,10 +255,51 @@ public class MessageGuardService {
     }
 
     /**
-     * 将 DLQ 中的所有消息重放到指定 Stream，然后清空 DLQ。
+     * 将 DLQ 中的所有消息重放到指定 Stream，然后逐条删除（防丢消息）。
      *
-     * <p>重放时会保留原始消息的所有字段，同时添加 _dlq_replayed 标记。
-     * 一次最多重放 100 条死信，防止一次性压力过大。</p>
+     * <p>与 {@link #replayDlq(String)} 不同，此方法读取全部消息后用 XDEL 逐条删除，
+     * 而非截断整个 Stream，避免因 count 限制丢消息。</p>
+     *
+     * @param targetStreamKey 重放目标 Stream
+     * @return 重放的消息数量
+     */
+    public int replayAllDlq(String targetStreamKey) {
+        int count = 0;
+        try {
+            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
+                .read(StreamReadOptions.empty().count(1000),
+                    StreamOffset.fromStart(RedisConfig.DLQ_STREAM_KEY));
+
+            if (records != null && !records.isEmpty()) {
+                for (MapRecord<String, Object, Object> r : records) {
+                    Map<String, String> fields = toStringMap(r.getValue());
+                    // 剥离 DLQ 元数据，避免动态字段参与 hashCode → retry counter 重置
+                    fields.remove("_dlq_origin_stream");
+                    fields.remove("_dlq_origin_msgid");
+                    fields.remove("_dlq_retry_count");
+                    fields.remove("_dlq_last_error");
+                    fields.remove("_dlq_time");
+                    // 添加静态标记，不影响 hashCode
+                    fields.put("_dlq_replayed", "true");
+                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    // 逐条删除，不丢消息
+                    redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
+                    count++;
+                }
+                log.info("DLQ 全量重放完成: {} 条 → {}", count, targetStreamKey);
+            }
+        } catch (Exception e) {
+            log.error("DLQ 全量重放失败: target={}", targetStreamKey, e);
+        }
+        return count;
+    }
+
+    /**
+     * 将 DLQ 中的消息重放到指定 Stream，逐条删除已重放的消息。
+     *
+     * <p>重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
+     * 一次最多重放 100 条死信，防止一次性压力过大。
+     * 使用 XDEL 逐条删除而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
      * @param targetStreamKey 重放目标 Stream（通常是原 Stream）
      * @return 重放的消息数量
@@ -273,15 +314,19 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
-                    // 标记为重放消息，便于追踪
+                    // 剥离 DLQ 元数据，避免动态字段参与 hashCode → retry counter 重置
+                    fields.remove("_dlq_origin_stream");
+                    fields.remove("_dlq_origin_msgid");
+                    fields.remove("_dlq_retry_count");
+                    fields.remove("_dlq_last_error");
+                    fields.remove("_dlq_time");
+                    // 添加静态标记，不影响 hashCode
                     fields.put("_dlq_replayed", "true");
-                    fields.put("_dlq_replayed_time", Instant.now().toString());
                     redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    // 逐条删除，不丢消息
+                    redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
                     count++;
                 }
-
-                // 清空 DLQ（已重放的消息无需保留）
-                redisTemplate.opsForStream().trim(RedisConfig.DLQ_STREAM_KEY, 0, true);
                 log.info("DLQ 重放完成: {} 条 → {}", count, targetStreamKey);
             }
         } catch (Exception e) {

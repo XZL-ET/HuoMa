@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<!-- 用户管理 — 用户列表页，仅 admin 可访问 -->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='用户管理', content=~{::main})}">
+<main>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>用户管理</h4>
+        <a href="/users/create" class="btn btn-primary btn-sm">
+            <i class="bi bi-plus-lg"></i> 创建用户
+        </a>
+    </div>
+
+    <!-- 消息提示 -->
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show py-2" role="alert">
+        <span th:text="${message}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- 用户表格 -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>用户名</th>
+                        <th>显示名称</th>
+                        <th>角色</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th class="text-end">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="user, iter : ${page.content}">
+                        <td th:text="${page.number * page.size + iter.index + 1}">1</td>
+                        <td>
+                            <code th:text="${user.username}">admin</code>
+                        </td>
+                        <td th:text="${user.displayName}">管理员</td>
+                        <td>
+                            <span class="badge" th:classappend="${user.role.name() == 'admin'} ? 'bg-danger' : 'bg-secondary'"
+                                  th:text="${user.role.name() == 'admin'} ? '管理员' : '运营人员'">管理员</span>
+                        </td>
+                        <td>
+                            <span class="badge" th:classappend="${user.enabled} ? 'bg-success' : 'bg-warning text-dark'"
+                                  th:text="${user.enabled} ? '正常' : '已禁用'">正常</span>
+                        </td>
+                        <td th:text="${#temporals.format(user.createdAt, 'yyyy-MM-dd HH:mm')}">2026-06-16 10:00</td>
+                        <td class="text-end">
+                            <!-- 修改密码按钮 -->
+                            <button class="btn btn-outline-secondary btn-sm"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#pwdModal"
+                                    th:attr="data-userid=${user.id},data-username=${user.username}">
+                                <i class="bi bi-key"></i>
+                            </button>
+                            <!-- 启用/禁用按钮 -->
+                            <form th:action="@{/users/{id}/toggle(id=${user.id})}" method="post" class="d-inline">
+                                <button type="submit" class="btn btn-sm"
+                                        th:classappend="${user.enabled} ? 'btn-outline-warning' : 'btn-outline-success'"
+                                        th:title="${user.enabled} ? '禁用' : '启用'">
+                                    <i class="bi" th:classappend="${user.enabled} ? 'bi-pause-circle' : 'bi-play-circle'"></i>
+                                </button>
+                            </form>
+                            <!-- 删除按钮（仅非当前用户） -->
+                            <form th:action="@{/users/{id}/delete(id=${user.id})}" method="post" class="d-inline"
+                                  th:if="${#authentication.name != user.username}"
+                                  onsubmit="return confirm('确定要删除用户「' + this.getAttribute('data-name') + '」吗？')"
+                                  th:attr="data-name=${user.username}">
+                                <button type="submit" class="btn btn-outline-danger btn-sm" title="删除">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    <tr th:if="${page.totalElements == 0}">
+                        <td colspan="7" class="text-center text-muted py-4">暂无用户</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="d-flex justify-content-between align-items-center mt-3" th:if="${page.totalPages > 1}">
+        <small class="text-muted">共 <span th:text="${page.totalElements}"></span> 个用户</small>
+        <nav>
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item" th:classappend="${page.first} ? 'disabled'">
+                    <a class="page-link" th:href="@{/users(page=${page.number - 1})}" th:unless="${page.first}">上一页</a>
+                    <span class="page-link" th:if="${page.first}">上一页</span>
+                </li>
+                <li class="page-item disabled"><span class="page-link" th:text="${page.number + 1} + ' / ' + ${page.totalPages}"></span></li>
+                <li class="page-item" th:classappend="${page.last} ? 'disabled'">
+                    <a class="page-link" th:href="@{/users(page=${page.number + 1})}" th:unless="${page.last}">下一页</a>
+                    <span class="page-link" th:if="${page.last}">下一页</span>
+                </li>
+            </ul>
+        </nav>
+    </div>
+
+    <!-- 修改密码弹窗 -->
+    <div class="modal fade" id="pwdModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">修改密码 — <span id="pwdUsername"></span></h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="pwdForm" method="post" th:action="@{/users/{id}/change-password(id=0)}">
+                    <div class="modal-body">
+                        <label class="form-label">新密码</label>
+                        <input type="password" name="newPassword" class="form-control"
+                               placeholder="请输入新密码" required minlength="6">
+                        <small class="text-muted">至少 6 位字符</small>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-sm btn-primary">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗数据绑定脚本 -->
+    <script th:inline="javascript">
+        document.getElementById('pwdModal').addEventListener('show.bs.modal', function (event) {
+            var btn = event.relatedTarget;
+            var userId = btn.getAttribute('data-userid');
+            var username = btn.getAttribute('data-username');
+            document.getElementById('pwdUsername').textContent = username;
+            var form = document.getElementById('pwdForm');
+            form.action = '/users/' + userId + '/change-password';
+        });
+    </script>
+</main>
+</html>

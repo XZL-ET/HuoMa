@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -140,4 +141,38 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      */
     @Query("SELECT c FROM Customer c WHERE c.name = '未知' OR c.unionid IS NULL OR c.avatar IS NULL")
     Page<Customer> findNeedingRepair(Pageable pageable);
+
+    /**
+     * 员工排行榜 — 按添加客户数分组排名 Top N。
+     * 返回 {@code Object[]} 数组，[0]=员工userid（String），[1]=客户数（Long）。
+     */
+    @Query("SELECT c.addedAgent, COUNT(c) FROM Customer c " +
+           "WHERE c.addTime >= :start AND c.addTime < :end " +
+           "AND c.addedAgent IS NOT NULL " +
+           "GROUP BY c.addedAgent ORDER BY COUNT(c) DESC")
+    List<Object[]> findTopAdders(@Param("start") LocalDateTime start,
+                                  @Param("end") LocalDateTime end,
+                                  Pageable pageable);
+
+    /**
+     * 活码排行榜 — 按添加客户数分组排名 Top N。
+     * 返回 {@code Object[]} 数组，[0]=活码ID（Long），[1]=客户数（Long）。
+     */
+    @Query("SELECT c.sourceQrId, COUNT(c) FROM Customer c " +
+           "WHERE c.addTime >= :start AND c.addTime < :end " +
+           "AND c.sourceQrId IS NOT NULL " +
+           "GROUP BY c.sourceQrId ORDER BY COUNT(c) DESC")
+    List<Object[]> findTopQrCodes(@Param("start") LocalDateTime start,
+                                   @Param("end") LocalDateTime end,
+                                   Pageable pageable);
+
+    /**
+     * 统计指定时间范围内有新增客户的去重活码数。
+     * 用于活码利用漏斗中的"今日有新增"环节。
+     */
+    @Query("SELECT COUNT(DISTINCT c.sourceQrId) FROM Customer c " +
+           "WHERE c.addTime >= :start AND c.addTime < :end " +
+           "AND c.sourceQrId IS NOT NULL")
+    long countDistinctSourceQrByAddTimeBetween(@Param("start") LocalDateTime start,
+                                               @Param("end") LocalDateTime end);
 }
