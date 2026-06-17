@@ -669,4 +669,68 @@ public class WecomApiClient {
             throw new RuntimeException(action + " 失败: " + resp, e);
         }
     }
+
+    // ========================================================================
+    //  网页授权 (OAuth)
+    //  文档: https://developer.work.weixin.qq.com/document/path/91023
+    // ========================================================================
+
+    /**
+     * 通过 OAuth code 获取企微用户身份。
+     * <p>
+     * <b>企微接口：</b>{@code GET /cgi-bin/user/getuserinfo?access_token=TOKEN&code=CODE}
+     * <pre>
+     * 响应示例:
+     * {
+     *   "errcode": 0,
+     *   "errmsg": "ok",
+     *   "UserId": "zhangsan",
+     *   "DeviceId": "xxx"
+     * }
+     * </pre>
+     * <p>注意：企微返回字段首字母大写 {@code UserId}（与通讯录 API 的 {@code userid} 不同）。</p>
+     *
+     * @param code OAuth 授权临时 code（有效期 5 分钟，仅可使用一次）
+     * @return JsonNode 含 errcode + UserId
+     * @throws RuntimeException 接口调用失败时抛出
+     */
+    public JsonNode getUserInfo(String code) {
+        String token = getAccessToken();
+        String url = BASE_URL + "/user/getuserinfo?access_token=" + token + "&code=" + code;
+        try {
+            String resp = restTemplate.getForObject(url, String.class);
+            JsonNode node = objectMapper.readTree(resp);
+            int errcode = node.has("errcode") ? node.get("errcode").asInt() : -1;
+            if (errcode != 0) {
+                String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "未知错误";
+                log.error("getuserinfo 失败: errcode={}, errmsg={}", errcode, errmsg);
+                throw new RuntimeException("获取用户信息失败 [" + errcode + "]: " + errmsg);
+            }
+            return node;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("getuserinfo 请求异常: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 构造企微网页授权 URL。
+     * <p>
+     * 文档: https://developer.work.weixin.qq.com/document/path/91022
+     * <p>静默授权（snsapi_base）：不弹窗，仅获取 userid，用于企业内部应用。</p>
+     *
+     * @param redirectUri 回调地址（需已在企微应用设置的可信域名下）
+     * @param state       自定义参数（如防 CSRF token），回调时原样返回
+     * @return 完整授权 URL
+     */
+    public String buildOAuthUrl(String redirectUri, String state) {
+        return "https://open.weixin.qq.com/connect/oauth2/authorize"
+            + "?appid=" + config.getCorpId()
+            + "&redirect_uri=" + java.net.URLEncoder.encode(redirectUri, java.nio.charset.StandardCharsets.UTF_8)
+            + "&response_type=code"
+            + "&scope=snsapi_base"
+            + "&state=" + state
+            + "#wechat_redirect";
+    }
 }
