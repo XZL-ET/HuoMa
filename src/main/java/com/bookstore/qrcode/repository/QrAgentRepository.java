@@ -123,4 +123,16 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
 
     /** 按 agentUserid 列表批量查询 — 替代 findAll 全表加载 */
     List<QrAgent> findByAgentUseridIn(Collection<String> agentUserids);
+
+    /**
+     * 按 qrCodeId 列表批量查询。
+     * <p>
+     * 用于全局统计等场景下一次性加载多个活码的接待员列表，
+     * 避免对每个活码单独执行 {@link #findByQrCodeId(Long)} 造成的 N+1 问题。
+     * </p>
+     *
+     * @param qrCodeIds 活码 ID 集合
+     * @return 所有匹配的接待员记录列表
+     */
+    List<QrAgent> findByQrCodeIdIn(Collection<Long> qrCodeIds);
 }

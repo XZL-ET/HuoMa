@@ -7,9 +7,6 @@ import com.bookstore.qrcode.entity.DistrictManager;
 import com.bookstore.qrcode.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -76,15 +73,27 @@ public class DownloadLogService {
      */
     public List<Map<String, Object>> getPersonalHistory(String agentUserid) {
         List<QrDownloadLog> logs = downloadLogRepo.findByAgentUseridOrderByDownloadedAtDesc(agentUserid);
-        List<Map<String, Object>> result = new ArrayList<>();
+        if (logs.isEmpty()) return List.of();
 
+        // 批量加载 QrCode（避免 N+1）
+        Set<Long> qrCodeIds = logs.stream()
+            .map(QrDownloadLog::getQrCodeId)
+            .collect(Collectors.toSet());
+        Map<Long, QrCode> qrCodeMap = qrCodeRepo.findAllById(qrCodeIds).stream()
+            .collect(Collectors.toMap(QrCode::getId, q -> q));
+
+        // 批量加载 DistrictManager（区县数量有限，全量加载并缓存）
+        Map<String, DistrictManager> managerMap = districtManagerRepo.findAll().stream()
+            .collect(Collectors.toMap(
+                m -> m.getRegionCity() + "|" + m.getRegionDistrict(),
+                m -> m));
+
+        List<Map<String, Object>> result = new ArrayList<>();
         for (QrDownloadLog log : logs) {
-            QrCode qr = qrCodeRepo.findById(log.getQrCodeId()).orElse(null);
+            QrCode qr = qrCodeMap.get(log.getQrCodeId());
             if (qr == null) continue;
 
-            DistrictManager manager = districtManagerRepo
-                .findByRegionCityAndRegionDistrict(qr.getRegionCity(), qr.getRegionDistrict())
-                .orElse(null);
+            DistrictManager manager = managerMap.get(qr.getRegionCity() + "|" + qr.getRegionDistrict());
 
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("schoolName", qr.getSchoolName());
@@ -106,6 +115,7 @@ public class DownloadLogService {
     public Map<String, Object> getGlobalStats(String city, String district, String managerUserid,
                                                String downloadStatus, int page, int size) {
         // 1. 查询活码（带地区筛选）
+        // 注：当前数据规模下 findAll + 内存筛选可接受，后续数据增长时可改用 search 方法在 DB 层过滤
         List<QrCode> allQrCodes = qrCodeRepo.findAll();
         List<QrCode> filteredQrCodes = allQrCodes.stream()
             .filter(q -> city == null || city.isEmpty() || q.getRegionCity().equals(city))
@@ -129,7 +139,16 @@ public class DownloadLogService {
             }
         }
 
-        // 4. 构建统计行
+        // 4. 批量加载所有相关接待员（避免 N+1）
+        Map<Long, List<QrAgent>> agentsByQrCodeId = new HashMap<>();
+        if (!qrCodeIds.isEmpty()) {
+            List<QrAgent> allAgents = qrAgentRepo.findByQrCodeIdIn(qrCodeIds);
+            for (QrAgent agent : allAgents) {
+                agentsByQrCodeId.computeIfAbsent(agent.getQrCodeId(), k -> new ArrayList<>()).add(agent);
+            }
+        }
+
+        // 5. 构建统计行
         List<Map<String, Object>> rows = new ArrayList<>();
         int totalDownloaded = 0;
         int totalNotDownloaded = 0;
@@ -145,7 +164,7 @@ public class DownloadLogService {
                 }
             }
 
-            List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId());
+            List<QrAgent> agents = agentsByQrCodeId.getOrDefault(qr.getId(), List.of());
             List<QrDownloadLog> logs = downloadLogByQrCode.getOrDefault(qr.getId(), List.of());
 
             for (QrAgent agent : agents) {
@@ -181,7 +200,7 @@ public class DownloadLogService {
             }
         }
 
-        // 5. 分页
+        // 6. 分页
         int total = rows.size();
         int fromIndex = page * size;
         int toIndex = Math.min(fromIndex + size, total);
