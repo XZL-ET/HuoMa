@@ -1,0 +1,60 @@
+/* 活码卡片动效 */
+.qr-card {
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.qr-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* 已下载角标 */
+.badge-downloaded {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: #198754;
+    color: white;
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    z-index: 2;
+}
+
+/* 下载按钮 */
+.btn-download {
+    border-radius: 8px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.btn-download:hover {
+    transform: scale(1.02);
+}
+
+/* 活码预览图 */
+.qr-preview img {
+    border: 1px solid #eee;
+    padding: 4px;
+    background: white;
+}
+
+/* 搜索区域 */
+.search-section {
+    padding: 24px 0;
+}
+
+/* 响应式调整 */
+@media (max-width: 576px) {
+    .top-bar {
+        flex-direction: column;
+        gap: 8px;
+        text-align: center;
+    }
+    .qr-card:hover {
+        transform: none;
+    }
+}
