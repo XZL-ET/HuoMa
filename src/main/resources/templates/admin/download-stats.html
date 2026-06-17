@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN"
+      th:replace="~{layout :: layout(title='下载统计', content=~{::#content})}">
+<body>
+<div id="content">
+    <h4 class="mb-3"><i class="bi bi-download"></i> 活码下载统计</h4>
+
+    <!-- 汇总卡片 -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-md-3">
+            <div class="card border-0 shadow-sm text-center">
+                <div class="card-body">
+                    <h2 class="text-primary mb-0" th:text="${stats.totalQrCodes}">0</h2>
+                    <small class="text-muted">活码总数</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card border-0 shadow-sm text-center">
+                <div class="card-body">
+                    <h2 class="text-success mb-0" th:text="${stats.totalDownloaded}">0</h2>
+                    <small class="text-muted">已下载员工</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card border-0 shadow-sm text-center">
+                <div class="card-body">
+                    <h2 class="text-warning mb-0" th:text="${stats.totalNotDownloaded}">0</h2>
+                    <small class="text-muted">未下载员工</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="card border-0 shadow-sm text-center">
+                <div class="card-body">
+                    <h2 class="text-info mb-0" th:text="${stats.totalDownloads}">0</h2>
+                    <small class="text-muted">总下载次数</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <form th:action="@{/admin/download-stats}" method="get" class="row g-2 align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label small">城市</label>
+                    <select name="city" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                        <option th:each="c : ${cities}" th:value="${c}" th:text="${c}"
+                                th:selected="${city == c}"></option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">区县</label>
+                    <select name="district" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                        <option th:each="d : ${districts}" th:value="${d}" th:text="${d}"
+                                th:selected="${district == d}"></option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">下载状态</label>
+                    <select name="downloadStatus" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                        <option value="downloaded" th:selected="${downloadStatus == 'downloaded'}">已下载</option>
+                        <option value="not_downloaded" th:selected="${downloadStatus == 'not_downloaded'}">未下载</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary btn-sm w-100">
+                        <i class="bi bi-search"></i> 筛选
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 数据表格 -->
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>学校</th>
+                        <th>城市·区县</th>
+                        <th>负责人</th>
+                        <th>员工</th>
+                        <th>下载状态</th>
+                        <th>下载次数</th>
+                        <th>最近下载</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="row : ${stats.rows}">
+                        <td th:text="${row.schoolName}"></td>
+                        <td th:text="${row.regionCity + ' · ' + row.regionDistrict}"></td>
+                        <td th:text="${row.managerName}"></td>
+                        <td><code th:text="${row.agentUserid}"></code></td>
+                        <td>
+                            <span class="badge bg-success" th:if="${row.downloaded}">✓ 已下载</span>
+                            <span class="badge bg-secondary" th:unless="${row.downloaded}">✗ 未下载</span>
+                        </td>
+                        <td th:text="${row.downloadCount}"></td>
+                        <td>
+                            <th:block th:if="${row.lastDownloadAt != null}">
+                                <span th:text="${#temporals.format(row.lastDownloadAt, 'yyyy-MM-dd HH:mm')}"></span>
+                            </th:block>
+                            <span class="text-muted" th:unless="${row.lastDownloadAt != null}">—</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="text-center py-4" th:if="${stats.rows == null || stats.rows.isEmpty()}">
+            <p class="text-muted">暂无下载数据</p>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <nav th:if="${stats.totalPages > 1}" class="mt-3">
+        <ul class="pagination justify-content-center">
+            <li class="page-item" th:classappend="${stats.currentPage == 0 ? 'disabled' : ''}">
+                <a class="page-link" th:href="@{/admin/download-stats(city=${city},district=${district},downloadStatus=${downloadStatus},page=${stats.currentPage - 1})}">←</a>
+            </li>
+            <li class="page-item disabled"><span class="page-link"
+                th:text="${'第 ' + (stats.currentPage + 1) + ' / ' + stats.totalPages + ' 页 (' + stats.totalRows + ' 条)'}"></span></li>
+            <li class="page-item" th:classappend="${stats.currentPage >= stats.totalPages - 1 ? 'disabled' : ''}">
+                <a class="page-link" th:href="@{/admin/download-stats(city=${city},district=${district},downloadStatus=${downloadStatus},page=${stats.currentPage + 1})}">→</a>
+            </li>
+        </ul>
+    </nav>
+</div>
+</body>
+</html>

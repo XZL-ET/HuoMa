@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN"
+      th:replace="~{layout :: layout(title='区县负责人配置', content=~{::#content})}">
+<body>
+<div id="content">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0"><i class="bi bi-person-gear"></i> 区县负责人配置</h4>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+            <i class="bi bi-plus-lg"></i> 新增配置
+        </button>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th>城市</th>
+                        <th>区县</th>
+                        <th>负责人</th>
+                        <th>负责人 UserID</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="m : ${managers}">
+                        <td th:text="${m.id}"></td>
+                        <td th:text="${m.regionCity}"></td>
+                        <td th:text="${m.regionDistrict}"></td>
+                        <td th:text="${m.managerName}"></td>
+                        <td><code th:text="${m.managerUserid}"></code></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary me-1"
+                                    data-bs-toggle="modal" data-bs-target="#editModal"
+                                    th:attr="data-id=${m.id},data-userid=${m.managerUserid}">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <form th:action="@{'/admin/district-managers/' + ${m.id} + '/delete'}"
+                                  method="post" class="d-inline"
+                                  onsubmit="return confirm('确认删除该区县负责人配置？')">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="text-center py-4" th:if="${managers.isEmpty()}">
+            <p class="text-muted">暂无区县负责人配置</p>
+        </div>
+    </div>
+
+    <!-- 新增模态框 -->
+    <div class="modal fade" id="addModal" tabindex="-1">
+        <div class="modal-dialog">
+            <form th:action="@{/admin/district-managers/create}" method="post" class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">新增区县负责人</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">城市</label>
+                        <select name="regionCity" class="form-select" required>
+                            <option value="">请选择城市</option>
+                            <option th:each="c : ${cities}" th:value="${c}" th:text="${c}"></option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">区县</label>
+                        <select name="regionDistrict" class="form-select" required>
+                            <option value="">请选择区县</option>
+                            <option th:each="d : ${districts}" th:value="${d}" th:text="${d}"></option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">负责人</label>
+                        <select name="managerUserid" class="form-select" required>
+                            <option value="">请选择负责人</option>
+                            <option th:each="e : ${employeeList}" th:value="${e.userid}"
+                                    th:text="${e.name + ' (' + e.userid + ')'}"></option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">确认添加</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 编辑模态框（通过 JS 填充） -->
+    <div class="modal fade" id="editModal" tabindex="-1">
+        <div class="modal-dialog">
+            <form th:action="@{/admin/district-managers/{id}/update(id='')}" method="post"
+                  class="modal-content" id="editForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑区县负责人</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">负责人</label>
+                        <select name="managerUserid" class="form-select" required id="editManagerSelect">
+                            <option value="">请选择负责人</option>
+                            <option th:each="e : ${employeeList}" th:value="${e.userid}"
+                                    th:text="${e.name + ' (' + e.userid + ')'}"></option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">确认更新</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// 编辑模态框：从按钮 data 属性填充 ID 和选中值
+document.getElementById('editModal').addEventListener('show.bs.modal', function(e) {
+    var btn = e.relatedTarget;
+    var id = btn.getAttribute('data-id');
+    var userid = btn.getAttribute('data-userid');
+    this.querySelector('#editForm').action = '/admin/district-managers/' + id + '/update';
+    this.querySelector('#editManagerSelect').value = userid;
+});
+</script>
+</body>
+</html>
