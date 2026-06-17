@@ -1,9 +1,6 @@
 package com.bookstore.qrcode.service;
 
-import com.bookstore.qrcode.entity.QrAgent;
-import com.bookstore.qrcode.entity.QrCode;
-import com.bookstore.qrcode.entity.QrDownloadLog;
-import com.bookstore.qrcode.entity.DistrictManager;
+import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +29,7 @@ public class DownloadLogService {
     private final QrAgentRepository qrAgentRepo;
     private final QrCodeRepository qrCodeRepo;
     private final DistrictManagerRepository districtManagerRepo;
+    private final EmployeeRepository employeeRepo;
 
     /**
      * 记录一次下载。
@@ -170,6 +168,19 @@ public class DownloadLogService {
             }
         }
 
+        // 4a. 批量解析员工姓名（userid → 中文名）
+        Map<String, String> nameMap = new HashMap<>();
+        if (!qrCodeIds.isEmpty()) {
+            Set<String> allUserids = agentsByQrCodeId.values().stream()
+                .flatMap(List::stream)
+                .map(QrAgent::getAgentUserid)
+                .collect(Collectors.toSet());
+            if (!allUserids.isEmpty()) {
+                employeeRepo.findByUseridIn(allUserids)
+                    .forEach(e -> nameMap.put(e.getUserid(), e.getName()));
+            }
+        }
+
         // 5. 构建统计行
         List<Map<String, Object>> rows = new ArrayList<>();
         int totalDownloaded = 0;
@@ -191,6 +202,8 @@ public class DownloadLogService {
 
             for (QrAgent agent : agents) {
                 if (agent.getStatus() == QrAgent.AgentStatus.removed) continue;
+                // 只统计服务老师（含 dual 角色），跳过纯接待员
+                if (agent.getRole() == QrAgent.AgentRole.receptionist) continue;
 
                 long count = logs.stream()
                     .filter(l -> l.getAgentUserid().equals(agent.getAgentUserid()))
@@ -209,6 +222,7 @@ public class DownloadLogService {
                 row.put("regionDistrict", qr.getRegionDistrict());
                 row.put("managerName", manager != null ? manager.getManagerName() : "—");
                 row.put("agentUserid", agent.getAgentUserid());
+                row.put("agentName", nameMap.getOrDefault(agent.getAgentUserid(), agent.getAgentUserid()));
                 row.put("downloaded", downloaded);
                 row.put("downloadCount", count);
                 row.put("lastDownloadAt", logs.stream()

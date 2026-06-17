@@ -64,25 +64,49 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">城市</label>
-                        <select name="regionCity" class="form-select" required>
-                            <option value="">请选择城市</option>
-                            <option th:each="c : ${cities}" th:value="${c}" th:text="${c}"></option>
-                        </select>
+                        <div class="combo-box position-relative">
+                            <input type="text" class="form-control combo-input pe-5"
+                                   placeholder="点击选择或输入搜索…" autocomplete="off">
+                            <i class="bi bi-chevron-down position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                               style="pointer-events:none;z-index:5;"></i>
+                            <select name="regionCity" class="d-none" required>
+                                <option value="">请选择城市</option>
+                                <option th:each="c : ${cities}" th:value="${c}" th:text="${c}"></option>
+                            </select>
+                            <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                 style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">区县</label>
-                        <select name="regionDistrict" class="form-select" required>
-                            <option value="">请选择区县</option>
-                            <option th:each="d : ${districts}" th:value="${d}" th:text="${d}"></option>
-                        </select>
+                        <div class="combo-box position-relative">
+                            <input type="text" class="form-control combo-input pe-5"
+                                   placeholder="点击选择或输入搜索…" autocomplete="off">
+                            <i class="bi bi-chevron-down position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                               style="pointer-events:none;z-index:5;"></i>
+                            <select name="regionDistrict" class="d-none" required>
+                                <option value="">请选择区县</option>
+                                <option th:each="d : ${districts}" th:value="${d}" th:text="${d}"></option>
+                            </select>
+                            <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                 style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">负责人</label>
-                        <select name="managerUserid" class="form-select" required>
-                            <option value="">请选择负责人</option>
-                            <option th:each="e : ${employeeList}" th:value="${e.userid}"
-                                    th:text="${e.name + ' (' + e.userid + ')'}"></option>
-                        </select>
+                        <div class="combo-box position-relative">
+                            <input type="text" class="form-control combo-input pe-5"
+                                   placeholder="点击选择或输入姓名搜索…" autocomplete="off">
+                            <i class="bi bi-chevron-down position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                               style="pointer-events:none;z-index:5;"></i>
+                            <select name="managerUserid" class="d-none" required>
+                                <option value="">请选择负责人</option>
+                                <option th:each="e : ${employeeList}" th:value="${e.userid}"
+                                        th:text="${e.name + ' (' + e.userid + ')'}"></option>
+                            </select>
+                            <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                 style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -93,7 +117,7 @@
         </div>
     </div>
 
-    <!-- 编辑模态框（通过 JS 填充） -->
+    <!-- 编辑模态框 -->
     <div class="modal fade" id="editModal" tabindex="-1">
         <div class="modal-dialog">
             <form th:action="@{/admin/district-managers/{id}/update(id='')}" method="post"
@@ -105,11 +129,19 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">负责人</label>
-                        <select name="managerUserid" class="form-select" required id="editManagerSelect">
-                            <option value="">请选择负责人</option>
-                            <option th:each="e : ${employeeList}" th:value="${e.userid}"
-                                    th:text="${e.name + ' (' + e.userid + ')'}"></option>
-                        </select>
+                        <div class="combo-box position-relative">
+                            <input type="text" class="form-control combo-input pe-5"
+                                   placeholder="点击选择或输入姓名搜索…" autocomplete="off">
+                            <i class="bi bi-chevron-down position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                               style="pointer-events:none;z-index:5;"></i>
+                            <select name="managerUserid" class="d-none" required>
+                                <option value="">请选择负责人</option>
+                                <option th:each="e : ${employeeList}" th:value="${e.userid}"
+                                        th:text="${e.name + ' (' + e.userid + ')'}"></option>
+                            </select>
+                            <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                 style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -121,15 +153,5 @@
     </div>
 </div>
 
-<script>
-// 编辑模态框：从按钮 data 属性填充 ID 和选中值
-document.getElementById('editModal').addEventListener('show.bs.modal', function(e) {
-    var btn = e.relatedTarget;
-    var id = btn.getAttribute('data-id');
-    var userid = btn.getAttribute('data-userid');
-    this.querySelector('#editForm').action = '/admin/district-managers/' + id + '/update';
-    this.querySelector('#editManagerSelect').value = userid;
-});
-</script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.*;
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.*;
@@ -49,6 +50,7 @@ public class DownloadCenterController {
     private final QrCodeRepository qrCodeRepo;
     private final QrAgentRepository qrAgentRepo;
     private final QrCodeService qrCodeService;
+    private final EmployeeRepository employeeRepository;
 
     // ==================== OAuth 认证 ====================
 
@@ -78,6 +80,28 @@ public class DownloadCenterController {
             model.addAttribute("error", "认证失败：" + e.getMessage());
             return "download/error";
         }
+    }
+
+    /**
+     * 开发环境快捷登录：直接指定 userid 写入 Session，跳过企微 OAuth。
+     */
+    @GetMapping("/oauth/dev-login")
+    public String devLogin(@RequestParam String userid,
+                           HttpSession session,
+                           Model model) {
+        Employee employee = employeeRepository.findByUserid(userid).orElse(null);
+        if (employee == null) {
+            model.addAttribute("error", "员工不存在: " + userid);
+            return "download/error";
+        }
+        if (!employee.getActive()) {
+            model.addAttribute("error", "员工已离职: " + employee.getName());
+            return "download/error";
+        }
+        session.setAttribute(WecomOAuthService.SESSION_EMPLOYEE_USERID, employee.getUserid());
+        session.setAttribute(WecomOAuthService.SESSION_EMPLOYEE_NAME, employee.getName());
+        log.info("🔧 开发模式快捷登录: userid={}, name={}", employee.getUserid(), employee.getName());
+        return "redirect:/download";
     }
 
     // ==================== 下载主页 ====================

@@ -334,3 +334,16 @@ CREATE TABLE IF NOT EXISTS district_manager (
     UNIQUE KEY uk_district (region_city, region_district),
     INDEX idx_manager_city (region_city)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区县负责人配置';
+
+-- qr_rotate_log：活码轮换/扩容日志
+CREATE TABLE IF NOT EXISTS qr_rotate_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qr_code_id BIGINT NOT NULL COMMENT '关联活码ID',
+    from_userid VARCHAR(100) COMMENT '轮换前负责老师userid（新增场景为空）',
+    to_userid VARCHAR(100) NOT NULL COMMENT '轮换后/新分配老师userid',
+    reason VARCHAR(500) COMMENT '轮换原因说明',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_rotate_qrcode (qr_code_id),
+    INDEX idx_rotate_to_userid (to_userid),
+    CONSTRAINT fk_rotate_qrcode FOREIGN KEY (qr_code_id) REFERENCES qr_code(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码轮换日志';

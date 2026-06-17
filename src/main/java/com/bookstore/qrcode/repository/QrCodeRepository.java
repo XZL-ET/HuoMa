@@ -51,7 +51,8 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      * 当参数为 {@code null} 时自动忽略该条件。这使得前端可以任意组合筛选维度
      * 而无需为每种组合编写独立的查询方法。
      * <ul>
-     *   <li><b>keyword</b>（可选）：模糊匹配学校名称（schoolName）或学校 ID（schoolId），
+     *   <li><b>keyword</b>（可选）：模糊匹配学校名称（schoolName）、学校 ID（schoolId）、
+     *       城市（regionCity）、区县（regionDistrict），
      *       使用 {@code LIKE %:keyword%} 实现前后模糊</li>
      *   <li><b>city</b>（可选）：精确匹配所在城市（regionCity）</li>
      *   <li><b>district</b>（可选）：精确匹配所在区/县（regionDistrict）</li>
@@ -68,7 +69,8 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      * @return 满足条件的活码分页数据
      */
     @Query("SELECT q FROM QrCode q WHERE "
-         + "(:keyword IS NULL OR q.schoolName LIKE %:keyword% OR q.schoolId LIKE %:keyword%) "
+         + "(:keyword IS NULL OR q.schoolName LIKE %:keyword% OR q.schoolId LIKE %:keyword%"
+         + " OR q.regionCity LIKE %:keyword% OR q.regionDistrict LIKE %:keyword%) "
          + "AND (:city IS NULL OR q.regionCity = :city) "
          + "AND (:district IS NULL OR q.regionDistrict = :district) "
          + "AND (:status IS NULL OR q.status = :status)")

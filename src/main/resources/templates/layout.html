@@ -83,5 +83,146 @@
 
     <!-- Bootstrap JS 组件（依赖 Popper） -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- 可搜索下拉组合框样式（区县负责人配置页） -->
+    <style>
+    .combo-arrow { transition: transform 0.2s; }
+    .combo-box.open .combo-arrow { transform: translateY(-50%) rotate(180deg); }
+    .combo-option { padding: 6px 12px; cursor: pointer; font-size: 14px; }
+    .combo-option:hover, .combo-option.active { background: #0d6efd; color: #fff; }
+    .combo-option mark { background: #fff3cd; padding: 0; color: inherit; }
+    </style>
+
+    <!-- 可搜索下拉组合框脚本 -->
+    <script>
+    (function() {
+        document.querySelectorAll('.combo-box').forEach(function(box) {
+            var input   = box.querySelector('.combo-input');
+            var select  = box.querySelector('select');
+            var dropdown = box.querySelector('.combo-dropdown');
+            if (!input || !select || !dropdown) return;
+
+            var options = [];
+            select.querySelectorAll('option').forEach(function(opt) {
+                if (opt.value) options.push({value: opt.value, text: opt.textContent.trim()});
+            });
+
+            var activeIdx = -1;
+
+            function highlight(text, q) {
+                if (!q) return text;
+                var re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+                return text.replace(re, '<mark>$1</mark>');
+            }
+
+            function render(filterText) {
+                var q = (filterText || '').toLowerCase();
+                var matches = options.filter(function(o) {
+                    return !q || o.text.toLowerCase().includes(q) || o.value.toLowerCase().includes(q);
+                });
+                activeIdx = -1;
+                dropdown.innerHTML = '';
+                if (matches.length === 0) {
+                    dropdown.innerHTML = '<div class="combo-option text-muted">无匹配结果</div>';
+                } else {
+                    matches.forEach(function(o) {
+                        var div = document.createElement('div');
+                        div.className = 'combo-option';
+                        div.innerHTML = highlight(o.text, q);
+                        div.addEventListener('mousedown', function(e) {
+                            e.preventDefault();
+                            select.value = o.value;
+                            input.value = o.text;
+                            dropdown.style.display = 'none';
+                            box.classList.remove('open');
+                        });
+                        dropdown.appendChild(div);
+                    });
+                }
+                dropdown.style.display = 'block';
+                dropdown.style.width = (input.offsetWidth || 300) + 'px';
+            }
+
+            function setActive(idx) {
+                var items = dropdown.querySelectorAll('.combo-option');
+                items.forEach(function(el, i) {
+                    el.classList.toggle('active', i === idx);
+                    if (i === idx && typeof el.scrollIntoView === 'function') {
+                        el.scrollIntoView({block: 'nearest'});
+                    }
+                });
+            }
+
+            input.addEventListener('click', function() {
+                if (dropdown.style.display === 'block') {
+                    dropdown.style.display = 'none';
+                    box.classList.remove('open');
+                } else {
+                    render(input.value);
+                    box.classList.add('open');
+                }
+            });
+
+            input.addEventListener('input', function() {
+                if (dropdown.style.display !== 'block') box.classList.add('open');
+                render(input.value);
+            });
+
+            input.addEventListener('keydown', function(e) {
+                var items = dropdown.querySelectorAll('.combo-option');
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    if (dropdown.style.display !== 'block') { render(''); box.classList.add('open'); }
+                    activeIdx = Math.min(activeIdx + 1, items.length - 1);
+                    setActive(activeIdx);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (dropdown.style.display !== 'block') { render(''); box.classList.add('open'); }
+                    activeIdx = Math.max(activeIdx - 1, 0);
+                    setActive(activeIdx);
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (activeIdx >= 0 && activeIdx < items.length) {
+                        items[activeIdx].dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                    }
+                } else if (e.key === 'Escape') {
+                    dropdown.style.display = 'none';
+                    box.classList.remove('open');
+                }
+            });
+
+            input.addEventListener('blur', function() {
+                setTimeout(function() {
+                    dropdown.style.display = 'none';
+                    box.classList.remove('open');
+                    var matched = options.find(function(o) { return o.text === input.value; });
+                    if (!matched) {
+                        var selOpt = select.options[select.selectedIndex];
+                        input.value = selOpt && selOpt.value ? selOpt.textContent.trim() : '';
+                    }
+                }, 150);
+            });
+        });
+    })();
+
+    // 区县负责人编辑模态框
+    var editModal = document.getElementById('editModal');
+    if (editModal) {
+        editModal.addEventListener('show.bs.modal', function(e) {
+            var btn = e.relatedTarget;
+            var id = btn.getAttribute('data-id');
+            var userid = btn.getAttribute('data-userid');
+            this.querySelector('#editForm').action = '/admin/district-managers/' + id + '/update';
+            var box = this.querySelector('.combo-box');
+            if (box) {
+                var input = box.querySelector('.combo-input');
+                var select = box.querySelector('select');
+                select.value = userid;
+                var opt = select.querySelector('option[value="' + userid + '"]');
+                input.value = opt ? opt.textContent.trim() : userid;
+            }
+        });
+    }
+    </script>
 </body>
 </html>

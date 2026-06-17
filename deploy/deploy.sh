@@ -1,5 +1,5 @@
 #!/bin/bash
-# XX书店 · 活码管理平台 部署脚本
+# 火马平台 部署脚本
 # 用法: ./deploy.sh [prod|dev]
 
 set -e
@@ -11,7 +11,7 @@ APP_DIR="/opt/bookstore-qrcode"
 JAR_NAME="bookstore-qrcode-0.1.0.jar"
 
 echo "========================================="
-echo " XX书店 · 活码管理平台 部署"
+echo " 火马平台 部署"
 echo " 环境: ${PROFILE} | 目标: ${SERVER_IP}"
 echo "========================================="
 
