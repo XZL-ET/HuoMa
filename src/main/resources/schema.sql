@@ -305,3 +305,32 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_username (username),
     INDEX idx_enabled (enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
+
+-- ============================================
+-- 新增表：下载中心
+-- ============================================
+
+-- qr_download_log：活码下载日志
+CREATE TABLE IF NOT EXISTS qr_download_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qr_code_id BIGINT NOT NULL COMMENT '活码ID',
+    agent_userid VARCHAR(100) NOT NULL COMMENT '下载员工企微userid',
+    downloaded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下载时间',
+    ip_address VARCHAR(50) COMMENT '下载来源IP',
+    CONSTRAINT fk_download_qrcode FOREIGN KEY (qr_code_id) REFERENCES qr_code(id),
+    INDEX idx_log_qrcode (qr_code_id),
+    INDEX idx_log_userid (agent_userid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码下载日志';
+
+-- district_manager：区县负责人配置
+CREATE TABLE IF NOT EXISTS district_manager (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    region_city VARCHAR(50) NOT NULL COMMENT '城市',
+    region_district VARCHAR(50) NOT NULL COMMENT '区/县',
+    manager_userid VARCHAR(100) NOT NULL COMMENT '负责人企微userid',
+    manager_name VARCHAR(100) NOT NULL COMMENT '负责人姓名',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_district (region_city, region_district),
+    INDEX idx_manager_city (region_city)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区县负责人配置';
