@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN"
+      th:replace="~{download/layout :: layout(title='活码下载中心', content=~{::#content})}">
+<body>
+<div id="content">
+    <!-- 搜索栏 -->
+    <div class="search-section text-center mb-4">
+        <form th:action="@{/download}" method="get" class="d-flex justify-content-center gap-2 flex-wrap">
+            <div class="btn-group" role="group">
+                <a th:href="@{/download(mode='mine',keyword=${keyword})}"
+                   class="btn" th:classappend="${mode == 'mine' ? 'btn-primary' : 'btn-outline-primary'}">
+                    <i class="bi bi-person-check"></i> 我的活码
+                </a>
+                <a th:href="@{/download(mode='all',keyword=${keyword})}"
+                   class="btn" th:classappend="${mode == 'all' ? 'btn-primary' : 'btn-outline-primary'}">
+                    <i class="bi bi-grid"></i> 全部活码
+                </a>
+            </div>
+            <input type="hidden" name="mode" th:value="${mode}">
+            <input type="search" name="keyword" class="form-control" style="max-width: 400px;"
+                   th:value="${keyword}" placeholder="🔍 搜索学校名称、城市、区县…">
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-search"></i> 搜索
+            </button>
+        </form>
+    </div>
+
+    <!-- 卡片网格 -->
+    <div class="row g-4" th:if="${qrCodes != null && !qrCodes.content.isEmpty()}">
+        <div class="col-12 col-sm-6 col-lg-4 col-xl-3" th:each="qr : ${qrCodes.content}">
+            <div class="card qr-card h-100 border-0 shadow-sm">
+                <div th:if="${downloadedIds.contains(qr.id)}" class="badge-downloaded">
+                    <i class="bi bi-check-circle-fill"></i> 已下载
+                </div>
+                <div class="card-body text-center">
+                    <h6 class="card-title mb-1" th:text="${qr.schoolName}">学校名</h6>
+                    <p class="text-muted small mb-2">
+                        <i class="bi bi-geo-alt"></i>
+                        <span th:text="${qr.regionCity + ' · ' + qr.regionDistrict}">城市 · 区县</span>
+                    </p>
+                    <!-- 负责人 -->
+                    <p class="text-muted small mb-2" th:if="${managerMap != null}">
+                        <th:block th:with="key=${qr.regionCity + '|' + qr.regionDistrict},
+                            dm=${managerMap.get(key)}">
+                            <th:block th:if="${dm != null}">
+                                👤 负责人：
+                                <a th:href="'wxwork://openconversation?userid=' + ${dm.managerUserid}"
+                                   class="text-decoration-none" th:text="${dm.managerName}">负责人</a>
+                            </th:block>
+                        </th:block>
+                    </p>
+                    <!-- 活码预览 -->
+                    <div class="qr-preview mb-3" th:if="${qr.qrUrl != null}">
+                        <img th:src="${qr.qrUrl}" class="img-fluid rounded" style="max-height: 160px;"
+                             th:alt="${qr.schoolName}" loading="lazy">
+                    </div>
+                    <div class="qr-preview-placeholder mb-3" th:unless="${qr.qrUrl != null}">
+                        <i class="bi bi-qr-code" style="font-size: 4rem; color: #ccc;"></i>
+                    </div>
+                    <!-- 下载按钮 -->
+                    <a th:href="@{'/download/' + ${qr.id} + '/download'}"
+                       class="btn btn-primary btn-download w-100"
+                       th:classappend="${downloadedIds.contains(qr.id) ? 'btn-success' : 'btn-primary'}">
+                        <i class="bi" th:classappend="${downloadedIds.contains(qr.id) ? 'bi-check-circle' : 'bi-download'}"></i>
+                        <th:block th:if="${downloadedIds.contains(qr.id)}">再次下载</th:block>
+                        <th:block th:unless="${downloadedIds.contains(qr.id)}">下载高清图</th:block>
+                    </a>
+                    <small class="text-muted" th:if="${downloadCounts.get(qr.id) > 0}">
+                        已下载 <span th:text="${downloadCounts.get(qr.id)}"></span> 次
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 空状态 -->
+    <div class="text-center py-5" th:unless="${qrCodes != null && !qrCodes.content.isEmpty()}">
+        <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+        <p class="text-muted mt-3" th:if="${mode == 'mine'}">你还没有绑定任何活码，切换到「全部活码」浏览</p>
+        <p class="text-muted mt-3" th:unless="${mode == 'mine'}">没有找到匹配的活码</p>
+    </div>
+
+    <!-- 分页 -->
+    <nav th:if="${qrCodes != null && qrCodes.totalPages > 1}" class="mt-4">
+        <ul class="pagination justify-content-center">
+            <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
+                <a class="page-link" th:href="@{/download(mode=${mode},keyword=${keyword},page=${qrCodes.number - 1})}">← 上一页</a>
+            </li>
+            <li class="page-item disabled"><span class="page-link"
+                th:text="${'第 ' + (qrCodes.number + 1) + ' / ' + qrCodes.totalPages + ' 页'}"></span></li>
+            <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
+                <a class="page-link" th:href="@{/download(mode=${mode},keyword=${keyword},page=${qrCodes.number + 1})}">下一页 →</a>
+            </li>
+        </ul>
+    </nav>
+</div>
+</body>
+</html>
