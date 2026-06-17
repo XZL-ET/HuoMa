@@ -114,27 +114,36 @@ public class DownloadCenterController {
             qrCodePage = qrCodeRepo.search(keyword, null, null, QrCode.QrCodeStatus.active,
                 PageRequest.of(page, size));
         } else {
-            // 我的活码模式：只显示绑定的
+            // 我的活码模式：只显示绑定的 — 一次性批量加载，避免 N+1
             List<Long> ids = new ArrayList<>(myQrCodeIds);
+            // Batch load all my QR codes, then filter + paginate in memory
+            List<QrCode> allMyQrCodes = qrCodeRepo.findAllById(ids);
+            Map<Long, QrCode> qrCodeMap = new HashMap<>();
+            for (QrCode qr : allMyQrCodes) qrCodeMap.put(qr.getId(), qr);
+            // Keyword filtering in memory
             if (keyword != null && !keyword.isEmpty()) {
-                ids = ids.stream()
-                    .filter(id -> {
-                        QrCode qr = qrCodeRepo.findById(id).orElse(null);
-                        return qr != null && (qr.getSchoolName().contains(keyword)
-                            || qr.getSchoolId().contains(keyword)
-                            || qr.getRegionCity().contains(keyword)
-                            || qr.getRegionDistrict().contains(keyword));
-                    })
-                    .toList();
+                List<Long> filtered = new ArrayList<>();
+                for (Long id : ids) {
+                    QrCode qr = qrCodeMap.get(id);
+                    if (qr != null && (qr.getSchoolName().contains(keyword)
+                        || qr.getSchoolId().contains(keyword)
+                        || qr.getRegionCity().contains(keyword)
+                        || qr.getRegionDistrict().contains(keyword))) {
+                        filtered.add(id);
+                    }
+                }
+                ids = filtered;
             }
+            // Paginate from the pre-loaded map
             int fromIdx = page * size;
             int toIdx = Math.min(fromIdx + size, ids.size());
-            List<QrCode> pageContent = fromIdx < ids.size()
-                ? ids.subList(fromIdx, toIdx).stream()
-                    .map(qrCodeRepo::findById)
-                    .filter(Optional::isPresent).map(Optional::get)
-                    .toList()
-                : List.of();
+            List<QrCode> pageContent = new ArrayList<>();
+            if (fromIdx < ids.size()) {
+                for (Long id : ids.subList(fromIdx, toIdx)) {
+                    QrCode qr = qrCodeMap.get(id);
+                    if (qr != null) pageContent.add(qr);
+                }
+            }
             qrCodePage = new org.springframework.data.domain.PageImpl<>(
                 pageContent, PageRequest.of(page, size), ids.size());
         }
@@ -159,16 +168,10 @@ public class DownloadCenterController {
         model.addAttribute("managerMap", managerMap);
         model.addAttribute("downloadedIds", downloadedIds);
         model.addAttribute("managerOptions", managerOptions);
-        model.addAttribute("downloadCounts", buildDownloadCounts(userid, qrCodePage.getContent()));
+        model.addAttribute("downloadCounts",
+            downloadLogService.getDownloadCounts(userid,
+                qrCodePage.getContent().stream().map(QrCode::getId).toList()));
         return "download/index";
-    }
-
-    private Map<Long, Long> buildDownloadCounts(String userid, List<QrCode> qrCodes) {
-        Map<Long, Long> counts = new LinkedHashMap<>();
-        for (QrCode qr : qrCodes) {
-            counts.put(qr.getId(), downloadLogService.getDownloadCount(qr.getId(), userid));
-        }
-        return counts;
     }
 
     // ==================== 下载操作 ====================

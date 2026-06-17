@@ -81,4 +81,18 @@ public interface QrDownloadLogRepository extends JpaRepository<QrDownloadLog, Lo
      * @return 匹配的下载日志列表
      */
     List<QrDownloadLog> findByQrCodeIdIn(List<Long> qrCodeIds);
+
+    /**
+     * 批量查询：指定员工对一批活码的下载记录。
+     * <p>
+     * 用于下载中心页面一次性获取当前员工对页面内所有活码的下载次数，避免 N+1。
+     * </p>
+     *
+     * @param qrCodeIds   活码 ID 列表
+     * @param agentUserid 员工的企业微信用户 ID
+     * @return 匹配的下载日志列表
+     */
+    @Query("SELECT d FROM QrDownloadLog d WHERE d.qrCodeId IN :qrCodeIds AND d.agentUserid = :agentUserid")
+    List<QrDownloadLog> findByQrCodeIdInAndAgentUserid(@Param("qrCodeIds") List<Long> qrCodeIds,
+                                                         @Param("agentUserid") String agentUserid);
 }

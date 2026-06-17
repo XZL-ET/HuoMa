@@ -69,6 +69,28 @@ public class DownloadLogService {
     }
 
     /**
+     * 批量获取某员工对一批活码的下载次数。
+     * <p>
+     * 一次查询返回所有相关下载记录，避免 N+1 问题。
+     * 返回的 Map 保证每个传入的 qrCodeId 都有对应的计数（默认为 0）。
+     * </p>
+     *
+     * @param agentUserid 员工的企业微信用户 ID
+     * @param qrCodeIds   活码 ID 列表
+     * @return 活码 ID → 下载次数 的映射
+     */
+    public Map<Long, Long> getDownloadCounts(String agentUserid, List<Long> qrCodeIds) {
+        if (qrCodeIds == null || qrCodeIds.isEmpty()) return Map.of();
+        List<QrDownloadLog> logs = downloadLogRepo.findByQrCodeIdInAndAgentUserid(qrCodeIds, agentUserid);
+        Map<Long, Long> counts = new HashMap<>();
+        for (Long id : qrCodeIds) counts.put(id, 0L);
+        for (QrDownloadLog log : logs) {
+            counts.merge(log.getQrCodeId(), 1L, Long::sum);
+        }
+        return counts;
+    }
+
+    /**
      * 员工个人下载历史（每次下载一条）。
      */
     public List<Map<String, Object>> getPersonalHistory(String agentUserid) {
