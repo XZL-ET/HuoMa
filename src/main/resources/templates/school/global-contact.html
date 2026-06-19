@@ -1,0 +1,25 @@
+<header class="school-topbar">
+    <div class="school-topbar-brand">火马 · 学校活码查询</div>
+</header>
+
+<main class="school-main" id="school-main">
+    <div class="school-breadcrumb">
+        <a href="/s" hx-get="/s" class="school-back-link">← 返回首页</a>
+    </div>
+
+    <div class="school-detail">
+        <h1 class="school-detail-name" th:text="${contactName}">火马客服</h1>
+        <span class="badge badge-info">全局联系人</span>
+
+        <div class="school-qr-card school-qr-active"
+             th:if="${qrUrl != null and !qrUrl.isEmpty()}">
+            <img th:src="${qrUrl}" alt="全局联系人二维码" class="school-qr-img" />
+            <p class="school-qr-contact">扫码添加联系人</p>
+        </div>
+
+        <div th:unless="${qrUrl != null and !qrUrl.isEmpty()}" class="school-empty">
+            <p>暂未配置全局联系人活码</p>
+            <p class="school-hint">请联系管理员配置</p>
+        </div>
+    </div>
+</main>

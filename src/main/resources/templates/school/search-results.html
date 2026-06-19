@@ -1,0 +1,31 @@
+<header class="school-topbar">
+    <div class="school-topbar-brand">火马 · 学校活码查询</div>
+</header>
+
+<main class="school-main" id="school-main" hx-target="#school-main" hx-swap="innerHTML">
+    <div class="school-breadcrumb">
+        <a href="/s" hx-get="/s" class="school-back-link">← 返回首页</a>
+    </div>
+
+    <div class="school-search-title" th:text="'搜索：' + ${keyword}">搜索：第一小学</div>
+
+    <div class="school-card-list" th:if="${!#lists.isEmpty(schools)}">
+        <a th:each="s : ${schools}"
+           th:href="@{/s/school/{id}(id=${s.schoolId})}"
+           class="school-card school-card-sm">
+            <span class="school-card-body">
+                <span class="school-card-title" th:text="${s.schoolName}">武汉第一小学</span>
+                <span class="school-card-sub" th:text="${s.regionCity} + ' · ' + ${s.regionDistrict}">武汉 · 江汉区</span>
+            </span>
+            <span th:if="${s.hasQrcode}" class="badge badge-success">已有活码</span>
+            <span th:unless="${s.hasQrcode}" class="badge badge-warning">待创建</span>
+        </a>
+    </div>
+
+    <div th:if="${#lists.isEmpty(schools)}" class="school-empty">
+        <p>未找到匹配学校</p>
+        <a href="/s/global-contact" hx-get="/s/global-contact" class="school-global-link">
+            联系全局负责人 →
+        </a>
+    </div>
+</main>

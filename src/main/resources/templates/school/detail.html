@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>火马 · 学校活码查询</title>
+    <link rel="stylesheet" th:href="@{/css/bootstrap.min.css}" />
+    <link rel="stylesheet" th:href="@{/css/school-entry.css}" />
+    <script th:src="@{/js/htmx.min.js}"></script>
+</head>
+<body class="school-body">
+    <header class="school-topbar">
+        <div class="school-topbar-brand">火马 · 学校活码查询</div>
+    </header>
+
+    <main class="school-main" id="school-main">
+        <div class="school-breadcrumb">
+            <a href="javascript:history.back()" class="school-back-link">← 返回学校列表</a>
+        </div>
+
+        <div class="school-detail">
+            <h1 class="school-detail-name" th:text="${detail.schoolName}">武汉市第一小学</h1>
+            <span class="badge"
+                  th:classappend="${detail.qrAvailable} ? 'badge-success' : 'badge-warning'"
+                  th:text="${detail.statusLabel}">活码已就绪</span>
+
+            <!-- 有活码：QR + 下载按钮 -->
+            <th:block th:if="${detail.qrAvailable}">
+                <div class="school-qr-card school-qr-active">
+                    <img th:src="${detail.qrUrl}" alt="学校活码" class="school-qr-img"
+                         onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22180%22 height=%22180%22><rect fill=%22%23F1F5F9%22 width=%22180%22 height=%22180%22 rx=%228%22/><text x=%2290%22 y=%2295%22 text-anchor=%22middle%22 fill=%22%2394A3B8%22 font-size=%2213%22>图片加载失败</text></svg>'" />
+                    <p class="school-qr-contact" th:if="${detail.contactName}">
+                        联系人：<span th:text="${detail.contactName}">张老师</span>
+                    </p>
+                </div>
+
+                <a th:href="@{/s/school/{id}/download(id=${detail.schoolId})}"
+                   class="btn-download">
+                    ⬇ 保存活码到手机
+                </a>
+                <p class="school-hint">或长按上方图片保存</p>
+                <p class="school-hint school-wechat-hint">
+                    💡 微信内请点击右上角 ··· → 在浏览器中打开
+                </p>
+            </th:block>
+
+            <!-- 无活码：负责人兜底 -->
+            <th:block th:unless="${detail.qrAvailable}">
+                <div class="school-qr-card school-qr-fallback">
+                    <img th:if="${detail.fallbackQrUrl}"
+                         th:src="${detail.fallbackQrUrl}" alt="负责人企业微信二维码"
+                         class="school-qr-img" />
+                    <div th:unless="${detail.fallbackQrUrl}" class="school-qr-placeholder">
+                        暂未配置
+                    </div>
+                    <p class="school-fallback-name" th:text="${detail.fallbackManagerName}">李老师</p>
+                    <p class="school-fallback-role" th:unless="${detail.isGlobalFallback}">区县负责人</p>
+                    <p class="school-fallback-role" th:if="${detail.isGlobalFallback}">全局联系人</p>
+                </div>
+
+                <!-- 操作指引 -->
+                <div class="school-guide">
+                    <p class="school-guide-title">📋 如何添加负责人？</p>
+                    <div class="school-guide-steps">
+                        <div class="school-guide-step">
+                            <span class="school-step-num">1</span>
+                            <span>长按上方二维码保存到相册</span>
+                        </div>
+                        <div class="school-guide-step">
+                            <span class="school-step-num">2</span>
+                            <span>打开微信 → 扫一扫 → 相册选择图片</span>
+                        </div>
+                        <div class="school-guide-step">
+                            <span class="school-step-num">3</span>
+                            <span>发送好友申请，等待通过</span>
+                        </div>
+                    </div>
+                </div>
+                <p class="school-note" th:if="${!detail.isGlobalFallback}">
+                    添加时请备注：<strong th:text="${detail.schoolName}">武汉市新华小学</strong>
+                </p>
+                <p class="school-hint school-wechat-hint" th:if="${!detail.isGlobalFallback}">
+                    💡 微信内可截图后到扫一扫选择图片
+                </p>
+            </th:block>
+        </div>
+    </main>
+
+    <script th:inline="javascript">
+        document.body.classList.toggle('is-wechat', /MicroMessenger/i.test(navigator.userAgent));
+    </script>
+</body>
+</html>

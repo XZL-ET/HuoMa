@@ -1,0 +1,32 @@
+<!-- HTMX partial: 替换 #school-main -->
+<header class="school-topbar">
+    <div class="school-topbar-brand">火马 · 学校活码查询</div>
+</header>
+
+<main class="school-main" id="school-main" hx-target="#school-main" hx-swap="innerHTML">
+    <div class="school-breadcrumb">
+        <a href="/s" hx-get="/s" class="school-back-link">← 市州</a>
+        <span class="school-breadcrumb-divider">|</span>
+        <span class="school-breadcrumb-current" th:text="${city}">武汉</span>
+    </div>
+
+    <div class="school-card-list">
+        <a th:each="d : ${districts}"
+           th:href="@{/s/schools(city=${city},district=${d.districtName})}"
+           hx-get="/s/schools"
+           th:hx-vals='{"city": "${city}", "district": "${d.districtName}"}'
+           class="school-card">
+            <span class="school-card-body">
+                <span class="school-card-title" th:text="${d.districtName}">江汉区</span>
+            </span>
+            <span class="school-card-badge" th:text="${d.schoolCount} + ' 所学校'">8 所学校</span>
+        </a>
+    </div>
+
+    <div th:if="${#lists.isEmpty(districts)}" class="school-empty">
+        <p>该地区暂无学校数据</p>
+        <a href="/s/global-contact" hx-get="/s/global-contact" class="school-global-link">
+            联系全局负责人 →
+        </a>
+    </div>
+</main>

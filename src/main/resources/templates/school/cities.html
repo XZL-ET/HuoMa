@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>火马 · 学校活码查询</title>
+    <link rel="stylesheet" th:href="@{/css/bootstrap.min.css}" />
+    <link rel="stylesheet" th:href="@{/css/school-entry.css}" />
+    <script th:src="@{/js/htmx.min.js}"></script>
+</head>
+<body class="school-body">
+    <header class="school-topbar">
+        <div class="school-topbar-brand">火马 · 学校活码查询</div>
+    </header>
+
+    <main class="school-main" id="school-main" hx-target="#school-main" hx-swap="innerHTML">
+        <!-- Search -->
+        <div class="school-search">
+            <form th:action="@{/s/search}" hx-get="/s/search" hx-target="#school-main" hx-trigger="submit">
+                <div class="school-search-input">
+                    <i class="bi bi-search"></i>
+                    <input type="text" name="keyword" placeholder="搜索学校名称快速定位…"
+                           autocomplete="off" required minlength="1" />
+                </div>
+            </form>
+        </div>
+
+        <div class="school-divider"><span>或按地区选择</span></div>
+
+        <!-- City cards -->
+        <div class="school-card-list">
+            <a th:each="city : ${cities}"
+               th:href="@{/s/districts(city=${city.cityName})}"
+               hx-get="/s/districts"
+               hx-vals='{"city": "[[${city.cityName}]]"}'
+               class="school-card">
+                <span class="school-card-icon">📍</span>
+                <div class="school-card-body">
+                    <span class="school-card-title" th:text="${city.cityName}">武汉</span>
+                    <span class="school-card-sub" th:text="${city.districtCount} + ' 个区县'">12 个区县</span>
+                </div>
+                <span class="school-card-arrow">›</span>
+            </a>
+        </div>
+
+        <!-- "Or" divider -->
+        <div class="school-divider"><span>或</span></div>
+
+        <!-- Global contact card -->
+        <div class="school-global-card">
+            <a th:href="@{/s/global-contact}" hx-get="/s/global-contact" class="school-global-link">
+                <div class="school-global-avatar">🎓</div>
+                <div class="school-global-info">
+                    <span class="school-global-hint">找不到学校？直接联系</span>
+                    <span class="school-global-name" th:text="${globalContactName}">火马客服</span>
+                    <span class="school-global-action">点击查看联系方式 →</span>
+                </div>
+            </a>
+        </div>
+    </main>
+
+    <script th:inline="javascript">
+        document.body.classList.toggle('is-wechat', /MicroMessenger/i.test(navigator.userAgent));
+    </script>
+</body>
+</html>
