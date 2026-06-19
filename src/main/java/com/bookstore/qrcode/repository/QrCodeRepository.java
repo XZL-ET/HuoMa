@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -137,4 +138,11 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      */
     @Query("SELECT DISTINCT q.schoolName FROM QrCode q WHERE q.schoolName IS NOT NULL ORDER BY q.schoolName")
     List<String> findDistinctSchoolName();
+
+    /** 查询活码的第一个 active 服务老师姓名 */
+    @Query(value = "SELECT a.name FROM qr_agent qa " +
+           "JOIN agent a ON a.userid = qa.agent_userid " +
+           "WHERE qa.qr_code_id = :qrCodeId AND qa.role IN ('service', 'dual') " +
+           "AND qa.status = 'active' LIMIT 1", nativeQuery = true)
+    String findFirstServiceAgentName(@Param("qrCodeId") Long qrCodeId);
 }
