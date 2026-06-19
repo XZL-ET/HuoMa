@@ -18,6 +18,9 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -25,6 +28,7 @@ import java.net.URI;
 import java.net.URL;
 import java.util.List;
 import java.util.UUID;
+import javax.imageio.ImageIO;
 
 /**
  * 学校自助查询入口控制器。
@@ -160,7 +164,7 @@ public class SchoolEntryController {
             log.warn("QrCode not found for schoolId={}", schoolId);
         }
 
-        // 代理下载企微活码图片
+        // 代理下载企微活码图片，并在底部添加学校名称
         try {
             URL url = URI.create(detail.getQrUrl()).toURL();
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -168,16 +172,48 @@ public class SchoolEntryController {
             conn.setConnectTimeout(5000);
             conn.setReadTimeout(5000);
             try (InputStream is = conn.getInputStream()) {
-                byte[] bytes = is.readAllBytes();
+                BufferedImage qrImage = ImageIO.read(is);
+                if (qrImage == null) {
+                    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+                }
+                // 合成图片：二维码 + 底部学校名
+                int footerHeight = 64;
+                int width = Math.max(qrImage.getWidth(), 300);
+                int height = qrImage.getHeight() + footerHeight;
+                BufferedImage composite = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g = composite.createGraphics();
+                // 白色背景
+                g.setColor(Color.WHITE);
+                g.fillRect(0, 0, width, height);
+                // 二维码居中绘制
+                int qrX = (width - qrImage.getWidth()) / 2;
+                g.drawImage(qrImage, qrX, 0, qrImage.getWidth(), qrImage.getHeight(), null);
+                // 分隔线
+                g.setColor(new Color(220, 220, 220));
+                g.drawLine(20, qrImage.getHeight() + 8, width - 20, qrImage.getHeight() + 8);
+                // 学校名称
+                g.setColor(new Color(51, 51, 51));
+                g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 16));
+                FontMetrics fm = g.getFontMetrics();
+                String schoolLabel = detail.getSchoolName();
+                int textWidth = fm.stringWidth(schoolLabel);
+                g.drawString(schoolLabel, (width - textWidth) / 2, qrImage.getHeight() + 36);
+                g.dispose();
+                // 输出 PNG
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ImageIO.write(composite, "PNG", baos);
+                byte[] bytes = baos.toByteArray();
                 ByteArrayResource resource = new ByteArrayResource(bytes);
                 String filename = detail.getSchoolName() + "_活码.png";
+                String encodedFilename = java.net.URLEncoder.encode(filename, "UTF-8").replace("+", "%20");
                 return ResponseEntity.ok()
                         .contentType(MediaType.IMAGE_PNG)
                         .header(HttpHeaders.CONTENT_DISPOSITION,
-                                "attachment; filename*=UTF-8''" + java.net.URLEncoder.encode(filename, "UTF-8"))
+                                "attachment; filename=\"" + encodedFilename + "\"; filename*=UTF-8''" + encodedFilename)
                         .body(resource);
             }
         } catch (IOException e) {
+            log.error("Download image failed for school={}", schoolId, e);
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
     }
