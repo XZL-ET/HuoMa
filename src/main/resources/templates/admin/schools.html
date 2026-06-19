@@ -52,6 +52,11 @@
                     </a>
                 </div>
                 <div class="col-auto align-self-end ms-auto">
+                    <form th:action="@{/admin/schools/import-from-qrcode}" method="post" class="d-inline me-1">
+                        <button type="submit" class="btn btn-sm btn-outline-success">
+                            <i class="bi bi-box-arrow-in-down"></i> 从活码导入学校
+                        </button>
+                    </form>
                     <form th:action="@{/admin/schools/sync-status}" method="post" class="d-inline">
                         <button type="submit" class="btn btn-sm btn-outline-info">
                             <i class="bi bi-arrow-repeat"></i> 同步活码状态

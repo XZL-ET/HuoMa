@@ -40,7 +40,7 @@ app:
   admin:
     default-username: admin
     default-password: ${ADMIN_DEFAULT_PASSWORD:admin123}
-  school-entry-url: http://localhost:8080/s
+  school-entry-url: http://<YOUR_SERVER_IP>:8080/s
 
 ---
 spring:

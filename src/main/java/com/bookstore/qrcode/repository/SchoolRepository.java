@@ -66,4 +66,17 @@ public interface SchoolRepository extends JpaRepository<School, Long> {
            "(CASE WHEN s.school_id IN (SELECT q.school_id FROM qr_code q WHERE q.school_id IS NOT NULL) " +
            "THEN 1 ELSE 0 END) WHERE s.deleted = 0", nativeQuery = true)
     int syncHasQrcodeFromQrCode();
+
+    /**
+     * 从 qr_code 表导入学校数据到 school 表。
+     * <p>将 qr_code 中含有 school_id/name/city/district 的活码
+     * 作为新学校 INSERT IGNORE 到 school 表，返回新增行数。</p>
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "INSERT IGNORE INTO school (school_id, school_name, region_city, region_district, has_qrcode) " +
+           "SELECT DISTINCT q.school_id, q.school_name, q.region_city, q.region_district, 1 " +
+           "FROM qr_code q WHERE q.school_id IS NOT NULL AND q.school_name IS NOT NULL " +
+           "AND q.region_city IS NOT NULL AND q.region_district IS NOT NULL", nativeQuery = true)
+    int importSchoolsFromQrCode();
 }

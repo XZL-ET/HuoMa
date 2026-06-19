@@ -91,6 +91,20 @@ public class AdminSchoolController {
         return "redirect:/admin/schools";
     }
 
+    /** 从 qr_code 表导入学校 */
+    @PostMapping("/import-from-qrcode")
+    public String importFromQrCode(RedirectAttributes ra) {
+        int count = schoolRepository.importSchoolsFromQrCode();
+        log.info("Imported {} schools from qr_code", count);
+        ra.addFlashAttribute("message", "从活码导入了 " + count + " 所学校");
+        // 导入后同步 has_qrcode 状态
+        int synced = schoolRepository.syncHasQrcodeFromQrCode();
+        if (synced > 0) {
+            ra.addFlashAttribute("message", "从活码导入了 " + count + " 所学校，同步了 " + synced + " 所活码状态");
+        }
+        return "redirect:/admin/schools";
+    }
+
     /** CSV 批量导入 */
     @PostMapping("/import")
     public String importCsv(@RequestParam("file") MultipartFile file,

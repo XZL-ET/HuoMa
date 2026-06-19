@@ -48,6 +48,10 @@ public class SchoolEntryController {
         ensureSession(session);
         model.addAttribute("cities", schoolService.getCities());
         model.addAttribute("globalContactName", schoolService.getGlobalContactName());
+        // HTMX 请求返回片段，避免整页嵌套
+        if ("true".equals(request.getHeader("HX-Request"))) {
+            return "school/cities-fragment";
+        }
         return "school/cities";
     }
 
