@@ -33,6 +33,14 @@ public class SecurityConfig {
                         .requestMatchers("/users/**").hasRole("ADMIN")
                         // 区县负责人配置：仅 admin 可访问
                         .requestMatchers("/admin/district-managers/**").hasRole("ADMIN")
+                        // 学校自助查询：公开页面（由 SchoolRateLimitFilter 提供频控）
+                        .requestMatchers("/s/**").permitAll()
+                        // 学校管理后台：仅 admin 可访问
+                        .requestMatchers("/admin/schools/**").hasRole("ADMIN")
+                        // 系统配置管理：仅 admin 可访问
+                        .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
+                        // 学校入口二维码管理：仅 admin 可访问
+                        .requestMatchers("/admin/school-entry/**").hasRole("ADMIN")
                         // 登录页面及静态资源
                         .requestMatchers("/login", "/css/**", "/js/**").permitAll()
                         // 其余所有请求需要登录
@@ -50,7 +58,9 @@ public class SecurityConfig {
                         .invalidateHttpSession(true)
                         .deleteCookies("JSESSIONID")
                         .permitAll()
-                );
+                )
+                .addFilterBefore(new SchoolRateLimitFilter(),
+                        org.springframework.security.web.access.intercept.AuthorizationFilter.class);
         return http.build();
     }
 
