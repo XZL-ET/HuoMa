@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.dto.SchoolCityDTO;
 import com.bookstore.qrcode.dto.SchoolDetailDTO;
+import com.bookstore.qrcode.dto.SchoolDistrictDTO;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.School;
 import com.bookstore.qrcode.repository.QrCodeRepository;
@@ -8,6 +10,7 @@ import com.bookstore.qrcode.service.SchoolAccessLogService;
 import com.bookstore.qrcode.service.SchoolService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
@@ -30,6 +33,7 @@ import java.util.UUID;
  * 所有接口返回 HTMX 局部 HTML 片段，实现阶梯式卡片选择交互。
  * </p>
  */
+@Slf4j
 @Controller
 @RequestMapping("/s")
 @RequiredArgsConstructor
@@ -46,7 +50,9 @@ public class SchoolEntryController {
     @GetMapping
     public String index(Model model, HttpServletRequest request, HttpSession session) {
         ensureSession(session);
-        model.addAttribute("cities", schoolService.getCities());
+        List<SchoolCityDTO> cities = schoolService.getCities();
+        log.info("GET /s — cities: {} entries, htmx: {}", cities.size(), request.getHeader("HX-Request"));
+        model.addAttribute("cities", cities);
         model.addAttribute("globalContactName", schoolService.getGlobalContactName());
         // HTMX 请求返回片段，避免整页嵌套
         if ("true".equals(request.getHeader("HX-Request"))) {
@@ -61,8 +67,10 @@ public class SchoolEntryController {
 
     @GetMapping("/districts")
     public String districts(@RequestParam String city, Model model) {
+        List<SchoolDistrictDTO> districtList = schoolService.getDistricts(city);
+        log.info("GET /s/districts?city={} — {} districts", city, districtList.size());
         model.addAttribute("city", city);
-        model.addAttribute("districts", schoolService.getDistricts(city));
+        model.addAttribute("districts", districtList);
         return "school/districts";
     }
 
@@ -75,6 +83,7 @@ public class SchoolEntryController {
                           @RequestParam String district,
                           Model model) {
         List<School> schoolList = schoolService.getSchools(city, district);
+        log.info("GET /s/schools?city={}&district={} — {} schools", city, district, schoolList.size());
         model.addAttribute("city", city);
         model.addAttribute("district", district);
         model.addAttribute("schools", schoolList);
