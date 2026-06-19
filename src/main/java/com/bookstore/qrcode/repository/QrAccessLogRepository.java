@@ -34,4 +34,14 @@ public interface QrAccessLogRepository extends JpaRepository<QrAccessLog, Long> 
 
     /** 统计学校自助查询入口的总访问量（以首页view计） */
     long countByChannel(QrAccessLog.Channel channel);
+
+    /** 统计每所学校的查看/下载次数（school.id → [views, downloads]） */
+    @Query(value = "SELECT s.id, " +
+           "COALESCE(SUM(CASE WHEN al.action = 'view' THEN 1 ELSE 0 END), 0), " +
+           "COALESCE(SUM(CASE WHEN al.action = 'download' THEN 1 ELSE 0 END), 0) " +
+           "FROM school s " +
+           "LEFT JOIN qr_code q ON q.school_id = s.school_id " +
+           "LEFT JOIN qr_access_log al ON al.qr_code_id = q.id AND al.channel = 'school' " +
+           "WHERE s.deleted = 0 GROUP BY s.id", nativeQuery = true)
+    List<Object[]> findSchoolAccessStats();
 }

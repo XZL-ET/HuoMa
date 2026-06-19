@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.School;
+import com.bookstore.qrcode.repository.QrAccessLogRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.SchoolRepository;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,9 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 学校管理后台控制器。
@@ -34,6 +38,7 @@ public class AdminSchoolController {
 
     private final SchoolRepository schoolRepository;
     private final QrCodeRepository qrCodeRepository;
+    private final QrAccessLogRepository qrAccessLogRepository;
 
     /** 列表页（按市州/区县筛选分页） */
     @GetMapping
@@ -47,7 +52,15 @@ public class AdminSchoolController {
 
         Page<School> schools = schoolRepository.findByFilters(cityParam, districtParam,
                 PageRequest.of(page, 20));
+        // 加载访问统计
+        Map<Long, long[]> statsMap = new HashMap<>();
+        List<Object[]> stats = qrAccessLogRepository.findSchoolAccessStats();
+        for (Object[] row : stats) {
+            statsMap.put(((Number) row[0]).longValue(),
+                         new long[]{((Number) row[1]).longValue(), ((Number) row[2]).longValue()});
+        }
         model.addAttribute("schools", schools);
+        model.addAttribute("statsMap", statsMap);
         model.addAttribute("city", cityParam);
         model.addAttribute("district", districtParam);
         model.addAttribute("cities", schoolRepository.findDistinctCities());

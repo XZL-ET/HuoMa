@@ -78,6 +78,8 @@
                         <th>市州</th>
                         <th>区县</th>
                         <th>有活码</th>
+                        <th>查看</th>
+                        <th>下载</th>
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -90,6 +92,12 @@
                         <td>
                             <span th:if="${s.hasQrcode}" class="badge bg-success">是</span>
                             <span th:unless="${s.hasQrcode}" class="badge bg-secondary">否</span>
+                        </td>
+                        <td th:with="stat=${statsMap.get(s.id)}">
+                            <span th:text="${stat != null ? stat[0] : 0}">0</span>
+                        </td>
+                        <td th:with="stat=${statsMap.get(s.id)}">
+                            <span th:text="${stat != null ? stat[1] : 0}">0</span>
                         </td>
                         <td>
                             <button class="btn btn-sm btn-outline-secondary me-1"
@@ -107,7 +115,7 @@
                         </td>
                     </tr>
                     <tr th:if="${schools.content.isEmpty()}">
-                        <td colspan="6" class="text-center text-muted py-4">
+                        <td colspan="8" class="text-center text-muted py-4">
                             <i class="bi bi-inbox"></i> 暂无学校数据
                         </td>
                     </tr>
