@@ -7,6 +7,7 @@ import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -23,10 +24,13 @@ public class AdminSchoolEntryController {
 
     private final QrAccessLogRepository logRepository;
 
+    @Value("${app.school-entry-url:http://localhost:8080/s}")
+    private String schoolEntryUrl;
+
     @GetMapping
     public String index(Model model) {
         long viewCount = logRepository.countByChannel(QrAccessLog.Channel.school);
-        model.addAttribute("entryUrl", "/s");
+        model.addAttribute("entryUrl", schoolEntryUrl);
         model.addAttribute("viewCount", viewCount);
         return "admin/school-entry";
     }
@@ -35,9 +39,8 @@ public class AdminSchoolEntryController {
     @GetMapping(value = "/qr-image", produces = MediaType.IMAGE_PNG_VALUE)
     @ResponseBody
     public byte[] qrImage() throws Exception {
-        String baseUrl = "/s"; // In production, prepend the actual domain
         QRCodeWriter writer = new QRCodeWriter();
-        BitMatrix matrix = writer.encode(baseUrl, BarcodeFormat.QR_CODE, 300, 300);
+        BitMatrix matrix = writer.encode(schoolEntryUrl, BarcodeFormat.QR_CODE, 300, 300);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         MatrixToImageWriter.writeToStream(matrix, "PNG", out);
         return out.toByteArray();
