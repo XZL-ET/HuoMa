@@ -41,7 +41,9 @@
                     <a class="nav-link" href="/dashboard"><i class="bi bi-speedometer2"></i> 数据看板</a>
                     <a class="nav-link" href="/alerts"><i class="bi bi-exclamation-triangle"></i> 异常告警</a>
                     <a class="nav-link" href="/admin/download-stats"><i class="bi bi-download"></i> 下载统计</a>
+                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/schools"><i class="bi bi-building"></i> 学校管理</a>
                     <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/district-managers"><i class="bi bi-person-gear"></i> 区县负责人</a>
+                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/school-entry"><i class="bi bi-qr-code"></i> 入口二维码</a>
                     <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/users"><i class="bi bi-gear"></i> 系统设置</a>
                 </div>
                 <!-- 右侧用户区域：显示当前登录用户和退出按钮 -->
