@@ -144,8 +144,10 @@ public class SchoolEntryController {
     @GetMapping("/school/{schoolId}/download")
     public ResponseEntity<?> downloadQrCode(@PathVariable String schoolId,
                                              HttpServletRequest request) {
+        log.info("GET /s/school/{}/download — IP: {}", schoolId, request.getRemoteAddr());
         SchoolDetailDTO detail = schoolService.getSchoolDetail(schoolId);
         if (!detail.isQrAvailable() || detail.getQrUrl() == null) {
+            log.warn("Download refused: school={}, qrAvailable={}", schoolId, detail.isQrAvailable());
             return ResponseEntity.notFound().build();
         }
 
@@ -153,6 +155,9 @@ public class SchoolEntryController {
         QrCode qr = qrCodeRepository.findBySchoolId(schoolId).orElse(null);
         if (qr != null) {
             logService.logDownload(qr.getId(), request);
+            log.info("Download logged: qrCodeId={}, schoolId={}", qr.getId(), schoolId);
+        } else {
+            log.warn("QrCode not found for schoolId={}", schoolId);
         }
 
         // 代理下载企微活码图片
