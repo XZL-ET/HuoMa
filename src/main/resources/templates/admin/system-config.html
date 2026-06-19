@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='系统配置', content=~{::#content})}">
+<body>
+<div id="content">
+    <h4 class="mb-3"><i class="bi bi-gear"></i> 系统配置</h4>
+
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="bi bi-check-circle"></i> <span th:text="${message}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:30%">配置键</th>
+                        <th>配置值</th>
+                        <th style="width:18%">更新时间</th>
+                        <th style="width:8%">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="c : ${configs}">
+                        <td><code th:text="${c.configKey}"></code></td>
+                        <td>
+                            <form th:action="@{/admin/system-config/save}" method="post" class="d-flex gap-2">
+                                <input type="hidden" name="configKey" th:value="${c.configKey}">
+                                <input type="text" name="configValue" th:value="${c.configValue}"
+                                       class="form-control form-control-sm" style="max-width:400px">
+                                <button type="submit" class="btn btn-sm btn-primary">
+                                    <i class="bi bi-check-lg"></i> 保存
+                                </button>
+                            </form>
+                        </td>
+                        <td th:text="${c.updatedAt}" class="text-muted small"></td>
+                        <td></td>
+                    </tr>
+                    <tr th:if="${configs.isEmpty()}">
+                        <td colspan="4" class="text-center text-muted py-4">
+                            <i class="bi bi-inbox"></i> 暂无配置项
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>
