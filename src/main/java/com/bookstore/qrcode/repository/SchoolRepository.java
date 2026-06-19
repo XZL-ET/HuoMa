@@ -9,6 +9,9 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.util.Optional;
 
 @Repository
@@ -51,4 +54,16 @@ public interface SchoolRepository extends JpaRepository<School, Long> {
 
     /** 统计某区县的学校总数（含软删除） */
     long countByRegionCityAndRegionDistrict(String regionCity, String regionDistrict);
+
+    /**
+     * 从 qr_code 表同步 has_qrcode 状态到 school 表。
+     * <p>设置 has_qrcode=1 当 school_id 存在于 qr_code 表中，
+     * 否则设为 0。返回被更新的行数。</p>
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE school s SET s.has_qrcode = " +
+           "(CASE WHEN s.school_id IN (SELECT q.school_id FROM qr_code q WHERE q.school_id IS NOT NULL) " +
+           "THEN 1 ELSE 0 END) WHERE s.deleted = 0", nativeQuery = true)
+    int syncHasQrcodeFromQrCode();
 }

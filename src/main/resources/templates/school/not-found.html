@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>页面不存在 - 火马</title>
+    <link rel="stylesheet" th:href="@{/css/school-entry.css}">
+</head>
+<body class="school-body">
+    <header class="school-topbar">
+        <div class="school-topbar-brand">火马 · 学校活码查询</div>
+    </header>
+    <main class="school-main">
+        <div class="school-empty" style="padding-top:80px">
+            <div style="font-size:64px;margin-bottom:16px">🔍</div>
+            <p style="font-size:16px;font-weight:600;color:#1E293B;margin-bottom:8px">页面不存在</p>
+            <p class="school-global-hint" th:text="${message} ?: '未找到对应学校'">未找到对应学校</p>
+            <a href="/s" style="display:inline-block;margin-top:20px;color:#2563EB;text-decoration:none;font-weight:500">
+                ← 返回首页
+            </a>
+        </div>
+    </main>
+</body>
+</html>

@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.School;
+import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.SchoolRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 public class AdminSchoolController {
 
     private final SchoolRepository schoolRepository;
+    private final QrCodeRepository qrCodeRepository;
 
     /** 列表页（按市州/区县筛选分页） */
     @GetMapping
@@ -80,10 +82,12 @@ public class AdminSchoolController {
         return "redirect:/admin/schools";
     }
 
-    /** 同步 has_qrcode 状态 */
+    /** 同步 has_qrcode 状态（从 qr_code 表同步到 school 表） */
     @PostMapping("/sync-status")
     public String syncStatus(RedirectAttributes ra) {
-        ra.addFlashAttribute("message", "状态同步已触发");
+        int updated = schoolRepository.syncHasQrcodeFromQrCode();
+        log.info("has_qrcode status synced: {} schools updated", updated);
+        ra.addFlashAttribute("message", "已同步：更新了 " + updated + " 所学校的活码状态");
         return "redirect:/admin/schools";
     }
 

@@ -2,10 +2,16 @@ package com.bookstore.qrcode.config;
 
 import com.bookstore.qrcode.service.WecomOAuthService;
 import jakarta.servlet.http.HttpSession;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.ControllerAdvice;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.servlet.ModelAndView;
+
+import java.util.NoSuchElementException;
 
 /**
  * 全局控制器增强。
@@ -38,5 +44,17 @@ public class GlobalControllerAdvice {
             if (name != null) return name.toString();
         }
         return null;
+    }
+
+    /**
+     * 处理学校自助查询中不存在的学校 ID 请求。
+     * <p>返回友好的 404 页面而非 500 错误。</p>
+     */
+    @ExceptionHandler(NoSuchElementException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ModelAndView handleNotFound(NoSuchElementException ex) {
+        ModelAndView mav = new ModelAndView("school/not-found");
+        mav.addObject("message", ex.getMessage());
+        return mav;
     }
 }
