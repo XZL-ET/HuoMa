@@ -1,6 +1,6 @@
 <div>
     <div class="school-breadcrumb">
-        <a th:href="@{/s/districts(city=${city})}" hx-get="/s/districts" th:hx-vals='{"city": "${city}"}'
+        <a th:href="@{/s/districts(city=${city})}" th:hx-get="@{/s/districts(city=${city})}"
            class="school-back-link">← 区县</a>
         <span class="school-breadcrumb-divider">|</span>
         <span class="school-breadcrumb-current" th:text="${city} + ' · ' + ${district}">武汉 · 江汉区</span>

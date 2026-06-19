@@ -17,8 +17,7 @@
     <div class="school-card-list">
         <a th:each="city : ${cities}"
            th:href="@{/s/districts(city=${city.cityName})}"
-           hx-get="/s/districts"
-           th:hx-vals='{"city": "${city.cityName}"}'
+           th:hx-get="@{/s/districts(city=${city.cityName})}"
            class="school-card">
             <span class="school-card-icon">📍</span>
             <div class="school-card-body">

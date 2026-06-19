@@ -9,8 +9,7 @@
     <div class="school-card-list">
         <a th:each="d : ${districts}"
            th:href="@{/s/schools(city=${city},district=${d.districtName})}"
-           hx-get="/s/schools"
-           th:hx-vals='{"city": "${city}", "district": "${d.districtName}"}'
+           th:hx-get="@{/s/schools(city=${city},district=${d.districtName})}"
            class="school-card">
             <span class="school-card-body">
                 <span class="school-card-title" th:text="${d.districtName}">江汉区</span>
