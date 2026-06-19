@@ -1,8 +1,4 @@
-<header class="school-topbar">
-    <div class="school-topbar-brand">火马 · 学校活码查询</div>
-</header>
-
-<main class="school-main" id="school-main" hx-target="#school-main" hx-swap="innerHTML">
+<div>
     <div class="school-breadcrumb">
         <a th:href="@{/s/districts(city=${city})}" hx-get="/s/districts" th:hx-vals='{"city": "${city}"}'
            class="school-back-link">← 区县</a>
@@ -13,8 +9,6 @@
     <div class="school-card-list">
         <a th:each="s : ${schools}"
            th:href="@{/s/school/{id}(id=${s.schoolId})}"
-           hx-get="/s/school/{id}"
-           th:hx-vals='{"id": "${s.schoolId}"}'
            class="school-card school-card-sm">
             <span class="school-card-body">
                 <span class="school-card-title" th:text="${s.schoolName}">武汉第一小学</span>
@@ -30,4 +24,4 @@
             联系全局负责人 →
         </a>
     </div>
-</main>
+</div>
