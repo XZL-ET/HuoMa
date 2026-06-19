@@ -42,6 +42,14 @@ public class DistrictManager {
     @Column(name = "manager_name", nullable = false, length = 100)
     private String managerName;
 
+    /** 负责人企微联系我 config_id（自动创建，用于学校端兜底展示） */
+    @Column(name = "qr_config_id", length = 64)
+    private String qrConfigId;
+
+    /** 负责人活码图片 URL */
+    @Column(name = "qr_url", length = 512)
+    private String qrUrl;
+
     /** 创建时间 */
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
