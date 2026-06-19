@@ -60,6 +60,9 @@
 .school-search {
     background: #fff;
     padding: 16px;
+    position: sticky;
+    top: 46px;
+    z-index: 9;
 }
 .school-search form { margin: 0; }
 .school-search-input {
