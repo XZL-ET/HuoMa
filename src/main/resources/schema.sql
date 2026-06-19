@@ -347,3 +347,65 @@ CREATE TABLE IF NOT EXISTS qr_rotate_log (
     INDEX idx_rotate_to_userid (to_userid),
     CONSTRAINT fk_rotate_qrcode FOREIGN KEY (qr_code_id) REFERENCES qr_code(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码轮换日志';
+
+-- ============================================
+-- 新增表：学校自助查询
+-- ============================================
+
+-- 学校主数据表（学校活码自助查询）
+CREATE TABLE IF NOT EXISTS school (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    school_id       VARCHAR(64)  NOT NULL UNIQUE COMMENT '学校唯一标识',
+    school_name     VARCHAR(128) NOT NULL COMMENT '学校名称',
+    region_city     VARCHAR(64)  NOT NULL COMMENT '市州',
+    region_district VARCHAR(64)  NOT NULL COMMENT '县区',
+    has_qrcode      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否已有活码（冗余字段）',
+    deleted         TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '软删除标记',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_school_city_district (region_city, region_district),
+    INDEX idx_school_school_id (school_id),
+    INDEX idx_school_deleted (deleted),
+    INDEX idx_school_name (school_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学校主数据表';
+
+-- 系统配置表（全局联系人等键值配置）
+CREATE TABLE IF NOT EXISTS system_config (
+    config_key   VARCHAR(64) PRIMARY KEY COMMENT '配置键',
+    config_value TEXT         COMMENT '配置值',
+    updated_at   DATETIME     DEFAULT NULL COMMENT '更新时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置表';
+
+-- 活码访问日志表（统一员工下载 + 学校自助查询审计）
+CREATE TABLE IF NOT EXISTS qr_access_log (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    qr_code_id      BIGINT        COMMENT '活码ID（关联 qr_code.id）',
+    action          ENUM('view','download') NOT NULL DEFAULT 'view' COMMENT '行为类型',
+    channel         ENUM('employee','school') NOT NULL DEFAULT 'school' COMMENT '来源渠道',
+    user_identity   VARCHAR(128)  COMMENT '身份标识（员工=企微userid，学校=IP摘要）',
+    accessed_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+    ip_address      VARCHAR(45)   COMMENT '客户端IP',
+    user_agent      VARCHAR(512)  COMMENT '浏览器User-Agent',
+    INDEX idx_qal_qr_code (qr_code_id),
+    INDEX idx_qal_channel (channel),
+    INDEX idx_qal_accessed (accessed_at),
+    INDEX idx_qal_action (action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码访问日志表';
+
+-- district_manager 扩展：负责人活码
+ALTER TABLE district_manager
+    ADD COLUMN IF NOT EXISTS qr_config_id VARCHAR(64)  DEFAULT NULL COMMENT '企微联系我 config_id',
+    ADD COLUMN IF NOT EXISTS qr_url       VARCHAR(512) DEFAULT NULL COMMENT '负责人活码图片URL';
+
+-- 初始全局联系人配置
+INSERT IGNORE INTO system_config (config_key, config_value) VALUES
+('global_contact_name', '火马客服'),
+('global_contact_qr_config_id', ''),
+('global_contact_qr_url', '');
+
+-- 从已有活码中提取学校数据，使用 school_id 避免重复
+INSERT IGNORE INTO school (school_id, school_name, region_city, region_district, has_qrcode)
+SELECT DISTINCT school_id, school_name, region_city, region_district, 1
+FROM qr_code
+WHERE school_id IS NOT NULL AND school_name IS NOT NULL
+  AND region_city IS NOT NULL AND region_district IS NOT NULL;
