@@ -193,7 +193,7 @@ public class SchoolEntryController {
                 g.drawLine(20, qrImage.getHeight() + 8, width - 20, qrImage.getHeight() + 8);
                 // 学校名称
                 g.setColor(new Color(51, 51, 51));
-                g.setFont(new Font("Microsoft YaHei", Font.PLAIN, 16));
+                g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
                 FontMetrics fm = g.getFontMetrics();
                 String schoolLabel = detail.getSchoolName();
                 int textWidth = fm.stringWidth(schoolLabel);
