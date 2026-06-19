@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.config;
 
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -7,12 +8,13 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 学校自助查询 IP 频控过滤器。
  * <p>
  * 仅拦截 /s/** 路径，对同一 IP 做滑动窗口限流。
+ * 使用 Caffeine 缓存自动淘汰过期 IP 条目，防止内存泄漏。
  * 后续可升级为 Redis 滑动窗口 + 图形验证码。
  * </p>
  */
@@ -21,7 +23,11 @@ public class SchoolRateLimitFilter implements Filter {
 
     private static final int MAX_REQUESTS_PER_MINUTE = 30;
     private static final long WINDOW_MS = 60_000;
-    private final Map<String, SlidingWindow> windows = new ConcurrentHashMap<>();
+
+    private final Map<String, SlidingWindow> windows = Caffeine.newBuilder()
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .<String, SlidingWindow>build()
+            .asMap();
 
     @Override
     public void doFilter(ServletRequest req, ServletResponse resp, FilterChain chain)

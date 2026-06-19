@@ -18,7 +18,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -81,7 +80,6 @@ public class SchoolService {
     // 学校详情（核心：LEFT JOIN qr_code + 降级链）
     // ========================================================================
 
-    @Transactional
     public SchoolDetailDTO getSchoolDetail(String schoolId) {
         School school = schoolRepository.findBySchoolIdAndDeletedFalse(schoolId)
                 .orElseThrow(() -> new NoSuchElementException("学校不存在: " + schoolId));
