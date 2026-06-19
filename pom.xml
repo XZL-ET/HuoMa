@@ -38,6 +38,16 @@
             <artifactId>spring-boot-starter-undertow</artifactId>
         </dependency>
 
+        <!-- 缓存：Caffeine 本地缓存（学校自助查询） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- 数据库：JPA + MySQL -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
