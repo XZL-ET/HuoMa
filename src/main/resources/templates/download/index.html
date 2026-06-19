@@ -5,8 +5,8 @@
 <div id="content">
     <!-- 搜索栏 -->
     <div class="search-section text-center mb-4">
-        <form th:action="@{/download}" method="get" class="d-flex justify-content-center gap-2 flex-wrap">
-            <div class="btn-group" role="group">
+        <form th:action="@{/download}" method="get" class="d-flex justify-content-center gap-2 flex-wrap flex-md-nowrap">
+            <div class="btn-group w-100 w-md-auto" role="group">
                 <a th:href="@{/download(mode='mine',keyword=${keyword})}"
                    class="btn" th:classappend="${mode == 'mine' ? 'btn-primary' : 'btn-outline-primary'}">
                     <i class="bi bi-person-check"></i> 我的活码
@@ -19,7 +19,7 @@
             <input type="hidden" name="mode" th:value="${mode}">
             <input type="search" name="keyword" class="form-control" style="max-width: 400px;"
                    th:value="${keyword}" placeholder="🔍 搜索学校名称、城市、区县…">
-            <button type="submit" class="btn btn-primary">
+            <button type="submit" class="btn btn-primary w-100 w-md-auto">
                 <i class="bi bi-search"></i> 搜索
             </button>
         </form>

@@ -1,0 +1,73 @@
+<h2>结果页优化 — 有活码时加入下载按钮</h2>
+<p class="subtitle">学校人员扫到活码后，一键保存到手机相册</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">有活码 — 带下载按钮</div>
+    <div class="mockup-body">
+      <div style="max-width:375px;background:#F8FAFC">
+        <div style="background:#2563EB;color:#fff;padding:14px 16px;font-size:15px;font-weight:600;text-align:center">火马 · 学校活码查询</div>
+        <div style="background:#fff;padding:12px 16px;font-size:14px;color:#2563EB">← 返回学校列表</div>
+        <div style="padding:24px 16px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:#1E293B;margin-bottom:4px">武汉市第一小学</div>
+          <div style="font-size:13px;color:#16A34A;background:#DCFCE7;display:inline-block;padding:4px 12px;border-radius:20px;margin-bottom:20px">活码已就绪</div>
+          <!-- QR image -->
+          <div style="width:220px;height:220px;background:#fff;border:2px solid #E2E8F0;border-radius:16px;margin:0 auto 20px;display:flex;align-items:center;justify-content:center;color:#94A3B8;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.06)">[ 学校活码 ]</div>
+          <div style="font-size:14px;color:#64748B;margin-bottom:4px">联系人：张老师</div>
+          <div style="font-size:13px;color:#94A3B8;margin-bottom:20px">微信扫码即可添加</div>
+          <!-- Download button -->
+          <div style="background:#2563EB;color:#fff;border-radius:12px;padding:14px 24px;display:inline-flex;align-items:center;gap:8px;font-size:16px;font-weight:600;box-shadow:0 4px 14px rgba(37,99,235,0.35)">
+            <span>⬇</span> 保存活码到手机
+          </div>
+          <div style="font-size:12px;color:#94A3B8;margin-top:10px">长按图片也可保存</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">无活码 — 负责人兜底（不变）</div>
+    <div class="mockup-body">
+      <div style="max-width:375px;background:#F8FAFC">
+        <div style="background:#2563EB;color:#fff;padding:14px 16px;font-size:15px;font-weight:600;text-align:center">火马 · 学校活码查询</div>
+        <div style="background:#fff;padding:12px 16px;font-size:14px;color:#2563EB">← 返回学校列表</div>
+        <div style="padding:24px 16px;text-align:center">
+          <div style="font-size:18px;font-weight:700;color:#1E293B;margin-bottom:4px">武汉市新华小学</div>
+          <div style="font-size:13px;color:#EA580C;background:#FFF7ED;display:inline-block;padding:4px 12px;border-radius:20px;margin-bottom:24px">活码尚未创建</div>
+          <div style="background:#FEF2F2;border-radius:16px;padding:24px;margin-bottom:12px;border:2px dashed #FCA5A5">
+            <div style="width:160px;height:160px;background:#fff;border-radius:12px;margin:0 auto 16px;display:flex;align-items:center;justify-content:center;color:#EF4444;font-size:13px">[ 负责人<br>企微二维码 ]</div>
+            <div style="font-size:14px;font-weight:600;color:#1E293B">李老师</div>
+            <div style="font-size:12px;color:#64748B">江汉区负责人</div>
+          </div>
+          <div style="font-size:13px;color:#64748B">扫码联系负责人，为您创建学校活码</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:12px;padding:16px">
+  <h3 style="font-size:15px;color:#EA580C;margin-bottom:8px">下载按钮设计要点</h3>
+  <ul style="font-size:13px;color:#92400E;margin:0;padding-left:18px">
+    <li><strong>主色实心按钮</strong> — 蓝色填充 + 投影，在页面上最醒目</li>
+    <li><strong>明确操作词</strong> — 「保存活码到手机」，不用「下载」这种技术词汇</li>
+    <li><strong>兜底提示</strong> — 下方小字"长按图片也可保存"，照顾不同习惯</li>
+    <li><strong>活码图片本身也支持长按保存</strong> — 双重保障</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>好的，下载按钮满意</h3>
+      <p>继续确认其他细节</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>按钮样式或文案要改</h3>
+      <p>告诉我具体要调整什么</p>
+    </div>
+  </div>
+</div>
