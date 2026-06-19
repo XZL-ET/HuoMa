@@ -89,7 +89,7 @@
                         <td>
                             <button class="btn btn-sm btn-outline-secondary me-1"
                                     data-bs-toggle="modal" data-bs-target="#editModal"
-                                    th:attr="data-id=${s.id},data-school-id=${s.schoolId},data-name=${s.schoolName},data-city=${s.regionCity},data-district=${s.regionDistrict}">
+                                    th:attr="data-id=${s.id},data-school-id=${s.schoolId},data-name=${s.schoolName},data-city=${s.regionCity},data-district=${s.regionDistrict},data-has-qrcode=${s.hasQrcode}">
                                 <i class="bi bi-pencil"></i>
                             </button>
                             <form th:action="@{/admin/schools/{id}/delete(id=${s.id})}"
@@ -180,6 +180,7 @@
                     </div>
                     <div class="modal-body">
                         <input type="hidden" name="id" id="editId">
+                        <input type="hidden" name="hasQrcode" id="editHasQrcode" value="false">
                         <div class="mb-3">
                             <label class="form-label">学校ID <span class="text-danger">*</span></label>
                             <input type="text" name="schoolId" id="editSchoolId" class="form-control" required>
@@ -246,6 +247,7 @@ if (editModal) {
         document.getElementById('editName').value = btn.getAttribute('data-name');
         document.getElementById('editCity').value = btn.getAttribute('data-city');
         document.getElementById('editDistrict').value = btn.getAttribute('data-district');
+        document.getElementById('editHasQrcode').value = btn.getAttribute('data-has-qrcode');
     });
 }
 </script>

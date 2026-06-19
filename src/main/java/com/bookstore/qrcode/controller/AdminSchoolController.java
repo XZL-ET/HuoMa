@@ -57,7 +57,12 @@ public class AdminSchoolController {
     public String save(@ModelAttribute School school, RedirectAttributes ra) {
         school.setDeleted(false);
         if (school.getHasQrcode() == null) {
-            school.setHasQrcode(false);
+            if (school.getId() != null) {
+                schoolRepository.findById(school.getId()).ifPresent(existing ->
+                        school.setHasQrcode(existing.getHasQrcode()));
+            } else {
+                school.setHasQrcode(false);
+            }
         }
         schoolRepository.save(school);
         ra.addFlashAttribute("message", "保存成功");
@@ -90,10 +95,16 @@ public class AdminSchoolController {
                 new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
             int count = 0;
             String line;
-            reader.readLine(); // skip header
+            String header = reader.readLine(); // skip header
+            if (header != null) {
+                String[] headerCols = header.split(",", -1);
+                if (headerCols.length < 4) {
+                    log.warn("CSV 表头列数不足: {} 列, 期望至少 4 列", headerCols.length);
+                }
+            }
             while ((line = reader.readLine()) != null) {
-                String[] cols = line.split(",", 5);
-                if (cols.length < 5) continue;
+                String[] cols = line.split(",", -1);
+                if (cols.length < 4) continue;
                 School school = School.builder()
                         .schoolId(cols[0].trim())
                         .schoolName(cols[1].trim())
