@@ -21,36 +21,40 @@ public class SchoolAccessLogService {
     private final QrAccessLogRepository logRepository;
 
     /** 记录学校端查看活码 */
-    @Async
     public void logView(Long qrCodeId, HttpServletRequest request) {
-        save(QrAccessLog.Action.view, qrCodeId, request);
+        String ip = request.getRemoteAddr();
+        String ua = request.getHeader("User-Agent");
+        saveAsync(QrAccessLog.Action.view, qrCodeId, ip, ua);
     }
 
     /** 记录学校端下载活码 */
-    @Async
     public void logDownload(Long qrCodeId, HttpServletRequest request) {
-        save(QrAccessLog.Action.download, qrCodeId, request);
+        String ip = request.getRemoteAddr();
+        String ua = request.getHeader("User-Agent");
+        saveAsync(QrAccessLog.Action.download, qrCodeId, ip, ua);
     }
 
     /** 记录全局联系人查看 */
-    @Async
     public void logGlobalContactView(HttpServletRequest request) {
-        save(QrAccessLog.Action.view, null, request);
+        String ip = request.getRemoteAddr();
+        String ua = request.getHeader("User-Agent");
+        saveAsync(QrAccessLog.Action.view, null, ip, ua);
     }
 
-    private void save(QrAccessLog.Action action, Long qrCodeId, HttpServletRequest request) {
+    @Async
+    void saveAsync(QrAccessLog.Action action, Long qrCodeId, String ip, String ua) {
         QrAccessLog log = QrAccessLog.builder()
                 .qrCodeId(qrCodeId)
                 .action(action)
                 .channel(QrAccessLog.Channel.school)
-                .userIdentity(request.getRemoteAddr())
-                .ipAddress(request.getRemoteAddr())
-                .userAgent(truncate(request.getHeader("User-Agent"), 512))
+                .userIdentity(ip)
+                .ipAddress(ip)
+                .userAgent(truncate(ua, 512))
                 .build();
         logRepository.save(log);
     }
 
-    private String truncate(String s, int maxLen) {
+    private static String truncate(String s, int maxLen) {
         if (s == null) return null;
         return s.length() <= maxLen ? s : s.substring(0, maxLen);
     }
