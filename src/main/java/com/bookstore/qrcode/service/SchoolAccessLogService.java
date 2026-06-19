@@ -4,8 +4,8 @@ import com.bookstore.qrcode.entity.QrAccessLog;
 import com.bookstore.qrcode.repository.QrAccessLogRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 学校自助查询访问日志服务。
@@ -21,7 +21,7 @@ public class SchoolAccessLogService {
     private final QrAccessLogRepository logRepository;
 
     /** 记录学校端查看活码 */
-    @Async
+    @Transactional
     public void logView(Long qrCodeId, HttpServletRequest request) {
         String ip = request.getRemoteAddr();
         String ua = request.getHeader("User-Agent");
@@ -37,7 +37,7 @@ public class SchoolAccessLogService {
     }
 
     /** 记录学校端下载活码 */
-    @Async
+    @Transactional
     public void logDownload(Long qrCodeId, HttpServletRequest request) {
         String ip = request.getRemoteAddr();
         String ua = request.getHeader("User-Agent");
@@ -53,7 +53,7 @@ public class SchoolAccessLogService {
     }
 
     /** 记录全局联系人查看 */
-    @Async
+    @Transactional
     public void logGlobalContactView(HttpServletRequest request) {
         String ip = request.getRemoteAddr();
         String ua = request.getHeader("User-Agent");
