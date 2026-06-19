@@ -393,9 +393,20 @@ CREATE TABLE IF NOT EXISTS qr_access_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码访问日志表';
 
 -- district_manager 扩展：负责人活码
-ALTER TABLE district_manager
-    ADD COLUMN IF NOT EXISTS qr_config_id VARCHAR(64)  DEFAULT NULL COMMENT '企微联系我 config_id',
-    ADD COLUMN IF NOT EXISTS qr_url       VARCHAR(512) DEFAULT NULL COMMENT '负责人活码图片URL';
+-- 使用动态 SQL 检查 INFORMATION_SCHEMA 兼容旧版 MySQL（<8.0.29 不支持 ADD COLUMN IF NOT EXISTS）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'district_manager' AND COLUMN_NAME = 'qr_config_id') = 0,
+    'ALTER TABLE district_manager ADD COLUMN qr_config_id VARCHAR(64) DEFAULT NULL COMMENT ''企微联系我 config_id''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'district_manager' AND COLUMN_NAME = 'qr_url') = 0,
+    'ALTER TABLE district_manager ADD COLUMN qr_url VARCHAR(512) DEFAULT NULL COMMENT ''负责人活码图片URL''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 初始全局联系人配置
 INSERT IGNORE INTO system_config (config_key, config_value) VALUES
