@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +40,9 @@ public class TransferService {
     private final CustomerTagRepository customerTagRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+
+    /** 超时阈值：发起转移后等待 24 小时 */
+    private static final Duration TRANSFER_TIMEOUT = Duration.ofHours(24);
 
     /** 收集表单链接，可通过 app.transfer.form-url 配置，空则使用占位符 */
     @Value("${app.transfer.form-url:}")
@@ -201,8 +205,10 @@ public class TransferService {
                     default:
                         // 未知状态或 API 未返回有效状态 → 继续等待
                         t.setRetryCount(t.getRetryCount() + 1);
-                        if (t.getRetryCount() > 144) { // 24h * 6次/h = 144次 ≈ 超时
+                        if (t.getTransferTime() != null
+                            && t.getTransferTime().plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
                             t.setStatus(CustomerTransfer.TransferStatus.timeout);
+                            t.setFailReason("转移超时 (24h)");
                         }
                 }
                 transferRepo.save(t);

@@ -54,23 +54,4 @@ public class TransferMonitorWorker {
         }
         log.debug("继承结果追踪完成");
     }
-
-    /**
-     * 每天中午 12:00 执行一次，清理超时的继承记录。
-     *
-     * <p><b>清理逻辑：</b>对于超过 24 小时仍未获得客户确认的继承请求
-     * （即 {@code trackResults()} 中 {@code retryCount > 144} 的记录，
-     * 144 次 x 10 分钟 ≈ 24 小时），将其状态标记为 {@code timeout}。
-     * 超时记录不再被追踪，也不影响后续重新发起继承。</p>
-     *
-     * <p><b>当前状态：</b>清理逻辑依赖 {@link TransferService#trackResults()}
-     * 内部的超时判断，本方法作为显式的定时触发器备用。实际超时清理实现在
-     * {@code trackResults()} 中随追踪流程一并完成。</p>
-     */
-    @Scheduled(cron = "0 0 12 * * *")
-    public void cleanupTimeout() {
-        log.info("超时继承记录清理");
-        // 24h 未确认的标记为 timeout
-        // transferService.trackResults() 会处理 retryCount > 144 的情况
-    }
 }
