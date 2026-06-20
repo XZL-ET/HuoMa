@@ -1,8 +1,10 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.wecom.*;
+import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,6 +70,7 @@ public class CallbackWorker {
     private final Executor callbackExecutor;
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
     private final WecomApiClient wecomApi;
+    private final QrCodeRepository qrCodeRepo;
 
     private volatile boolean running = true;
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
@@ -396,6 +399,28 @@ public class CallbackWorker {
             rotationService.incrementDailyCount(userId, state);
         } catch (Exception e) {
             log.error("日计数失败: userid={}, state={}", userId, state, e);
+        }
+
+        // ⑤ 发布欢迎语+表单事件 → OutboundMsgWorker 异步发送
+        try {
+            if (state != null) {
+                QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
+                if (qr != null) {
+                    Map<String, Object> outEvent = new java.util.LinkedHashMap<>();
+                    outEvent.put("type", "welcome_and_form");
+                    outEvent.put("external_userid", externalUserId);
+                    outEvent.put("userid", userId);
+                    outEvent.put("state", state);
+                    outEvent.put("qr_code_id", qr.getId().toString());
+                    outEvent.put("customer_id", customerId.toString());
+                    redisTemplate.opsForStream().add(
+                        RedisConfig.OUTBOUND_STREAM_KEY,
+                        Map.of("event", objectMapper.writeValueAsString(outEvent)));
+                }
+            }
+        } catch (Exception e) {
+            log.error("发布欢迎语事件失败: external={}", externalUserId, e);
+            // 不抛异常，不影响主流程（客户已入库+日计数已完成）
         }
 
         log.info("添加成功处理完成: external={}, userid={}, state={}, customerId={}",
