@@ -103,6 +103,13 @@ public class RedisConfig {
     /** Consumer Group 名称：出站 Worker 消费组 */
     public static final String OUTBOUND_CONSUMER_GROUP = "outbound-worker-group";
 
+    // ==================== 客户转让 Stream 相关常量 ====================
+
+    /** Redis Stream Key：客户转让事件流，TransferWorker 从此消费转让事件 */
+    public static final String TRANSFER_STREAM_KEY = "wecom:transfer:stream";
+    /** Consumer Group 名称：转让 Worker 消费组 */
+    public static final String TRANSFER_CONSUMER_GROUP = "transfer-worker-group";
+
     // ==================== 业务 Key 前缀常量 ====================
 
     /**
@@ -288,6 +295,30 @@ public class RedisConfig {
             // 消费组已存在，忽略
         }
         return OUTBOUND_CONSUMER_GROUP;
+    }
+
+    /**
+     * 应用启动时自动创建客户转让 Redis Stream Consumer Group。
+     * <p>
+     * 首次启动时创建消费组 {@value #TRANSFER_CONSUMER_GROUP}，
+     * 绑定到 Stream {@value #TRANSFER_STREAM_KEY}，从最早消息（0-0）开始消费。
+     * 若消费组已存在则静默忽略异常，保证重启不报错。
+     * </p>
+     *
+     * @param redisTemplate 已注入的 StringRedisTemplate
+     * @return 消费组名称，供 TransferWorker 引用
+     */
+    @Bean
+    public String transferConsumerGroup(
+            @Qualifier("stringRedisTemplate") StringRedisTemplate redisTemplate) {
+        try {
+            RecordId initId = redisTemplate.opsForStream()
+                .add(TRANSFER_STREAM_KEY, Map.of("_init", "1"));
+            redisTemplate.opsForStream().createGroup(TRANSFER_STREAM_KEY,
+                ReadOffset.from("0-0"), TRANSFER_CONSUMER_GROUP);
+            redisTemplate.opsForStream().delete(TRANSFER_STREAM_KEY, initId);
+        } catch (Exception e) { /* exists */ }
+        return TRANSFER_CONSUMER_GROUP;
     }
 
     // ==================== 限流 RedisTemplate ====================
