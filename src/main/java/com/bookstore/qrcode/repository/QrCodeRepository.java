@@ -139,6 +139,19 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     @Query("SELECT DISTINCT q.schoolName FROM QrCode q WHERE q.schoolName IS NOT NULL ORDER BY q.schoolName")
     List<String> findDistinctSchoolName();
 
+    /**
+     * 查询孤儿活码候选 — 状态异常（paused / no_agent）但仍有企微 config_id 的 QR 码。
+     * <p>
+     * 用于 {@code PatrolWorker.reconcileOrphanQrCodes()} 企微对账扫描，
+     * 逐条验证企微侧是否仍存在该活码配置。
+     * </p>
+     *
+     * @return 符合条件的孤儿 QR 码列表
+     */
+    @Query("SELECT q FROM QrCode q WHERE q.status IN ('paused', 'no_agent') "
+         + "AND q.qrConfigId IS NOT NULL AND q.qrConfigId <> ''")
+    List<QrCode> findOrphanCandidates();
+
     /** 查询活码的第一个 active 服务老师姓名 */
     @Query(value = "SELECT a.name FROM qr_agent qa " +
            "JOIN agent a ON a.userid = qa.agent_userid " +

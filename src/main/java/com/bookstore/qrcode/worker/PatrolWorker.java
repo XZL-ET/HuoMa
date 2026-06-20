@@ -4,6 +4,8 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +52,8 @@ public class PatrolWorker {
     private final com.bookstore.qrcode.service.EmployeeSyncService employeeSyncService;
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
+    private final WecomApiClient wecomApi;
+    private final OperationLogRepository operationLogRepo;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
@@ -75,6 +79,13 @@ public class PatrolWorker {
         // 0. 池健康扫描 — 提前清理已离职/未激活/已禁用/封号/熔断的员工，
         //    避免阻塞队首导致后续 takeStandby 遍历浪费
         self.cleanUnhealthyFromPool();
+
+        // 0.5 企微孤儿 QR 对账扫描
+        try {
+            self.reconcileOrphanQrCodes();
+        } catch (Exception e) {
+            log.error("企微对账扫描异常", e);
+        }
 
         // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
         checkGlobalPoolLow();
@@ -153,6 +164,57 @@ public class PatrolWorker {
         if (!toRemove.isEmpty()) {
             poolRepo.deleteAll(toRemove);
             log.info("池健康扫描：清理 {} 个异常员工", toRemove.size());
+        }
+    }
+
+    /**
+     * 企微孤儿 QR 码对账扫描。
+     *
+     * <p>扫描本地状态异常（paused/no_agent）但仍有企微 config_id 的 QR 码，
+     * 逐条向企微验证是否仍需存在。若企微侧仍存在，则删除以释放资源。</p>
+     *
+     * <p><b>调用频率：</b>每 5 分钟。</p>
+     * <p><b>API 调用量：</b>正常运行时 0-5 次/巡检。</p>
+     */
+    @Transactional
+    void reconcileOrphanQrCodes() {
+        List<QrCode> candidates = qrCodeRepo.findOrphanCandidates();
+        if (candidates.isEmpty()) return;
+
+        log.info("企微对账扫描: 发现 {} 个异常 QR 码", candidates.size());
+        int deleted = 0;
+
+        for (QrCode qr : candidates) {
+            String configId = qr.getQrConfigId();
+            try {
+                JsonNode result = wecomApi.getContactWay(configId);
+                // errcode=0 表示企微侧仍存在 → 删除
+                if (result != null && result.path("errcode").asInt(0) == 0) {
+                    wecomApi.deleteContactWay(configId);
+                    qr.setQrConfigId(null);
+                    qrCodeRepo.save(qr);
+                    deleted++;
+
+                    // 记录操作审计
+                    OperationLog oplog = OperationLog.builder()
+                        .operator("system(reconciliation)")
+                        .action("delete_orphan_qr")
+                        .targetType("qr_code")
+                        .targetId(String.valueOf(qr.getId()))
+                        .detail("{\"school\":\"" + qr.getSchoolName()
+                            + "\",\"config_id\":\"" + configId + "\"}")
+                        .build();
+                    operationLogRepo.save(oplog);
+                }
+                // errcode!=0 表示企微侧已不存在 → 正常，跳过
+            } catch (Exception e) {
+                log.warn("对账处理异常: qrCodeId={}, configId={}, msg={}",
+                    qr.getId(), configId, e.getMessage());
+            }
+        }
+
+        if (deleted > 0) {
+            log.warn("企微对账清理完成: 删除 {} 个孤儿 QR 码", deleted);
         }
     }
 
