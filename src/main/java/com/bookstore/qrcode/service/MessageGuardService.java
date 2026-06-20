@@ -414,6 +414,7 @@ public class MessageGuardService {
             log.warn("消息直接入 DLQ: originStream={}, fields={}", originStreamKey, fields);
         } catch (Exception e) {
             log.error("DLQ 直接写入失败: originStream={}", originStreamKey, e);
+            throw new RuntimeException("DLQ write failed for " + originStreamKey, e);
         }
     }
 
