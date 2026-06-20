@@ -6,8 +6,6 @@ import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -61,8 +59,8 @@ public class SchoolRateLimitFilter implements Filter {
             .asMap();
 
     public SchoolRateLimitFilter(
-            @Qualifier("rateLimitRedisTemplate") StringRedisTemplate rateLimitRedis,
-            @Value("${app.school-rate-limit.max-per-minute:30}") int maxPerMinute) {
+            StringRedisTemplate rateLimitRedis,
+            int maxPerMinute) {
         this.rateLimitRedis = rateLimitRedis;
         this.maxPerMinute = maxPerMinute;
         this.windowMs = 60_000;

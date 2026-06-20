@@ -2,6 +2,7 @@ package com.bookstore.qrcode.config;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -25,6 +26,9 @@ public class SecurityConfig {
     @Autowired
     @Qualifier("rateLimitRedisTemplate")
     private StringRedisTemplate rateLimitRedisTemplate;
+
+    @Value("${app.school-rate-limit.max-per-minute:30}")
+    private int schoolRateLimitMaxPerMinute;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -73,7 +77,7 @@ public class SecurityConfig {
 
     @Bean
     public SchoolRateLimitFilter schoolRateLimitFilter() {
-        return new SchoolRateLimitFilter(rateLimitRedisTemplate, 30);
+        return new SchoolRateLimitFilter(rateLimitRedisTemplate, schoolRateLimitMaxPerMinute);
     }
 
     @Bean
