@@ -7,6 +7,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 import java.util.Map;
@@ -229,6 +230,22 @@ public class RedisConfig {
             // 消费组已存在，忽略
         }
         return DATAFILL_CONSUMER_GROUP;
+    }
+
+    // ==================== 分布式锁 Lua 脚本 ====================
+
+    /** 安全释放分布式锁 Lua 脚本：原子化 GET + COMPARE + DEL */
+    private static final String SAFE_UNLOCK_LUA =
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+        + "return redis.call('DEL', KEYS[1]) "
+        + "else return 0 end";
+
+    public static final DefaultRedisScript<Long> SAFE_UNLOCK_SCRIPT;
+
+    static {
+        SAFE_UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        SAFE_UNLOCK_SCRIPT.setScriptText(SAFE_UNLOCK_LUA);
+        SAFE_UNLOCK_SCRIPT.setResultType(Long.class);
     }
 
     /**

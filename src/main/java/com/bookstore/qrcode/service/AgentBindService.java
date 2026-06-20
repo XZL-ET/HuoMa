@@ -266,10 +266,14 @@ public class AgentBindService {
 
             log.info("扩容完成: 活码{} 员工{}下码, {}上码", qrCodeId, fullUserId, backupUserid);
         } finally {
-            // 仅当锁仍属于当前线程时才释放，防止锁过期后误删其他线程持有的锁
-            String current = redisTemplate.opsForValue().get(lockKey);
-            if (lockValue.equals(current)) {
-                redisTemplate.delete(lockKey);
+            // 原子化安全释放分布式锁（Lua EVAL），消除 GET+DEL 间的 TOCTOU 窗口
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                java.util.List.of(lockKey), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", lockKey);
+            } else {
+                log.warn("分布式锁释放失败（已过期或被他人持有）: {}", lockKey);
             }
         }
     }
@@ -337,10 +341,14 @@ public class AgentBindService {
 
             log.info("预激活: 活码{} 加入 {}", qrCodeId, backupUserid);
         } finally {
-            // 仅当锁仍属于当前线程时才释放，防止锁过期后误删其他线程持有的锁
-            String current = redisTemplate.opsForValue().get(lockKey);
-            if (lockValue.equals(current)) {
-                redisTemplate.delete(lockKey);
+            // 原子化安全释放分布式锁（Lua EVAL），消除 GET+DEL 间的 TOCTOU 窗口
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                java.util.List.of(lockKey), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", lockKey);
+            } else {
+                log.warn("分布式锁释放失败（已过期或被他人持有）: {}", lockKey);
             }
         }
     }
