@@ -13,6 +13,8 @@ import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -54,6 +56,45 @@ public class MessageGuardService {
     private static final int DEDUP_TTL_SECONDS = 300;
     private static final int RETRY_TTL_SECONDS = 3600;
     private static final long DEFAULT_IDLE_MS = 30_000;
+    /** 指数退避最大延迟（秒），超过此值按此值计算 */
+    private static final long MAX_BACKOFF_SECONDS = 60;
+
+    /**
+     * 基于消息内容计算确定性逻辑 ID（SHA-256 前 16 字节 → 32 hex chars，128-bit）。
+     * <p>
+     * 相比 {@code Integer.toHexString(fields.hashCode())}（32-bit, 碰撞概率
+     * 约 1/2^16 ≈ 1/65536），128-bit 使碰撞概率降至约 1/2^64，即使
+     * 百万级消息量也几乎不可能碰撞。
+     * </p>
+     * <p>优先使用 external_userid + userid + state 拼接作为种子，避免
+     * HashMap 迭代顺序不确定性；若三个字段均为空则退回到 fields.toString()。</p>
+     *
+     * @param fields 消息字段 Map
+     * @return 32 字符十六进制逻辑 ID
+     */
+    private String computeLogicalId(Map<String, String> fields) {
+        String externalUserId = fields.getOrDefault("external_userid", "");
+        String userId = fields.getOrDefault("userid", "");
+        String state = fields.getOrDefault("state", "");
+
+        String seed = externalUserId + "|" + userId + "|" + state;
+        if (seed.equals("||")) {
+            seed = fields.toString();
+        }
+
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(seed.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 16; i++) {  // 128-bit, collision prob ≈ 1/2^64
+                sb.append(String.format("%02x", digest[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            // SHA-256 在所有 JVM 上均受支持，此分支仅防御编程
+            return Integer.toHexString(seed.hashCode());
+        }
+    }
 
     // ================================================================
     // ① 消息去重
@@ -114,7 +155,7 @@ public class MessageGuardService {
                                  String errorInfo) {
         // 基于消息内容生成逻辑 ID，确保 XADD 重新入队后重试计数器仍能延续
         // （Stream messageId 每次 XADD 都会变化，但同一条逻辑消息的 fields 哈希不变）
-        String logicalId = Integer.toHexString(fields.hashCode());
+        String logicalId = computeLogicalId(fields);
         String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + streamKey + ":" + logicalId;
 
         try {
@@ -123,10 +164,13 @@ public class MessageGuardService {
             redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
 
             if (retryCount <= MAX_RETRIES) {
-                // 放回原 Stream 尾部重试
-                redisTemplate.opsForStream().add(streamKey, fields);
-                log.warn("消息处理失败，放回重试 ({}/{}): stream={}, msgId={}, error={}",
-                    retryCount, MAX_RETRIES, streamKey, messageId, errorInfo);
+                // 指数退避：第 N 次重试延迟 2^N 秒（capped at 60s）
+                long delaySec = Math.min((long) Math.pow(2, retryCount), MAX_BACKOFF_SECONDS);
+                Map<String, String> delayedFields = new LinkedHashMap<>(fields);
+                delayedFields.put("_retry_at", String.valueOf(Instant.now().getEpochSecond() + delaySec));
+                redisTemplate.opsForStream().add(streamKey, delayedFields);
+                log.warn("消息处理失败，{}s 后重试 ({}/{}): stream={}, msgId={}, error={}",
+                    delaySec, retryCount, MAX_RETRIES, streamKey, messageId, errorInfo);
             } else {
                 // 移入死信队列
                 moveToDlq(streamKey, messageId, fields, retryCount, errorInfo);
@@ -209,9 +253,10 @@ public class MessageGuardService {
                     fields.remove("_dlq_retry_count");
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
+                    fields.remove("_retry_at");
 
                     // 基于消息内容生成逻辑 ID，与 markRetryOrDead 共享计数器
-                    String logicalId = Integer.toHexString(fields.hashCode());
+                    String logicalId = computeLogicalId(fields);
                     String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + streamKey + ":" + logicalId;
 
                     Long retryCount = redisTemplate.opsForValue().increment(retryKey);
@@ -219,10 +264,13 @@ public class MessageGuardService {
                     redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
 
                     if (retryCount <= MAX_RETRIES) {
+                        // 指数退避重试
+                        long delaySec = Math.min((long) Math.pow(2, retryCount), MAX_BACKOFF_SECONDS);
+                        fields.put("_retry_at", String.valueOf(Instant.now().getEpochSecond() + delaySec));
                         redisTemplate.opsForStream().add(streamKey, fields);
                         ackSafely(streamKey, consumerGroup, msgId);
-                        log.warn("PEL 回收: XCLAIM + re-enqueue, stream={}, msgId={}, idle={}ms, retry={}",
-                            streamKey, msgId, idle, retryCount);
+                        log.warn("PEL 回收: XCLAIM + re-enqueue ({}s 退避), stream={}, msgId={}, idle={}ms, retry={}",
+                            delaySec, streamKey, msgId, idle, retryCount);
                         recovered++;
                     } else {
                         moveToDlq(streamKey, msgId, fields, retryCount,
@@ -326,13 +374,18 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
-                    // 剥离 DLQ 元数据，避免动态字段参与 hashCode → retry counter 重置
+                    // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
                     fields.remove("_dlq_retry_count");
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
-                    // 添加静态标记，不影响 hashCode
+                    fields.remove("_retry_at");
+                    // 重放前清理旧重试计数器，让消息获得全新重试次数
+                    String logicalId = computeLogicalId(fields);
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    redisTemplate.delete(retryKey);
+                    // 添加静态标记
                     fields.put("_dlq_replayed", "true");
                     redisTemplate.opsForStream().add(targetStreamKey, fields);
                     // 逐条删除，不丢消息
@@ -367,13 +420,18 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
-                    // 剥离 DLQ 元数据，避免动态字段参与 hashCode → retry counter 重置
+                    // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
                     fields.remove("_dlq_retry_count");
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
-                    // 添加静态标记，不影响 hashCode
+                    fields.remove("_retry_at");
+                    // 重放前清理旧重试计数器，让消息获得全新重试次数
+                    String logicalId = computeLogicalId(fields);
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    redisTemplate.delete(retryKey);
+                    // 添加静态标记
                     fields.put("_dlq_replayed", "true");
                     redisTemplate.opsForStream().add(targetStreamKey, fields);
                     // 逐条删除，不丢消息
@@ -413,8 +471,8 @@ public class MessageGuardService {
 
             log.warn("消息直接入 DLQ: originStream={}, fields={}", originStreamKey, fields);
         } catch (Exception e) {
-            log.error("DLQ 直接写入失败: originStream={}", originStreamKey, e);
-            throw new RuntimeException("DLQ write failed for " + originStreamKey, e);
+            // fail-open：DLQ 写入失败时不抛异常，消息留在 PEL 待 PEL 回收机制处理
+            log.error("DLQ 写入失败（fail-open，消息留 PEL 待回收）: originStream={}", originStreamKey, e);
         }
     }
 
