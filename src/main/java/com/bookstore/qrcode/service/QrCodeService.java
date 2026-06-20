@@ -376,7 +376,7 @@ public class QrCodeService {
      * <ol>
      *   <li>调用企微 API 删除企微端的「联系我」二维码</li>
      *   <li>删除所有活码联系人（{@link QrAgent}）</li>
-     *   <li>删除后备池记录（{@link QrBackupPool}）</li>
+     *   <li>删除后备池记录（GlobalAgentPool）—— 全局池不按活码删除，员工保留在池中供其他活码使用</li>
      *   <li>删除轮换日志（{@link QrRotateLog}）</li>
      *   <li>删除活码主记录（{@link QrCode}）</li>
      * </ol>

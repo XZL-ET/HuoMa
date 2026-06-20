@@ -125,23 +125,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     INDEX idx_agent_userid (agent_userid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码-员工关联表';
 
--- qr_backup_pool：后备池
--- 后备池表
-CREATE TABLE IF NOT EXISTS qr_backup_pool (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    qr_code_id BIGINT NOT NULL COMMENT '活码ID',
-    agent_userid VARCHAR(100) NOT NULL COMMENT '后备员工UserID',
-    role ENUM('receptionist','service') NOT NULL DEFAULT 'receptionist',
-    sort_order INT NOT NULL DEFAULT 0 COMMENT '优先级',
-    status ENUM('standby','activated','removed') NOT NULL DEFAULT 'standby',
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (qr_code_id) REFERENCES qr_code(id) ON DELETE CASCADE,
-    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
-    INDEX idx_qr_pool (qr_code_id, status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码后备员工表';
-
--- global_agent_pool：全局员工池（替代 qr_backup_pool）
+-- global_agent_pool：全局员工池
 CREATE TABLE IF NOT EXISTS global_agent_pool (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微员工UserID',
