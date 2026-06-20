@@ -178,8 +178,9 @@ public class WechatSyncHealingService {
             }
         }
 
-        // 兜底：线性扫描 [left, right) 范围
-        for (int i = left; i < Math.min(right, mutable.size()); i++) {
+        // 兜底：线性扫描 [left, right) 范围，最多扫描 10 个避免雪崩
+        int maxLinearScan = Math.min(right, left + 10);
+        for (int i = left; i < Math.min(maxLinearScan, mutable.size()); i++) {
             String uid = mutable.get(i);
             if (!isUserAvailable(configId, uid)) {
                 return uid;

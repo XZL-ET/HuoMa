@@ -158,9 +158,8 @@ public class EmployeeSyncService {
         int cleaned = 0;
         if (!inactiveUserIds.isEmpty()) {
             // 池中离职员工：直接用 JPQL 查询，无需加载全部池记录再过滤
-            List<GlobalAgentPool> toRemove = poolRepo.findAll().stream()
-                .filter(p -> inactiveUserIds.contains(p.getAgentUserid()))
-                .toList();
+            List<GlobalAgentPool> toRemove = poolRepo
+                .findByAgentUseridIn(new ArrayList<>(inactiveUserIds));
             if (!toRemove.isEmpty()) {
                 poolRepo.deleteAll(toRemove);
                 cleaned = toRemove.size();

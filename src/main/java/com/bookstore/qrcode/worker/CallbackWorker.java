@@ -2,6 +2,8 @@ package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.service.*;
+import com.bookstore.qrcode.wecom.*;
+import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -65,6 +67,7 @@ public class CallbackWorker {
     private final ObjectMapper objectMapper;
     private final Executor callbackExecutor;
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
+    private final WecomApiClient wecomApi;
 
     private volatile boolean running = true;
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
@@ -131,28 +134,71 @@ public class CallbackWorker {
                     String msgId = record.getId().getValue();
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
+                    Map<String, String> fields = Map.of("event", eventJson);
 
-                    boolean success = false;
-                    try {
-                        processEvent(eventJson);
-                        success = true;
-                    } catch (Exception e) {
-                        log.error("处理回调事件失败: consumer={}, msgId={}", consumerName, msgId, e);
+                    // 检查 _retry_at 时间戳（指数退避），未到时间则跳过
+                    String retryAt = (String) value.get("_retry_at");
+                    if (retryAt != null) {
+                        try {
+                            if (Long.parseLong(retryAt) > java.time.Instant.now().getEpochSecond()) {
+                                // 尚未到重试时间，放回并 ACK（会在 PEL 回收时重新处理）
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.CALLBACK_STREAM_KEY,
+                                    RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {}
                     }
 
-                    if (success) {
+                    try {
+                        processEvent(eventJson);
+                        // 成功 — ACK
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.CALLBACK_STREAM_KEY,
-                            RedisConfig.CALLBACK_CONSUMER_GROUP,
-                            msgId);
-                    } else {
-                        Map<String, String> fields = new java.util.LinkedHashMap<>();
-                        fields.put("event", eventJson);
+                            RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
+                    } catch (WecomApiException e) {
+                        // 企微异常 — 按 classifyWecomError 分类处理
+                        ErrorAction action = MessageGuardService.classifyWecomError(e);
+                        log.error("回调处理失败 (动作={}): consumer={}, msgId={}", action, consumerName, msgId, e);
+                        switch (action) {
+                            case DLQ:
+                                messageGuardService.sendToDlq(RedisConfig.CALLBACK_STREAM_KEY, fields);
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.CALLBACK_STREAM_KEY,
+                                    RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
+                                break;
+                            case REFRESH_TOKEN_AND_RETRY:
+                                wecomApi.refreshToken();
+                                messageGuardService.markRetryOrDead(
+                                    RedisConfig.CALLBACK_STREAM_KEY,
+                                    RedisConfig.CALLBACK_CONSUMER_GROUP,
+                                    msgId, fields, e.getMessage());
+                                break;
+                            case WAIT_AND_RETRY:
+                                if (e instanceof WecomRateLimitException rle) {
+                                    try { Thread.sleep(rle.getRetryAfterSeconds() * 1000L); }
+                                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                                }
+                                messageGuardService.markRetryOrDead(
+                                    RedisConfig.CALLBACK_STREAM_KEY,
+                                    RedisConfig.CALLBACK_CONSUMER_GROUP,
+                                    msgId, fields, e.getMessage());
+                                break;
+                            case RETRY:
+                            default:
+                                messageGuardService.markRetryOrDead(
+                                    RedisConfig.CALLBACK_STREAM_KEY,
+                                    RedisConfig.CALLBACK_CONSUMER_GROUP,
+                                    msgId, fields, e.getMessage());
+                                break;
+                        }
+                    } catch (Exception e) {
+                        // 非企微异常 — 走正常重试流程
+                        log.error("回调处理失败: consumer={}, msgId={}", consumerName, msgId, e);
                         messageGuardService.markRetryOrDead(
                             RedisConfig.CALLBACK_STREAM_KEY,
                             RedisConfig.CALLBACK_CONSUMER_GROUP,
-                            msgId, fields,
-                            "CallbackWorker 处理失败");
+                            msgId, fields, e.getMessage());
                     }
                 }
 
@@ -319,17 +365,10 @@ public class CallbackWorker {
             log.error("速率检测失败: userid={}", userId, e);
         }
 
-        // ② 记录/更新客户信息
-        Long customerId = null;
-        try {
-            customerId = customerService.upsertFromCallback(externalUserId, userId, state);
-        } catch (Exception e) {
-            log.error("记录客户失败（非阻塞）: external={}", externalUserId, e);
-        }
+        // ② 记录/更新客户信息 — 关键路径，失败必须向上传播以触发重试/DLQ
+        Long customerId = customerService.upsertFromCallback(externalUserId, userId, state);
 
-        // ③ 发布自动打标事件 → TagWorker 异步消费
-        // 改为 XADD 而非直接调用 TagService.autoTag()，
-        // 避免打标过程中的企微 API 调用拖慢回调主消费线程
+        // ③ 发布自动打标事件 → TagWorker 异步消费，失败传播
         if (state != null) {
             try {
                 Map<String, Object> tagEvent = new java.util.LinkedHashMap<>();
@@ -339,9 +378,8 @@ public class CallbackWorker {
                 redisTemplate.opsForStream().add(
                     RedisConfig.TAG_STREAM_KEY,
                     Map.of("event", objectMapper.writeValueAsString(tagEvent)));
-                // trim 操作已移到 TagWorker 消费者侧执行，防止生产者 trim 截断未消费消息
-            } catch (Exception e) {
-                log.error("发布打标事件失败: external={}", externalUserId, e);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new RuntimeException("序列化打标事件失败", e);
             }
         }
 

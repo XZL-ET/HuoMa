@@ -3,7 +3,8 @@ package com.bookstore.qrcode.worker;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.repository.CustomerRepository;
-import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
+import com.bookstore.qrcode.wecom.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -104,28 +105,45 @@ public class DataFillWorker {
                     String msgId = record.getId().getValue();
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
+                    Map<String, String> fields = Map.of("event", eventJson);
 
-                    boolean success = false;
                     try {
                         processEvent(eventJson);
-                        success = true;
-                    } catch (Exception e) {
-                        log.error("补全客户信息失败: msgId={}", msgId, e);
-                    }
-
-                    if (success) {
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.DATAFILL_STREAM_KEY,
-                            RedisConfig.DATAFILL_CONSUMER_GROUP,
-                            msgId);
-                    } else {
-                        Map<String, String> fields = new java.util.LinkedHashMap<>();
-                        fields.put("event", eventJson);
-                        messageGuardService.markRetryOrDead(
-                            RedisConfig.DATAFILL_STREAM_KEY,
-                            RedisConfig.DATAFILL_CONSUMER_GROUP,
-                            msgId, fields,
-                            "DataFillWorker 处理失败");
+                            RedisConfig.DATAFILL_CONSUMER_GROUP, msgId);
+                    } catch (WecomApiException e) {
+                        ErrorAction action = com.bookstore.qrcode.service.MessageGuardService.classifyWecomError(e);
+                        log.error("补全信息失败 (动作={}): msgId={}", action, msgId, e);
+                        switch (action) {
+                            case DLQ:
+                                messageGuardService.sendToDlq(RedisConfig.DATAFILL_STREAM_KEY, fields);
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.DATAFILL_STREAM_KEY,
+                                    RedisConfig.DATAFILL_CONSUMER_GROUP, msgId);
+                                break;
+                            case REFRESH_TOKEN_AND_RETRY:
+                                wecomApi.refreshToken();
+                                messageGuardService.markRetryOrDead(RedisConfig.DATAFILL_STREAM_KEY,
+                                    RedisConfig.DATAFILL_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                            case WAIT_AND_RETRY:
+                                if (e instanceof WecomRateLimitException rle) {
+                                    try { Thread.sleep(rle.getRetryAfterSeconds() * 1000L); }
+                                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                                }
+                                messageGuardService.markRetryOrDead(RedisConfig.DATAFILL_STREAM_KEY,
+                                    RedisConfig.DATAFILL_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                            default:
+                                messageGuardService.markRetryOrDead(RedisConfig.DATAFILL_STREAM_KEY,
+                                    RedisConfig.DATAFILL_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                        }
+                    } catch (Exception e) {
+                        log.error("补全客户信息失败: msgId={}", msgId, e);
+                        messageGuardService.markRetryOrDead(RedisConfig.DATAFILL_STREAM_KEY,
+                            RedisConfig.DATAFILL_CONSUMER_GROUP, msgId, fields, e.getMessage());
                     }
 
                     // 最小调用间隔 200ms，4 线程并发下约 20 QPS，防触达企微 API 限流

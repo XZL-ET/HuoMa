@@ -52,7 +52,7 @@ public class WecomApiClient {
 
     private final WecomConfig config;
     private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper; // @RequiredArgsConstructor 注入 Spring 管理的单例
 
     /** 企微根部门 ID，用于递归拉取成员列表，可通过 app.wecom.root-department-id 配置 */
     @Value("${app.wecom.root-department-id:1}")
@@ -61,12 +61,14 @@ public class WecomApiClient {
     public WecomApiClient(WecomConfig config,
                           @Value("${app.wecom.connect-timeout:3}") int connectTimeoutSec,
                           @Value("${app.wecom.read-timeout:10}") int readTimeoutSec,
-                          RestTemplateBuilder builder) {
+                          RestTemplateBuilder builder,
+                          ObjectMapper objectMapper) {
         this.config = config;
         this.restTemplate = builder
             .setConnectTimeout(Duration.ofSeconds(connectTimeoutSec))
             .setReadTimeout(Duration.ofSeconds(readTimeoutSec))
             .build();
+        this.objectMapper = objectMapper;
     }
 
     /** access_token 获取接口: GET https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ID&corpsecret=SECRET */

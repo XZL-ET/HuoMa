@@ -1,7 +1,10 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.TagService;
+import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
+import com.bookstore.qrcode.wecom.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -53,6 +56,7 @@ public class TagWorker {
     private final TagService tagService;
     private final ObjectMapper objectMapper;
     private final Executor taskExecutor;
+    private final WecomApiClient wecomApi;
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
@@ -119,28 +123,45 @@ public class TagWorker {
                     String msgId = record.getId().getValue();
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
+                    Map<String, String> fields = Map.of("event", eventJson);
 
-                    boolean success = false;
                     try {
                         processEvent(eventJson);
-                        success = true;
-                    } catch (Exception e) {
-                        log.error("处理打标事件失败: consumer={}, msgId={}", consumerName, msgId, e);
-                    }
-
-                    if (success) {
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TAG_STREAM_KEY,
-                            RedisConfig.TAG_CONSUMER_GROUP,
-                            msgId);
-                    } else {
-                        Map<String, String> fields = new java.util.LinkedHashMap<>();
-                        fields.put("event", eventJson);
-                        messageGuardService.markRetryOrDead(
-                            RedisConfig.TAG_STREAM_KEY,
-                            RedisConfig.TAG_CONSUMER_GROUP,
-                            msgId, fields,
-                            "TagWorker 处理失败");
+                            RedisConfig.TAG_CONSUMER_GROUP, msgId);
+                    } catch (WecomApiException e) {
+                        ErrorAction action = MessageGuardService.classifyWecomError(e);
+                        log.error("打标处理失败 (动作={}): consumer={}, msgId={}", action, consumerName, msgId, e);
+                        switch (action) {
+                            case DLQ:
+                                messageGuardService.sendToDlq(RedisConfig.TAG_STREAM_KEY, fields);
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.TAG_STREAM_KEY,
+                                    RedisConfig.TAG_CONSUMER_GROUP, msgId);
+                                break;
+                            case REFRESH_TOKEN_AND_RETRY:
+                                wecomApi.refreshToken();
+                                messageGuardService.markRetryOrDead(RedisConfig.TAG_STREAM_KEY,
+                                    RedisConfig.TAG_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                            case WAIT_AND_RETRY:
+                                if (e instanceof WecomRateLimitException rle) {
+                                    try { Thread.sleep(rle.getRetryAfterSeconds() * 1000L); }
+                                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                                }
+                                messageGuardService.markRetryOrDead(RedisConfig.TAG_STREAM_KEY,
+                                    RedisConfig.TAG_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                            default:
+                                messageGuardService.markRetryOrDead(RedisConfig.TAG_STREAM_KEY,
+                                    RedisConfig.TAG_CONSUMER_GROUP, msgId, fields, e.getMessage());
+                                break;
+                        }
+                    } catch (Exception e) {
+                        log.error("打标处理失败: consumer={}, msgId={}", consumerName, msgId, e);
+                        messageGuardService.markRetryOrDead(RedisConfig.TAG_STREAM_KEY,
+                            RedisConfig.TAG_CONSUMER_GROUP, msgId, fields, e.getMessage());
                     }
 
                     // 最小调用间隔，可通过 worker.tag.delay-ms 配置（默认 50ms 防限流）

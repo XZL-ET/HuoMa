@@ -58,6 +58,9 @@ public interface GlobalAgentPoolRepository
     @Query("SELECT p.agentUserid FROM GlobalAgentPool p")
     List<String> findAllAgentUserids();
 
+    /** 按 userid 列表查询（用于批量离职员工清理） */
+    List<GlobalAgentPool> findByAgentUseridIn(List<String> agentUserids);
+
     // ── 分页 + 筛选方法（员工管理页面用） ──
 
     /** 按 userid 模糊搜索（分页），按 sortOrder 升序 */

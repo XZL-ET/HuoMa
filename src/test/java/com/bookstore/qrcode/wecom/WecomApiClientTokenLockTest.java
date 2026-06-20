@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.wecom;
 
 import com.bookstore.qrcode.config.WecomConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -152,13 +153,13 @@ class WecomApiClientTokenLockTest {
     /**
      * 创建注入 mock config 的 WecomApiClient 实例。
      *
-     * <p>构造器现在接收 4 个参数 (WecomConfig, connectTimeout, readTimeout, RestTemplateBuilder)。
+     * <p>构造器现在接收 5 个参数 (WecomConfig, connectTimeout, readTimeout, RestTemplateBuilder, ObjectMapper)。
      */
     private WecomApiClient createClientWithConfig(WecomConfig testConfig) throws Exception {
         java.lang.reflect.Constructor<WecomApiClient> ctor =
             WecomApiClient.class.getDeclaredConstructor(
-                WecomConfig.class, int.class, int.class, RestTemplateBuilder.class);
+                WecomConfig.class, int.class, int.class, RestTemplateBuilder.class, ObjectMapper.class);
         ctor.setAccessible(true);
-        return ctor.newInstance(testConfig, 3, 10, new RestTemplateBuilder());
+        return ctor.newInstance(testConfig, 3, 10, new RestTemplateBuilder(), new ObjectMapper());
     }
 }
