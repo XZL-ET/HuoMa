@@ -251,6 +251,26 @@ public class WechatSyncHealingService {
 
         log.info("自愈补充: 活码{} 加入替补 {}, sortOrder={}",
             qrCodeId, backupUserid, maxOrder + 1);
+
+        // 同步到企微：构建包含替补的最新成员列表，调用 updateContactWay
+        try {
+            QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
+            if (qr != null && qr.getQrConfigId() != null) {
+                List<String> updatedUserIds = new ArrayList<>();
+                for (QrAgent a : qrAgentRepo.findByQrCodeId(qrCodeId)) {
+                    if (a.getStatus() == QrAgent.AgentStatus.active) {
+                        updatedUserIds.add(a.getAgentUserid());
+                    }
+                }
+                wecomApi.updateContactWay(qr.getQrConfigId(), updatedUserIds);
+                log.info("自愈补充后同步企微成功: qrCodeId={}, users={}",
+                    qrCodeId, updatedUserIds.size());
+            } else {
+                log.warn("自愈补充后无法同步企微: QR 码不存在或无 config_id, qrCodeId={}", qrCodeId);
+            }
+        } catch (Exception e) {
+            log.error("自愈补充后同步企微失败: qrCodeId={}", qrCodeId, e);
+        }
     }
 
     private List<String> extractUsers(JsonNode detail) {
