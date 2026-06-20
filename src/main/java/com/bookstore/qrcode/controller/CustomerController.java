@@ -341,20 +341,19 @@ public class CustomerController {
         int updated = 0;
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
-            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                for (JsonNode u : result.get("userlist")) {
-                    String userid = u.get("userid").asText();
-                    String name = u.get("name").asText();
-                    updated += agentRepo.findById(userid).map(agent -> {
-                        // 仅当本地 name 仍为 userid（未设置）时更新，不覆盖已手动配置的名称
-                        if (userid.equals(agent.getName())) {
-                            agent.setName(name);
-                            agentRepo.save(agent);
-                            return 1;
-                        }
-                        return 0;
-                    }).orElse(0);
-                }
+            // parseAndCheck 保证 errcode=0
+            for (JsonNode u : result.get("userlist")) {
+                String userid = u.get("userid").asText();
+                String name = u.get("name").asText();
+                updated += agentRepo.findById(userid).map(agent -> {
+                    // 仅当本地 name 仍为 userid（未设置）时更新，不覆盖已手动配置的名称
+                    if (userid.equals(agent.getName())) {
+                        agent.setName(name);
+                        agentRepo.save(agent);
+                        return 1;
+                    }
+                    return 0;
+                }).orElse(0);
             }
             log.info("员工姓名同步完成: 更新 {} 人", updated);
             // 清除缓存，下次请求重新加载
@@ -473,10 +472,9 @@ public class CustomerController {
         Map<String, String> map = new HashMap<>();
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
-            if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                for (JsonNode u : result.get("userlist")) {
-                    map.put(u.get("userid").asText(), u.get("name").asText());
-                }
+            // parseAndCheck 保证 errcode=0
+            for (JsonNode u : result.get("userlist")) {
+                map.put(u.get("userid").asText(), u.get("name").asText());
             }
         } catch (Exception e) {
             log.warn("从企微 API 获取员工列表失败，回退到本地 Agent 表: {}", e.getMessage());

@@ -3,6 +3,7 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -91,10 +92,9 @@ public class TransferService {
 
         try {
             // 调企微 API 发起继承
-            JsonNode result = wecomApi.transferCustomer(
+            wecomApi.transferCustomer(
                 fromUserid, serviceAgent.getAgentUserid(), externalUserid);
-
-            int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
+            // parseAndCheck 保证 errcode=0
 
             // 检查客户是否已填写收集表单（影响后续 A/B 欢迎语分支）
             Boolean formFilled = checkFormFilled(customerId);
@@ -107,22 +107,25 @@ public class TransferService {
                 .transferTime(LocalDateTime.now())
                 .retryCount(0)
                 .formFilledAtTransfer(formFilled)
+                .status(CustomerTransfer.TransferStatus.pending_confirm)
                 .build();
 
-            if (errcode == 0) {
-                // errcode=0 表示 API 调用成功，等待客户确认
-                transfer.setStatus(CustomerTransfer.TransferStatus.pending_confirm);
-                log.info("继承发起成功: customer={}, from={}, to={}",
-                    externalUserid, fromUserid, serviceAgent.getAgentUserid());
-            } else {
-                // errcode!=0 表示 API 返回业务错误（如参数非法、无权限等）
-                transfer.setStatus(CustomerTransfer.TransferStatus.api_failed);
-                transfer.setFailReason("errcode=" + errcode + " " +
-                    (result.has("errmsg") ? result.get("errmsg").asText() : ""));
-                log.error("继承发起失败: {}", transfer.getFailReason());
-            }
-
             transferRepo.save(transfer);
+            log.info("继承发起成功: customer={}, from={}, to={}",
+                externalUserid, fromUserid, serviceAgent.getAgentUserid());
+
+        } catch (WecomApiException e) {
+            // API 返回业务错误（如参数非法、无权限等）
+            transferRepo.save(CustomerTransfer.builder()
+                .customerId(customerId)
+                .fromUserid(fromUserid)
+                .toUserid(serviceAgent.getAgentUserid())
+                .qrCodeId(qr.getId())
+                .transferTime(LocalDateTime.now())
+                .status(CustomerTransfer.TransferStatus.api_failed)
+                .failReason("errcode=" + e.getErrcode() + " " + e.getErrmsg())
+                .build());
+            log.error("继承发起失败: errcode={}, errmsg={}", e.getErrcode(), e.getErrmsg());
 
         } catch (Exception e) {
             log.error("继承发起异常: external={}", externalUserid, e);
@@ -215,6 +218,12 @@ public class TransferService {
                         }
                 }
                 transferRepo.save(t);
+            } catch (WecomApiException e) {
+                // API 调用失败，累加重试次数
+                t.setRetryCount(t.getRetryCount() + 1);
+                transferRepo.save(t);
+                log.error("追踪继承结果 API 失败: transferId={}, errcode={}, errmsg={}",
+                    t.getId(), e.getErrcode(), e.getErrmsg());
             } catch (Exception e) {
                 // 单条追踪异常不中断批量处理，计数后继续下一条
                 t.setRetryCount(t.getRetryCount() + 1);

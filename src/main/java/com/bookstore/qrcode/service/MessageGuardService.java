@@ -1,6 +1,11 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomPermanentException;
+import com.bookstore.qrcode.wecom.WecomRateLimitException;
+import com.bookstore.qrcode.wecom.WecomTokenExpiredException;
+import com.bookstore.qrcode.wecom.WecomTransientException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
@@ -236,7 +241,55 @@ public class MessageGuardService {
     }
 
     // ================================================================
-    // ④ DLQ 统计 & 重放
+    // ④ 企微异常分类 — 按异常类型决策重试/死信/令牌刷新/限流等待
+    // ================================================================
+
+    /**
+     * 根据企微异常类型返回建议的处理动作。
+     *
+     * <p>调用方（如 CallbackWorker、TagWorker）在 catch 到
+     * {@link WecomApiException} 后调用此方法获取处理策略：
+     * <ul>
+     *   <li><b>DLQ</b> — 永久故障，不入重试直接移入死信队列</li>
+     *   <li><b>REFRESH_TOKEN_AND_RETRY</b> — Token 过期，刷新后重试一次</li>
+     *   <li><b>WAIT_AND_RETRY</b> — 频率限制，等待 Retry-After 后重试一次</li>
+     *   <li><b>RETRY</b> — 瞬时故障，走正常重试流程（最多 3 次指数退避）</li>
+     * </ul>
+     *
+     * @param e 捕获到的异常
+     * @return 建议的处理动作
+     */
+    public static ErrorAction classifyWecomError(Throwable e) {
+        if (e instanceof WecomPermanentException) {
+            return ErrorAction.DLQ;
+        }
+        if (e instanceof WecomTokenExpiredException) {
+            return ErrorAction.REFRESH_TOKEN_AND_RETRY;
+        }
+        if (e instanceof WecomRateLimitException) {
+            return ErrorAction.WAIT_AND_RETRY;
+        }
+        if (e instanceof WecomTransientException) {
+            return ErrorAction.RETRY;
+        }
+        // 未知异常按瞬时故障处理
+        return ErrorAction.RETRY;
+    }
+
+    /** 企微异常处理动作枚举 */
+    public enum ErrorAction {
+        /** 永久故障，直接入 DLQ，不可重试 */
+        DLQ,
+        /** Token 过期，刷新后重试一次 */
+        REFRESH_TOKEN_AND_RETRY,
+        /** 频率限制，等待 Retry-After 后重试一次 */
+        WAIT_AND_RETRY,
+        /** 瞬时故障，走正常重试流程 */
+        RETRY
+    }
+
+    // ================================================================
+    // ⑤ DLQ 统计 & 重放
     // ================================================================
 
     /**
@@ -336,7 +389,7 @@ public class MessageGuardService {
     }
 
     // ================================================================
-    // ⑤ 内部辅助方法
+    // ⑥ 内部辅助方法
     // ================================================================
 
     /**

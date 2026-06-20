@@ -172,12 +172,11 @@ public class GlobalAgentPoolService {
                 name = userid;
                 try {
                     JsonNode result = wecomApi.getUserSimplelist();
-                    if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                        for (JsonNode u : result.get("userlist")) {
-                            if (userid.equals(u.get("userid").asText())) {
-                                name = u.get("name").asText();
-                                break;
-                            }
+                    // parseAndCheck 保证 errcode=0
+                    for (JsonNode u : result.get("userlist")) {
+                        if (userid.equals(u.get("userid").asText())) {
+                            name = u.get("name").asText();
+                            break;
                         }
                     }
                 } catch (Exception e) {

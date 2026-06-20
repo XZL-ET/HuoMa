@@ -37,8 +37,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * <b>API 调用规范：</b><br>
  * 所有 API 调用使用 {@link RestTemplate}（HTTP POST/GET），
  * 请求时自动拼接 access_token 参数（通过 {@link #getAccessToken()}），
- * 响应统一经 {@link #parseOrThrow(String, String)} 解析，
- * 非零 errcode 记录日志但不抛异常（由调用方按错误码分类处理）。
+ * 响应统一经 {@link #parseAndCheck(String, String)} 解析，
+ * 非零 errcode 抛出对应的 {@link WecomApiException} 子类异常。
  * <p>
  * 参考企微文档：<a href="https://developer.work.weixin.qq.com/document/path/90600">服务端 API 文档</a>
  *
@@ -100,7 +100,7 @@ public class WecomApiClient {
      * </pre>
      *
      * @return 有效的 access_token 字符串
-     * @throws RuntimeException 获取失败时抛出（网络超时、corpid/corpsecret 无效等）
+     * @throws WecomApiException 获取失败时抛出（网络超时、corpid/corpsecret 无效等）
      */
     public String getAccessToken() {
         // 读锁：缓存命中时多线程并发，不互斥
@@ -127,10 +127,10 @@ public class WecomApiClient {
             String resp = restTemplate.getForObject(url, String.class);
             JsonNode node = objectMapper.readTree(resp);
 
-            int errcode = node.get("errcode").asInt();
+            int errcode = node.has("errcode") ? node.get("errcode").asInt() : -1;
             if (errcode != 0) {
                 String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "";
-                throw new RuntimeException("获取 access_token 失败: errcode=" + errcode + " " + errmsg);
+                throwWecomException(errcode, errmsg, resp);
             }
 
             String token = node.get("access_token").asText();
@@ -142,9 +142,28 @@ public class WecomApiClient {
             config.setAccessTokenExpireAt(Instant.now().getEpochSecond() + expiresIn - 200);
             log.info("access_token 已刷新，过期时间: {}", config.getAccessTokenExpireAt());
             return token;
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
             log.error("获取 access_token 异常", e);
-            throw new RuntimeException("获取 access_token 失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "获取 access_token 失败: " + e.getMessage(), null);
+        } finally {
+            tokenLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 强制刷新 access_token（用于 Token 过期后的重试前置操作）。
+     * <p>
+     * 清除缓存后由下次 {@link #getAccessToken()} 调用触发实际刷新。
+     */
+    public void refreshToken() {
+        tokenLock.writeLock().lock();
+        try {
+            config.setAccessToken(null);
+            config.setAccessTokenExpireAt(0);
+            log.info("access_token 缓存已清除，下次调用将自动刷新");
         } finally {
             tokenLock.writeLock().unlock();
         }
@@ -179,11 +198,12 @@ public class WecomApiClient {
      *
      * @param requestJson 完整的请求 body JSON 字符串（由上层组装，含 type/scene/user/state 等）
      * @return JsonNode 包含 {@code config_id}（活码配置ID）和 {@code qr_code}（二维码图片URL）
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode createContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/add_contact_way?access_token=" + getAccessToken();
         String resp = postForJson(url, requestJson);
-        return parseOrThrow(resp, "创建活码");
+        return parseAndCheck(resp, "创建活码");
     }
 
     /**
@@ -197,11 +217,12 @@ public class WecomApiClient {
      *
      * @param requestJson 包含 {@code config_id} 及待更新字段的 JSON 字符串
      * @return JsonNode {@code {errcode, errmsg}}
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode updateContactWay(String requestJson) {
         String url = BASE_URL + "/externalcontact/update_contact_way?access_token=" + getAccessToken();
         String resp = postForJson(url, requestJson);
-        return parseOrThrow(resp, "更新活码");
+        return parseAndCheck(resp, "更新活码");
     }
 
     /**
@@ -212,15 +233,19 @@ public class WecomApiClient {
      * 删除后该活码失效，客户扫码将提示「该二维码已过期」。
      *
      * @param configId 活码配置 ID（创建时返回的 config_id）
+     * @throws WecomApiException API 调用失败时抛出
      */
     public void deleteContactWay(String configId) {
         String url = BASE_URL + "/externalcontact/del_contact_way?access_token=" + getAccessToken();
         try {
             String body = objectMapper.writeValueAsString(Map.of("config_id", configId));
             String resp = postForJson(url, body);
-            parseOrThrow(resp, "删除活码");
+            parseAndCheck(resp, "删除活码");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("删除活码失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "删除活码失败: " + e.getMessage(), null);
         }
     }
 
@@ -246,7 +271,7 @@ public class WecomApiClient {
      * @param groupId 标签组 ID。非 null 时在指定组下创建标签；
      *                null 或空字符串则创建到默认组或不指定组（由企微自动分配）
      * @return JsonNode 包含 {@code tag_id}（新标签的企微 ID）
-     * @throws RuntimeException 创建失败时抛出
+     * @throws WecomApiException 创建失败时抛出
      */
     public JsonNode addCorpTag(String tagName, String groupId) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
@@ -258,9 +283,12 @@ public class WecomApiClient {
             bodyMap.put("tag", List.of(Map.of("name", tagName)));
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
-            return parseOrThrow(resp, "创建企业标签");
+            return parseAndCheck(resp, "创建企业标签");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("创建企业标签失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "创建企业标签失败: " + e.getMessage(), null);
         }
     }
 
@@ -281,7 +309,7 @@ public class WecomApiClient {
      * @param tagName   标签名称
      * @param groupName 标签组名称（如果该组名已存在则追加到该组，否则新建组）
      * @return JsonNode 包含 {@code tag_group} 对象，内含新创建的 {@code group_id} 和 {@code tag.id}
-     * @throws RuntimeException 创建失败时抛出
+     * @throws WecomApiException 创建失败时抛出
      */
     public JsonNode addCorpTagWithGroup(String tagName, String groupName) {
         String url = BASE_URL + "/externalcontact/add_corp_tag?access_token=" + getAccessToken();
@@ -291,9 +319,12 @@ public class WecomApiClient {
             bodyMap.put("tag", List.of(Map.of("name", tagName)));
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
-            return parseOrThrow(resp, "创建企业标签组");
+            return parseAndCheck(resp, "创建企业标签组");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("创建企业标签组失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "创建企业标签组失败: " + e.getMessage(), null);
         }
     }
 
@@ -320,7 +351,7 @@ public class WecomApiClient {
      * </pre>
      *
      * @return JsonNode 包含 {@code tag_group} 数组，每个元素含标签组信息和 {@code tag} 子数组
-     * @throws RuntimeException 获取失败时抛出
+     * @throws WecomApiException 获取失败时抛出
      */
     public JsonNode getCorpTagList() {
         String url = BASE_URL + "/externalcontact/get_corp_tag_list?access_token=" + getAccessToken();
@@ -328,9 +359,12 @@ public class WecomApiClient {
             // 请求体传空 JSON 对象，不传参数时获取全部标签
             String body = "{}";
             String resp = postForJson(url, body);
-            return parseOrThrow(resp, "获取标签列表");
+            return parseAndCheck(resp, "获取标签列表");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("获取标签列表失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "获取标签列表失败: " + e.getMessage(), null);
         }
     }
 
@@ -353,7 +387,7 @@ public class WecomApiClient {
      * @param externalUserId 外部联系人（客户）的 UserID
      * @param userId         企业成员（服务人员）的 UserID
      * @param tagIds         要添加的标签 ID 列表（企微标签 ID，非名称）
-     * @throws RuntimeException 打标签失败时抛出（如标签不存在、客户已删除等）
+     * @throws WecomApiException 打标签失败时抛出（如标签不存在、客户已删除等）
      */
     public void markTag(String externalUserId, String userId, List<String> tagIds) {
         String url = BASE_URL + "/externalcontact/mark_tag?access_token=" + getAccessToken();
@@ -364,14 +398,12 @@ public class WecomApiClient {
             bodyMap.put("add_tag", tagIds);
             String body = objectMapper.writeValueAsString(bodyMap);
             String respStr = postForJson(url, body);
-            JsonNode resp = objectMapper.readTree(respStr);
-            int errcode = resp.has("errcode") ? resp.get("errcode").asInt() : -1;
-            if (errcode != 0) {
-                String errmsg = resp.has("errmsg") ? resp.get("errmsg").asText() : "";
-                throw new RuntimeException("打标签 errcode=" + errcode + " " + errmsg);
-            }
+            parseAndCheck(respStr, "打标签");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("打标签失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "打标签失败: " + e.getMessage(), null);
         }
     }
 
@@ -402,6 +434,7 @@ public class WecomApiClient {
      * @param takeoverUserid 接替人（转入方）的 userid
      * @param externalUserid 待转移客户的 external_userid
      * @return JsonNode {@code {errcode, errmsg}}
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode transferCustomer(String handoverUserid, String takeoverUserid,
                                       String externalUserid) {
@@ -413,9 +446,12 @@ public class WecomApiClient {
             bodyMap.put("external_userid", List.of(externalUserid));
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
-            return parseOrThrow(resp, "在职继承");
+            return parseAndCheck(resp, "在职继承");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("在职继承失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "在职继承失败: " + e.getMessage(), null);
         }
     }
 
@@ -447,6 +483,7 @@ public class WecomApiClient {
      * @param takeoverUserid 接替人（转入方）的 userid
      * @param externalUserid 要查询的客户 external_userid
      * @return JsonNode 包含 {@code customer} 数组，每个元素含 {@code external_userid} 和 {@code status}
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
                                        String externalUserid) {
@@ -458,9 +495,12 @@ public class WecomApiClient {
             bodyMap.put("external_userid", externalUserid);
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
-            return parseOrThrow(resp, "查询继承结果");
+            return parseAndCheck(resp, "查询继承结果");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("查询继承结果失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "查询继承结果失败: " + e.getMessage(), null);
         }
     }
 
@@ -499,12 +539,13 @@ public class WecomApiClient {
      *
      * @param externalUserid 外部联系人（客户）的 UserID
      * @return JsonNode 包含 {@code external_contact}（客户基本信息）和 {@code follow_info}（跟进信息）
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode getExternalContact(String externalUserid) {
         String url = BASE_URL + "/externalcontact/get?access_token=" + getAccessToken()
                      + "&external_userid=" + externalUserid;
         String resp = restTemplate.getForObject(url, String.class);
-        return parseOrThrow(resp, "获取客户详情");
+        return parseAndCheck(resp, "获取客户详情");
     }
 
     /**
@@ -524,12 +565,13 @@ public class WecomApiClient {
      *
      * @param userid 企业成员（服务人员）的 UserID
      * @return JsonNode 包含 {@code external_userid} 数组
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode getExternalContactList(String userid) {
         String url = BASE_URL + "/externalcontact/list?access_token=" + getAccessToken()
                      + "&userid=" + userid;
         String resp = restTemplate.getForObject(url, String.class);
-        return parseOrThrow(resp, "获取客户列表");
+        return parseAndCheck(resp, "获取客户列表");
     }
 
     /**
@@ -554,12 +596,13 @@ public class WecomApiClient {
      * </ul>
      *
      * @return JsonNode 包含 {@code userlist} 数组，每项含 {@code userid} 和 {@code name}
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode getUserSimplelist() {
         String url = BASE_URL + "/user/simplelist?access_token=" + getAccessToken()
                      + "&department_id=" + rootDepartmentId + "&fetch_child=1";
         String resp = restTemplate.getForObject(url, String.class);
-        return parseOrThrow(resp, "获取成员列表");
+        return parseAndCheck(resp, "获取成员列表");
     }
 
     /**
@@ -571,12 +614,13 @@ public class WecomApiClient {
      * 和 {@code enable}（1=启用 0=禁用），用于主动过滤不可用员工。</p>
      *
      * @return JsonNode 包含 {@code userlist} 数组，每项含 userid、name、status 等字段
+     * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode getUserList() {
         String url = BASE_URL + "/user/list?access_token=" + getAccessToken()
                      + "&department_id=" + rootDepartmentId + "&fetch_child=1";
         String resp = restTemplate.getForObject(url, String.class);
-        return parseOrThrow(resp, "获取成员详情列表");
+        return parseAndCheck(resp, "获取成员详情列表");
     }
 
     // ========================================================================
@@ -609,7 +653,7 @@ public class WecomApiClient {
      * @param sender         发送消息的企业成员 userid
      * @param externalUserid 接收消息的客户 external_userid
      * @param text           消息文本内容
-     * @throws RuntimeException 发送失败时抛出（如客户已删除员工、被拉黑等）
+     * @throws WecomApiException 发送失败时抛出（如客户已删除员工、被拉黑等）
      */
     public void sendMessage(String sender, String externalUserid, String text) {
         String url = BASE_URL + "/externalcontact/message/send?access_token=" + getAccessToken();
@@ -621,9 +665,12 @@ public class WecomApiClient {
             bodyMap.put("text", Map.of("content", text));
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
-            parseOrThrow(resp, "发送消息");
+            parseAndCheck(resp, "发送消息");
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("发送消息失败: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "发送消息失败: " + e.getMessage(), null);
         }
     }
 
@@ -644,38 +691,68 @@ public class WecomApiClient {
     }
 
     /**
-     * 解析企微 API 响应并校验错误码。
+     * 解析企微 API 响应并校验错误码，非零 errcode 抛出对应的异常子类。
      * <p>
      * 响应被解析为 {@link JsonNode} 后，检查 {@code errcode} 字段：
      * <ul>
-     *   <li>{@code errcode == 0 || errcode 不存在} — 视为成功，返回节点</li>
-     *   <li>{@code errcode != 0} — 记录错误日志，但<b>不抛异常</b>，
-     *       将原始节点返回给调用方，由调用方根据 errcode 做分类处理
-     *       （如 {@link WecomErrorCodes#RATE_LIMITED} 触发熔断）</li>
-     *   <li>JSON 解析失败 — 直接抛出 {@link RuntimeException}</li>
+     *   <li>{@code errcode == 0} — 视为成功，返回节点</li>
+     *   <li>{@code errcode != 0} — 通过 {@link #throwWecomException(int, String, String)}
+     *       抛出对应的 {@link WecomApiException} 子类</li>
+     *   <li>JSON 解析失败 — 抛出 {@link WecomTransientException}</li>
      * </ul>
      * <p>
-     * 这种设计使得调用方可以统一处理企微的错误码，而不是在每个 API 方法中重复 try-catch。
+     * 调用方无需再手动检查 errcode，返回的 JsonNode 保证 errcode=0。
      *
      * @param resp   企微返回的原始 JSON 字符串
      * @param action 当前操作名称（仅用于日志，如 "创建活码"、"打标签"）
-     * @return 解析后的 JsonNode 对象
-     * @throws RuntimeException JSON 解析失败或网络响应异常时抛出
+     * @return 解析后的 JsonNode 对象（保证 errcode=0）
+     * @throws WecomApiException 及其子类：errcode != 0 或 JSON 解析失败
      */
-    private JsonNode parseOrThrow(String resp, String action) {
+    private JsonNode parseAndCheck(String resp, String action) {
         try {
             JsonNode node = objectMapper.readTree(resp);
-            int code = node.has("errcode") ? node.get("errcode").asInt() : -1;
+            int code = node.has("errcode") ? node.get("errcode").asInt() : 0;
             if (code != 0) {
-                String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "";
+                String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "未知错误";
                 log.error("{} 失败: errcode={} errmsg={}", action, code, errmsg);
-                // 不抛异常，返回原始节点让调用方根据 errcode 做分类处理
+                throwWecomException(code, errmsg, resp);
             }
             return node;
+        } catch (WecomApiException e) {
+            throw e;
         } catch (Exception e) {
             log.error("{} 解析响应异常: {}", action, resp, e);
-            throw new RuntimeException(action + " 失败: " + resp, e);
+            throw new WecomTransientException(-1,
+                action + " 响应解析失败: " + e.getMessage(), resp);
         }
+    }
+
+    /**
+     * 根据企微 errcode 抛出对应的异常子类。
+     *
+     * <p>分类规则：
+     * <ul>
+     *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
+     *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
+     *   <li>-1（网络/解析异常）、≥50000（服务端错误）→ {@link WecomTransientException}</li>
+     *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
+     * </ul>
+     *
+     * @param errcode 企微 API 返回的错误码
+     * @param errmsg  企微 API 返回的错误信息
+     * @param body    原始响应体
+     */
+    private void throwWecomException(int errcode, String errmsg, String body) {
+        if (errcode == 42001 || errcode == 40014) {
+            throw new WecomTokenExpiredException(errcode, errmsg, body);
+        }
+        if (errcode == 45009) {
+            throw new WecomRateLimitException(errcode, errmsg, body, 60);
+        }
+        if (errcode == -1 || errcode >= 50000) {
+            throw new WecomTransientException(errcode, errmsg, body);
+        }
+        throw new WecomPermanentException(errcode, errmsg, body);
     }
 
     // ========================================================================
@@ -700,25 +777,19 @@ public class WecomApiClient {
      *
      * @param code OAuth 授权临时 code（有效期 5 分钟，仅可使用一次）
      * @return JsonNode 含 errcode + UserId
-     * @throws RuntimeException 接口调用失败时抛出
+     * @throws WecomApiException 接口调用失败时抛出
      */
     public JsonNode getUserInfo(String code) {
         String token = getAccessToken();
         String url = BASE_URL + "/user/getuserinfo?access_token=" + token + "&code=" + code;
         try {
             String resp = restTemplate.getForObject(url, String.class);
-            JsonNode node = objectMapper.readTree(resp);
-            int errcode = node.has("errcode") ? node.get("errcode").asInt() : -1;
-            if (errcode != 0) {
-                String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "未知错误";
-                log.error("getuserinfo 失败: errcode={}, errmsg={}", errcode, errmsg);
-                throw new RuntimeException("获取用户信息失败 [" + errcode + "]: " + errmsg);
-            }
-            return node;
-        } catch (RuntimeException e) {
+            return parseAndCheck(resp, "获取用户信息");
+        } catch (WecomApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException("getuserinfo 请求异常: " + e.getMessage(), e);
+            throw new WecomTransientException(-1,
+                "getuserinfo 请求异常: " + e.getMessage(), null);
         }
     }
 

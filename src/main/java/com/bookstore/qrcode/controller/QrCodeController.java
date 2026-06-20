@@ -309,10 +309,7 @@ public class QrCodeController {
         log.info("DB 同步失败，降级为直接调企微 API");
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
-            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
-                log.warn("企微 API 获取员工列表失败: {}", result.get("errmsg").asText());
-                return List.of();
-            }
+            // parseAndCheck 保证 errcode=0
             List<Map<String, String>> list = new ArrayList<>();
             for (JsonNode u : result.get("userlist")) {
                 list.add(Map.of("userid", u.get("userid").asText(),
@@ -592,18 +589,12 @@ public class QrCodeController {
         List<Map<String, String>> userList = new ArrayList<>();
         try {
             JsonNode result = wecomApiClient.getUserSimplelist();
-
-            // 检查企微 API 返回码
-            if (result.has("errcode") && result.get("errcode").asInt() != 0) {
-                model.addAttribute("loadError", "成员列表加载失败: " + result.get("errmsg").asText());
-            } else {
-                // 遍历 userlist 数组，提取 userid 和 name
-                for (JsonNode u : result.get("userlist")) {
-                    String userid = u.get("userid").asText();
-                    String name = u.get("name").asText();
-                    userList.add(Map.of("userid", userid, "name", name));
-                    agentNameMap.put(userid, name);
-                }
+            // parseAndCheck 保证 errcode=0，直接遍历
+            for (JsonNode u : result.get("userlist")) {
+                String userid = u.get("userid").asText();
+                String name = u.get("name").asText();
+                userList.add(Map.of("userid", userid, "name", name));
+                agentNameMap.put(userid, name);
             }
         } catch (Exception e) {
             model.addAttribute("loadError", "成员列表加载失败: " + e.getMessage());

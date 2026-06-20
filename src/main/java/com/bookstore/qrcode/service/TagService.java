@@ -3,6 +3,7 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -334,10 +335,10 @@ public class TagService {
      * @throws RuntimeException 企微接口调用失败或返回数据异常时抛出
      */
     private String createWecomTag(String tagName, String groupKeyword) {
+        JsonNode resp;
         try {
             // 按关键词查找企微已有标签组（如 keyword="学校" 匹配 "学校" 标签组）
             String groupId = groupKeyword != null ? getGroupIdByKeyword(groupKeyword) : null;
-            JsonNode resp;
             if (groupId != null) {
                 // 在已有标签组下创建标签
                 log.info("标签 '{}' 归入企微标签组 groupId={} (keyword={})", tagName, groupId, groupKeyword);
@@ -348,9 +349,9 @@ public class TagService {
                 log.info("未找到关键词匹配的标签组，标签 '{}' 用 group_name='{}' 创建", tagName, fallbackGroup);
                 resp = wecomApi.addCorpTagWithGroup(tagName, fallbackGroup);
             }
-
+        } catch (WecomApiException e) {
             // 检查企微错误码 40071：标签名已存在（并发创建导致）
-            if (resp.has("errcode") && resp.get("errcode").asInt() == 40071) {
+            if (e.getErrcode() == 40071) {
                 log.info("企微标签已存在(40071)，从列表查找: name={}", tagName);
                 String existingId = findWecomTagIdByName(tagName);
                 if (existingId != null) {
@@ -359,38 +360,28 @@ public class TagService {
                 log.warn("企微标签已存在但列表中未匹配到，暂时跳过: name={}", tagName);
                 return null;
             }
+            // 其他错误码
+            log.warn("创建企微标签返回非零: name={}, errcode={}, errmsg={}",
+                tagName, e.getErrcode(), e.getErrmsg());
+            String existingId = findWecomTagIdByName(tagName);
+            if (existingId != null) return existingId;
+            return null;
+        }
 
-            // 检查其他错误码
-            if (resp.has("errcode") && resp.get("errcode").asInt() != 0) {
-                String errmsg = resp.has("errmsg") ? resp.get("errmsg").asText() : "";
-                log.warn("创建企微标签返回非零: name={}, errcode={}, errmsg={}",
-                    tagName, resp.get("errcode").asInt(), errmsg);
-                // 尝试从列表查找（可能标签已存在但返回了其他错误码）
-                String existingId = findWecomTagIdByName(tagName);
-                if (existingId != null) return existingId;
-                return null;
-            }
-
-            // 从企微返回中解析标签 ID
-            if (resp.has("tag_group")) {
-                JsonNode group = resp.get("tag_group");
-                if (group.has("tag")) {
-                    JsonNode tagNode = group.get("tag");
-                    if (tagNode.isArray() && tagNode.size() > 0) {
-                        String wecomTagId = tagNode.get(0).get("id").asText();
-                        log.info("企微标签已创建: name={}, wecomTagId={}, groupKeyword={}",
-                            tagName, wecomTagId, groupKeyword);
-                        return wecomTagId;
-                    }
+        // parseAndCheck 保证 errcode=0，从企微返回中解析标签 ID
+        if (resp.has("tag_group")) {
+            JsonNode group = resp.get("tag_group");
+            if (group.has("tag")) {
+                JsonNode tagNode = group.get("tag");
+                if (tagNode.isArray() && tagNode.size() > 0) {
+                    String wecomTagId = tagNode.get(0).get("id").asText();
+                    log.info("企微标签已创建: name={}, wecomTagId={}, groupKeyword={}",
+                        tagName, wecomTagId, groupKeyword);
+                    return wecomTagId;
                 }
             }
-            throw new RuntimeException("企微返回中未找到 tag id: " + resp);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("创建企微标签失败: name={}", tagName, e);
-            throw new RuntimeException("创建企微标签失败: " + tagName, e);
         }
+        throw new RuntimeException("企微返回中未找到 tag id: " + resp);
     }
 
     /**

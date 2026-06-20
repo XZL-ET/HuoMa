@@ -4,6 +4,7 @@ import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -192,14 +193,13 @@ public class QrCodeService {
             log.info("学校人数={}, 自动计算 initialAgentCount={}", req.getStudentCount(), need);
         }
 
-        // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败不影响事务）
+        // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败回滚事务）
         String qrRequestJson = buildContactWayJson(req);
-        JsonNode result = wecomApi.createContactWay(qrRequestJson);
-        // 企微 API errcode=0 表示成功，非 0 表示业务错误
-        int errcode = result.has("errcode") ? result.get("errcode").asInt() : 0;
-        if (errcode != 0) {
-            String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
-            throw new RuntimeException("创建企微活码失败 [" + errcode + "]: " + errmsg);
+        JsonNode result;
+        try {
+            result = wecomApi.createContactWay(qrRequestJson);
+        } catch (WecomApiException e) {
+            throw new RuntimeException("创建企微活码失败 [" + e.getErrcode() + "]: " + e.getErrmsg(), e);
         }
         // config_id 是企微端活码的唯一标识，后续更新/删除都依赖它
         String configId = result.get("config_id").asText();
@@ -466,77 +466,76 @@ public class QrCodeService {
             body.put("config_id", configId);
             body.put("user", new ArrayList<>(userIds));
             String json = objectMapper.writeValueAsString(body);
-            JsonNode result = wecomApi.updateContactWay(json);
-            int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
+            wecomApi.updateContactWay(json);
+            // parseAndCheck 确保 errcode=0 才会返回
+            log.info("同步企微活码成功: config_id={}, users={}", configId, userIds);
+            return;
 
-            if (errcode == 0) {
-                log.info("同步企微活码成功: config_id={}, users={}", configId, userIds);
+        } catch (WecomApiException we) {
+            // 可自愈错误（40098=未实名, 41054=未激活）→ 继续自愈流程
+            if (we.getErrcode() == 40098 || we.getErrcode() == 41054) {
+                log.error("同步企微活码失败 (errcode={}): config_id={}, users={}",
+                    we.getErrcode(), configId, userIds);
+
+                // 二分查找定位不可用用户
+                String badUserid = findFailingUser(configId, userIds);
+                if (badUserid == null) {
+                    log.error("活码 {} 无法通过二分查找定位不可用用户 (errcode={})", configId, we.getErrcode());
+                    throw new RuntimeException("无法定位不可用用户: errcode=" + we.getErrcode());
+                }
+
+                log.warn("Layer2自愈: 活码 {} 定位到不可用用户 userid={}, errcode={}",
+                    configId, badUserid, we.getErrcode());
+
+                // ① 从 qr_agent 移除
+                qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, badUserid).ifPresent(qa -> {
+                    qa.setStatus(QrAgent.AgentStatus.removed);
+                    qrAgentRepo.save(qa);
+                });
+
+                // ② 封锁 agent 并从全局池移除
+                poolService.blockAgentForWechatIssue(badUserid, we.getErrcode());
+
+                // ③ 从当前用户列表中移除
+                userIds.remove(badUserid);
+
+                // ④ 从全局池选取替代员工
+                Set<String> excludeUserids = new HashSet<>(userIds);
+                GlobalAgentPool replacement = poolService.takeStandby(excludeUserids);
+                if (replacement != null) {
+                    userIds.add(replacement.getAgentUserid());
+                    int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId)
+                        .stream().mapToInt(QrAgent::getSortOrder).max().orElse(0);
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(replacement.getAgentUserid())
+                        .role(QrAgent.AgentRole.receptionist)
+                        .dailyMax(replacement.getDailyMax())
+                        .sortOrder(maxOrder + 1)
+                        .status(QrAgent.AgentStatus.active).build());
+                    log.info("Layer2自愈: 活码 {} 替代 {} -> {} (attempt={})",
+                        qrCodeId, badUserid, replacement.getAgentUserid(), attempt + 1);
+                } else {
+                    log.warn("Layer2自愈: 活码 {} 无替代员工可用（池枯竭），移除 {} 后继续",
+                        qrCodeId, badUserid);
+                }
+
+                // ⑤ 创建告警
+                alertService.createAlert(badUserid, "wechat_unavailable",
+                    AgentAlert.AlertSeverity.medium,
+                    String.format("企微不可用员工已被自愈移除: userid=%s errcode=%d 活码=%d 替换=%s",
+                        badUserid, we.getErrcode(), qrCodeId,
+                        replacement != null ? replacement.getAgentUserid() : "无"),
+                    AgentAlert.AutoAction.removed, qrCodeId);
+
+                // 重试
+                syncQrUsersToWechatWithHealing(qrCodeId, configId, userIds, attempt + 1);
                 return;
             }
 
             // 非可自愈错误：直接抛异常
-            if (errcode != 40098 && errcode != 41054) {
-                String errmsg = result.has("errmsg") ? result.get("errmsg").asText() : "未知错误";
-                throw new RuntimeException(String.format(
-                    "同步企微活码失败 config_id=%s errcode=%d errmsg=%s",
-                    configId, errcode, errmsg));
-            }
-
-            log.error("同步企微活码失败 (errcode={}): config_id={}, users={}",
-                errcode, configId, userIds);
-
-            // 二分查找定位不可用用户
-            String badUserid = findFailingUser(configId, userIds);
-            if (badUserid == null) {
-                log.error("活码 {} 无法通过二分查找定位不可用用户 (errcode={})", configId, errcode);
-                throw new RuntimeException("无法定位不可用用户: errcode=" + errcode);
-            }
-
-            log.warn("Layer2自愈: 活码 {} 定位到不可用用户 userid={}, errcode={}",
-                configId, badUserid, errcode);
-
-            // ① 从 qr_agent 移除
-            qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, badUserid).ifPresent(qa -> {
-                qa.setStatus(QrAgent.AgentStatus.removed);
-                qrAgentRepo.save(qa);
-            });
-
-            // ② 封锁 agent 并从全局池移除
-            poolService.blockAgentForWechatIssue(badUserid, errcode);
-
-            // ③ 从当前用户列表中移除
-            userIds.remove(badUserid);
-
-            // ④ 从全局池选取替代员工
-            Set<String> excludeUserids = new HashSet<>(userIds);
-            GlobalAgentPool replacement = poolService.takeStandby(excludeUserids);
-            if (replacement != null) {
-                userIds.add(replacement.getAgentUserid());
-                int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId)
-                    .stream().mapToInt(QrAgent::getSortOrder).max().orElse(0);
-                qrAgentRepo.save(QrAgent.builder()
-                    .qrCodeId(qrCodeId).agentUserid(replacement.getAgentUserid())
-                    .role(QrAgent.AgentRole.receptionist)
-                    .dailyMax(replacement.getDailyMax())
-                    .sortOrder(maxOrder + 1)
-                    .status(QrAgent.AgentStatus.active).build());
-                log.info("Layer2自愈: 活码 {} 替代 {} -> {} (attempt={})",
-                    qrCodeId, badUserid, replacement.getAgentUserid(), attempt + 1);
-            } else {
-                log.warn("Layer2自愈: 活码 {} 无替代员工可用（池枯竭），移除 {} 后继续",
-                    qrCodeId, badUserid);
-            }
-
-            // ⑤ 创建告警
-            alertService.createAlert(badUserid, "wechat_unavailable",
-                AgentAlert.AlertSeverity.medium,
-                String.format("企微不可用员工已被自愈移除: userid=%s errcode=%d 活码=%d 替换=%s",
-                    badUserid, errcode, qrCodeId,
-                    replacement != null ? replacement.getAgentUserid() : "无"),
-                AgentAlert.AutoAction.removed, qrCodeId);
-
-            // 重试
-            syncQrUsersToWechatWithHealing(qrCodeId, configId, userIds, attempt + 1);
+            throw new RuntimeException(String.format(
+                "同步企微活码失败 config_id=%s errcode=%d errmsg=%s",
+                configId, we.getErrcode(), we.getErrmsg()), we);
 
         } catch (RuntimeException e) {
             throw e;
@@ -567,13 +566,16 @@ public class QrCodeService {
                 body.put("config_id", configId);
                 body.put("user", new ArrayList<>(leftHalf));
                 String json = objectMapper.writeValueAsString(body);
-                JsonNode result = wecomApi.updateContactWay(json);
-                int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
-
-                if (errcode == 40098 || errcode == 41054) {
+                wecomApi.updateContactWay(json);
+                // parseAndCheck 保证 errcode=0，左半正常
+                left = mid;
+            } catch (WecomApiException e) {
+                if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
                     right = mid;  // 不可用用户在左半
                 } else {
-                    left = mid;   // 左半正常，不可用用户在右半
+                    // 非可自愈错误，退化为线性扫描
+                    log.warn("二分查找遇到非可自愈错误 errcode={}，退化为线性扫描", e.getErrcode());
+                    break;
                 }
             } catch (Exception e) {
                 // API 调用异常时退化为线性扫描
@@ -590,9 +592,10 @@ public class QrCodeService {
                 body.put("config_id", configId);
                 body.put("user", List.of(uid));
                 String json = objectMapper.writeValueAsString(body);
-                JsonNode result = wecomApi.updateContactWay(json);
-                int errcode = result.has("errcode") ? result.get("errcode").asInt() : -1;
-                if (errcode == 40098 || errcode == 41054) {
+                wecomApi.updateContactWay(json);
+                // parseAndCheck 保证 errcode=0，该用户正常
+            } catch (WecomApiException e) {
+                if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
                     return uid;
                 }
             } catch (Exception ex) {
@@ -1208,13 +1211,11 @@ public class QrCodeService {
             String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
             try {
                 JsonNode result = wecomApi.getUserSimplelist();
-                // 企微成员列表 API：errcode=0 表示成功，非 0 或字段缺失则跳过
-                if (!result.has("errcode") || result.get("errcode").asInt() == 0) {
-                    for (JsonNode u : result.get("userlist")) {
-                        if (userid.equals(u.get("userid").asText())) {
-                            name = u.get("name").asText();
-                            break;
-                        }
+                // parseAndCheck 保证 errcode=0
+                for (JsonNode u : result.get("userlist")) {
+                    if (userid.equals(u.get("userid").asText())) {
+                        name = u.get("name").asText();
+                        break;
                     }
                 }
             } catch (Exception e) {
