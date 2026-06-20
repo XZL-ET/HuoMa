@@ -52,6 +52,7 @@ public class CustomerService {
     private final TagRepository tagRepo;
     private final WecomApiClient wecomApi;
     private final StringRedisTemplate redisTemplate;
+    private final MessageGuardService messageGuardService;
     private final ObjectMapper objectMapper;
     private final EntityManager entityManager;
 
@@ -138,9 +139,20 @@ public class CustomerService {
                     return retry.getId();
                 }
             }
-            // 重试耗尽：赢家事务可能异常回滚，记录告警后放弃本条消息
-            // （消息已在 Stream 中被 ACK，不会重试；极端情况下通过 repairCustomerData 兜底）
-            log.error("[ALERT] 客户并发插入锁竞争失败: external={}, 重试10次后仍未查到记录", externalUserId);
+            // 重试耗尽：赢家事务可能异常回滚，入 DLQ 由 PatrolWorker 重放
+            log.error("[ALERT] upsert 锁竞争超限，消息入 DLQ: external={}", externalUserId);
+            try {
+                Map<String, String> dlqEntry = new LinkedHashMap<>();
+                dlqEntry.put("source", "upsert-lock-exhaustion");
+                dlqEntry.put("external_userid", externalUserId);
+                dlqEntry.put("user_id", userId);
+                dlqEntry.put("qr_code_id", qrCodeId != null ? String.valueOf(qrCodeId) : "");
+                dlqEntry.put("school_id", schoolId != null ? schoolId : "");
+                dlqEntry.put("timestamp", String.valueOf(System.currentTimeMillis()));
+                messageGuardService.sendToDlq(RedisConfig.CALLBACK_STREAM_KEY, dlqEntry);
+            } catch (Exception dlqEx) {
+                log.error("[CRITICAL] DLQ 写入也失败，消息永久丢失: external={}", externalUserId, dlqEx);
+            }
             return null;
         }
 

@@ -393,6 +393,31 @@ public class MessageGuardService {
     // ================================================================
 
     /**
+     * 直接将消息写入死信队列（不入重试流程）。
+     *
+     * <p>用于 {@link CustomerService#upsertFromCallback} 等场景：
+     * Redis 锁竞争超限后直接降级到 DLQ，不经过 markRetryOrDead 的重试逻辑。</p>
+     *
+     * @param originStreamKey 来源 Stream Key（标记消息来源，如 {@link RedisConfig#CALLBACK_STREAM_KEY}）
+     * @param fields          消息字段（会追加 _dlq_origin_stream / _dlq_time 等元数据）
+     */
+    public void sendToDlq(String originStreamKey, Map<String, String> fields) {
+        try {
+            Map<String, String> dlqFields = new LinkedHashMap<>(fields);
+            dlqFields.put("_dlq_origin_stream", originStreamKey);
+            dlqFields.put("_dlq_time", Instant.now().toString());
+
+            redisTemplate.opsForStream().add(RedisConfig.DLQ_STREAM_KEY, dlqFields);
+            redisTemplate.opsForStream().trim(RedisConfig.DLQ_STREAM_KEY,
+                RedisConfig.DLQ_STREAM_MAXLEN, true);
+
+            log.warn("消息直接入 DLQ: originStream={}, fields={}", originStreamKey, fields);
+        } catch (Exception e) {
+            log.error("DLQ 直接写入失败: originStream={}", originStreamKey, e);
+        }
+    }
+
+    /**
      * 将消息移入死信队列。
      */
     private void moveToDlq(String streamKey, String messageId,
