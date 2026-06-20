@@ -261,6 +261,30 @@ public class TagWorker {
     private void processEvent(String eventJson) throws Exception {
         if (eventJson == null) return;
         JsonNode event = objectMapper.readTree(eventJson);
+
+        // Check for form_submit event type first
+        if (event.has("type")) {
+            String type = event.get("type").asText();
+            if ("form_submit".equals(type)) {
+                String externalUserId = getField(event, "external_userid");
+                String userId = getField(event, "userid");
+                Long formTemplateId = event.has("form_template_id")
+                    ? Long.valueOf(event.get("form_template_id").asText()) : null;
+                Long submissionId = event.has("submission_id")
+                    ? Long.valueOf(event.get("submission_id").asText()) : null;
+                String fieldData = event.has("field_data")
+                    ? event.get("field_data").asText() : "{}";
+
+                if (externalUserId == null || userId == null || formTemplateId == null) {
+                    log.warn("form_submit 事件缺少关键字段");
+                    return;
+                }
+                tagService.applyFormTags(externalUserId, userId,
+                    formTemplateId, submissionId, fieldData);
+                return;
+            }
+        }
+
         // 注意：Jackson NullNode.asText() 返回字符串 "null"，必须用 isNull() 判断
         String externalUserId = (event.has("external_userid") && !event.get("external_userid").isNull())
             ? event.get("external_userid").asText() : null;
@@ -276,5 +300,10 @@ public class TagWorker {
         }
 
         tagService.autoTag(externalUserId, userId, state);
+    }
+
+    private String getField(com.fasterxml.jackson.databind.JsonNode event, String field) {
+        return event.has(field) && !event.get(field).isNull()
+            ? event.get(field).asText() : null;
     }
 }

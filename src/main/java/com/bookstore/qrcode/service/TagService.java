@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.wecom.WecomApiException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,8 @@ public class TagService {
     private final CustomerTagRepository customerTagRepo;
     private final CustomerRepository customerRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final FormTemplateRepository formTemplateRepo;
+    private final FormSubmissionRepository formSubmissionRepo;
     private final WecomApiClient wecomApi;
 
     /**
@@ -711,6 +714,71 @@ public class TagService {
         } catch (Exception e) {
             // 表单打标是附加操作，异常不应影响主流程
             log.error("表单打标异常: external={}", externalUserId, e);
+        }
+    }
+
+    /**
+     * 表单提交后异步打标+备注（由 TagWorker 消费 form_submit 事件调用）。
+     */
+    @Transactional
+    public void applyFormTags(String externalUserId, String userId,
+                               Long formTemplateId, Long submissionId, String fieldDataJson) {
+        try {
+            FormTemplate tpl = formTemplateRepo.findById(formTemplateId).orElse(null);
+            if (tpl == null) { log.warn("表单模板不存在: {}", formTemplateId); return; }
+
+            Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
+            if (customer == null) { log.warn("客户不存在: {}", externalUserId); return; }
+
+            JsonNode fieldData = new ObjectMapper().readTree(fieldDataJson);
+            JsonNode tagMapping = new ObjectMapper().readTree(tpl.getTagMapping());
+
+            List<String> appliedTags = new ArrayList<>();
+            final String[] remarkText = { null };
+
+            java.util.Iterator<String> fn = fieldData.fieldNames();
+            while (fn.hasNext()) {
+                String fieldName = fn.next();
+                String fieldValue = fieldData.get(fieldName).asText();
+                if (fieldValue == null || fieldValue.isBlank()) continue;
+
+                String action = tagMapping.has(fieldName)
+                    ? tagMapping.get(fieldName).asText() : null;
+                if (action == null) continue;
+
+                if ("tag".equals(action)) {
+                    Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, "学校");
+                    bindCustomerTag(customer.getId(), tag.getId(), "form");
+                    if (tag.getWecomTagId() != null) {
+                        wecomApi.markTag(externalUserId, userId, List.of(tag.getWecomTagId()));
+                        appliedTags.add(tag.getName());
+                    }
+                }
+            }
+
+            // 按 remark_template 拼接备注
+            if (tpl.getRemarkTemplate() != null && !tpl.getRemarkTemplate().isBlank()) {
+                remarkText[0] = tpl.getRemarkTemplate();
+                java.util.Iterator<String> fn2 = fieldData.fieldNames();
+                while (fn2.hasNext()) {
+                    String key = fn2.next();
+                    String val = fieldData.get(key).asText();
+                    remarkText[0] = remarkText[0].replace("{{" + key + "}}", val != null ? val : "");
+                }
+                wecomApi.updateRemark(userId, externalUserId, remarkText[0]);
+            }
+
+            // 回填 submission 记录
+            formSubmissionRepo.findById(submissionId).ifPresent(sub -> {
+                sub.setTagsApplied(String.join(",", appliedTags));
+                sub.setRemarkUpdated(remarkText[0]);
+                formSubmissionRepo.save(sub);
+            });
+
+            log.info("表单打标完成: external={}, tags={}, remark={}", externalUserId, appliedTags, remarkText[0]);
+        } catch (Exception e) {
+            log.error("表单打标异常: external={}", externalUserId, e);
+            throw new RuntimeException("表单打标失败", e);
         }
     }
 }
