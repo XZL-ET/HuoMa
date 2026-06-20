@@ -206,6 +206,53 @@ public class WechatSyncHealingService {
         }
     }
 
+    /**
+     * 自愈移除不可用成员后，从全局池补充 1 名替补接待员。
+     *
+     * <p>由调用方在 {@link #syncWithHealing} 返回
+     * {@link SyncResult#needReplacement} = true 时调用。
+     * 该方法负责从全局池取 1 名 standby 员工加入活码的 QrAgent 表。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void supplementReplacement(Long qrCodeId) {
+        // 构建排除列表：当前活码上未移除的员工
+        Set<String> excludeUserids = new java.util.HashSet<>();
+        qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .map(QrAgent::getAgentUserid)
+            .forEach(excludeUserids::add);
+
+        GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+        if (backup == null) {
+            log.warn("自愈补充失败：全局池无 standby, qrCodeId={}", qrCodeId);
+            QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
+            String schoolName = qr != null ? qr.getSchoolName() : String.valueOf(qrCodeId);
+            alertService.alertEmptyBackup(qrCodeId, schoolName);
+            return;
+        }
+        String backupUserid = backup.getAgentUserid();
+
+        // 计算 sortOrder = 当前活码最大 sortOrder + 1
+        int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).stream()
+            .mapToInt(QrAgent::getSortOrder)
+            .max().orElse(-1);
+
+        QrAgent newAgent = QrAgent.builder()
+            .qrCodeId(qrCodeId)
+            .agentUserid(backupUserid)
+            .role(QrAgent.AgentRole.receptionist)
+            .dailyMax(backup.getDailyMax())
+            .sortOrder(maxOrder + 1)
+            .status(QrAgent.AgentStatus.active)
+            .build();
+        qrAgentRepo.save(newAgent);
+
+        log.info("自愈补充: 活码{} 加入替补 {}, sortOrder={}",
+            qrCodeId, backupUserid, maxOrder + 1);
+    }
+
     private List<String> extractUsers(JsonNode detail) {
         List<String> users = new ArrayList<>();
         JsonNode userList = detail.path("user");

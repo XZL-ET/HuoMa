@@ -308,7 +308,13 @@ public class AgentRotationService {
         }
 
         // 委托给 WechatSyncHealingService
-        healingService.syncWithHealing(qrCodeId, userIds, "agent-rotation");
+        WechatSyncHealingService.SyncResult result =
+            healingService.syncWithHealing(qrCodeId, userIds, "agent-rotation");
+
+        // 自愈移除不可用成员后，从全局池补充替补
+        if (result.needReplacement) {
+            healingService.supplementReplacement(qrCodeId);
+        }
     }
 
     /**

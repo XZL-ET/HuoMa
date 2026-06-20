@@ -434,6 +434,11 @@ public class QrCodeService {
         WechatSyncHealingService.SyncResult result =
             healingService.syncWithHealing(qrCodeId, userIds, "qr-service");
 
+        // 自愈移除不可用成员后，从全局池补充替补
+        if (result.needReplacement) {
+            healingService.supplementReplacement(qrCodeId);
+        }
+
         if (!result.success) {
             log.error("同步企微活码失败: qrCodeId={}, reason={}", qrCodeId, result.reason);
             throw new RuntimeException("同步企微活码失败: " + result.reason);
