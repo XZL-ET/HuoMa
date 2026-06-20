@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpHeaders;
@@ -85,6 +86,7 @@ public class DownloadCenterController {
     /**
      * 开发环境快捷登录：直接指定 userid 写入 Session，跳过企微 OAuth。
      */
+    @Profile("dev")
     @GetMapping("/oauth/dev-login")
     public String devLogin(@RequestParam String userid,
                            HttpSession session,

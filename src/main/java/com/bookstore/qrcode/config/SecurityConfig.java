@@ -38,6 +38,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/wecom/callback/**").permitAll()
                         // Actuator 健康检查：供 K8s 探针使用
                         .requestMatchers("/actuator/health/**").permitAll()
+                        .requestMatchers("/actuator/metrics/**").hasRole("ADMIN")
                         // 下载中心全部路径：由 DownloadAuthenticationFilter 独立处理认证
                         .requestMatchers("/download/**").permitAll()
                         // 用户管理：仅 admin 可访问

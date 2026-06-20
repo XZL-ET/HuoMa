@@ -1,12 +1,16 @@
 [Unit]
 Description=Bookstore WeCom QR Code Platform
-After=network.target mysql.service redis-server.service
+After=network.target nginx.service
 
 [Service]
-User=root
+User=huoma
+Group=huoma
 WorkingDirectory=/opt/HuoMa
 EnvironmentFile=/etc/systemd/system/huoma.env
-ExecStart=/bin/bash -c "exec /usr/bin/java -jar -Xms512m -Xmx2g -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/huoma/ -Duser.timezone=Asia/Shanghai -Dspring.profiles.active=prod /opt/HuoMa/target/bookstore-qrcode-0.1.0.jar >> /var/log/huoma/stdout.log 2>&1"
+ExecStart=/bin/bash -c "exec /usr/bin/java -jar -Xms512m -Xmx2g -XX:+UseG1GC \
+    -XX:+HeapDumpOnOutOfMemoryError -XX:+ExitOnOutOfMemoryError \
+    -XX:HeapDumpPath=/var/log/huoma/ -Duser.timezone=Asia/Shanghai \
+    -Dspring.profiles.active=prod /opt/HuoMa/target/bookstore-qrcode-0.1.0.jar"
 Restart=always
 RestartSec=5
 StartLimitBurst=5
