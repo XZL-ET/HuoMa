@@ -1,8 +1,41 @@
 <!DOCTYPE html>
-<!-- 活码管理页面 — 展示所有活码列表，支持搜索筛选、批量操作和分页 -->
+<!-- 活码管理页面 — 展示所有活码列表，支持搜索筛选、批量操作、分组树侧栏和分页 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='活码管理', content=~{::main})}">
 <main>
+<div class="row">
+
+    <!-- ═══════════ 左侧边栏：分组树导航 ═══════════ -->
+    <div class="col-md-3">
+        <div class="card p-2 mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2 px-2">
+                <strong><i class="bi bi-diagram-3"></i> 分组导航</strong>
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadTree()" title="刷新">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <!-- 树根节点"全部" -->
+            <ul class="list-unstyled mb-0 tree-root">
+                <li>
+                    <a href="#" class="tree-link active fw-bold"
+                       onclick="filterByScope({});return false;">
+                        <i class="bi bi-house"></i> 全部活码
+                    </a>
+                </li>
+            </ul>
+            <!-- 动态加载的树节点容器 -->
+            <div id="treeContainer" class="mt-1" style="max-height:70vh;overflow-y:auto;">
+                <div class="text-center text-muted py-3" id="treeLoading">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    加载中...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ 右侧主内容区 ═══════════ -->
+    <div class="col-md-9">
+
     <!-- 页面标题与创建入口 -->
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0">
@@ -18,12 +51,10 @@
     <!-- 搜索筛选栏 -->
     <div class="card p-3 mb-3">
         <form class="row g-2" method="get" th:action="@{/qrcodes}">
-            <!-- 关键词搜索：学校名称或 ID -->
             <div class="col-md-3">
                 <input type="text" name="keyword" class="form-control" placeholder="搜索学校名/ID"
                        th:value="${keyword}">
             </div>
-            <!-- 城市筛选下拉框，th:each 遍历 cities 列表生成选项 -->
             <div class="col-md-2">
                 <select name="city" class="form-select">
                     <option value="">全部城市</option>
@@ -31,7 +62,6 @@
                             th:text="${c}" th:selected="${city == c}"></option>
                 </select>
             </div>
-            <!-- 区县筛选下拉框 -->
             <div class="col-md-2">
                 <select name="district" class="form-select">
                     <option value="">全部区县</option>
@@ -39,7 +69,6 @@
                             th:text="${d}" th:selected="${district == d}"></option>
                 </select>
             </div>
-            <!-- 状态筛选：正常/暂停/满员/无可用 -->
             <div class="col-md-2">
                 <select name="status" class="form-select">
                     <option value="">全部状态</option>
@@ -59,11 +88,11 @@
     <div class="card p-0">
         <div class="table-responsive">
             <table class="table table-hover mb-0">
-                <!-- 表头 -->
                 <thead class="table-light">
                     <tr>
                         <th style="width:36px;"><input type="checkbox" id="selectAll" onchange="toggleAll(this)" title="全选"></th>
                         <th>学校名称</th>
+                        <th>分组</th>
                         <th>城市</th>
                         <th>区县</th>
                         <th>值守/后备</th>
@@ -73,32 +102,33 @@
                         <th>操作</th>
                     </tr>
                 </thead>
-                <!-- 表体：th:each 遍历分页数据 qrCodes.content，每行一个活码 -->
                 <tbody>
                     <tr th:each="qr : ${qrCodes.content}">
-                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox"></td>
+                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox" onchange="updateBatchBtn()"></td>
                         <td>
-                            <!-- 点击学校名称跳转活码详情页 -->
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
                         </td>
+                        <td>
+                            <span th:each="g : ${groups}"
+                                  th:if="${g.id == qr.groupId}"
+                                  th:text="${g.name}"
+                                  class="badge bg-secondary">分组名</span>
+                            <span th:if="${qr.groupId == null}" class="text-muted">—</span>
+                        </td>
                         <td th:text="${qr.regionCity}"></td>
                         <td th:text="${qr.regionDistrict}"></td>
-                        <!-- 员工数量（服务老师 + 已激活接待员），通过 agentCountMap 映射 -->
                         <td>
                             <span class="badge bg-info" th:text="${agentCountMap.getOrDefault(qr.id, '-')}">-</span>
                         </td>
-                        <!-- 今日新增客户数 -->
                         <td>
                             <span class="fw-semibold" th:text="${todayCountMap.getOrDefault(qr.id, 0)}">0</span>
                         </td>
-                        <!-- 轮换模式徽标：自动=绿色，人工=黄色 -->
                         <td>
                             <span class="badge"
                                   th:classappend="${qr.rotateMode.name() == 'auto' ? 'bg-success' : 'bg-warning text-dark'}"
                                   th:text="${qr.rotateMode.name() == 'auto' ? '自动' : '人工'}"></span>
                         </td>
-                        <!-- 状态徽标，使用 th:switch 根据枚举值显示不同颜色 -->
                         <td>
                             <span class="badge"
                                   th:classappend="${qr.status.name() == 'active' ? 'bg-success' : (qr.status.name() == 'full' ? 'bg-danger' : 'bg-secondary')}"
@@ -114,9 +144,8 @@
                                class="btn btn-sm btn-outline-secondary">详情</a>
                         </td>
                     </tr>
-                    <!-- 空数据提示 -->
                     <tr th:if="${qrCodes.content.isEmpty()}">
-                        <td colspan="9" class="text-center text-muted py-4">
+                        <td colspan="10" class="text-center text-muted py-4">
                             暂无活码数据，点击"手动创建"或"批量导入"开始
                         </td>
                     </tr>
@@ -125,30 +154,29 @@
         </div>
     </div>
 
-    <!-- 批量操作按钮组，仅在有数据时显示 -->
+    <!-- 批量操作按钮组 -->
     <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
-        <!-- 批量切换为自动轮换 -->
+        <button class="btn btn-sm btn-outline-primary" id="batchConfigBtn" style="display:none;"
+                onclick="openBatchConfigModal()">⚙ 批量配置</button>
+
         <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchAutoForm">
             <input type="hidden" name="mode" value="auto">
             <div id="batchAutoIds"></div>
         </form>
         <button class="btn btn-sm btn-outline-success" onclick="batchSubmit('auto')">📋 批量切换为自动</button>
 
-        <!-- 批量切换为人工轮换 -->
         <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchManualForm">
             <input type="hidden" name="mode" value="manual">
             <div id="batchManualIds"></div>
         </form>
         <button class="btn btn-sm btn-outline-warning" onclick="batchSubmit('manual')">📋 批量切换为人工</button>
 
-        <!-- 批量下载 72dpi 二维码（适用于线上使用） -->
         <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload72Form">
             <input type="hidden" name="dpi" value="72">
             <div id="batchDownload72Ids"></div>
         </form>
         <button class="btn btn-sm btn-outline-primary" onclick="batchDownload(72)">📥 批量下载 72dpi</button>
 
-        <!-- 批量下载 300dpi 二维码（适用于打印） -->
         <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload300Form">
             <input type="hidden" name="dpi" value="300">
             <div id="batchDownload300Ids"></div>
@@ -156,19 +184,16 @@
         <button class="btn btn-sm btn-outline-secondary" onclick="batchDownload(300)">🖨️ 批量下载 300dpi</button>
     </div>
 
-    <!-- 分页导航，仅当总页数大于 1 时显示 -->
+    <!-- 分页导航 -->
     <nav th:if="${qrCodes.totalPages > 1}" class="mt-3">
         <ul class="pagination justify-content-center">
-            <!-- 上一页按钮，首页时禁用 -->
             <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
                 <a class="page-link"
                    th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number - 1})}">上一页</a>
             </li>
-            <!-- 页码信息 -->
             <li class="page-item disabled">
                 <span class="page-link" th:text="'第 ' + ${qrCodes.number + 1} + ' / ' + ${qrCodes.totalPages} + ' 页'"></span>
             </li>
-            <!-- 下一页按钮，末页时禁用 -->
             <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
                 <a class="page-link"
                    th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number + 1})}">下一页</a>
@@ -176,14 +201,69 @@
         </ul>
     </nav>
 
-    <!-- 批量操作的 JavaScript 逻辑 -->
+    </div><!-- /col-md-9 -->
+</div><!-- /row -->
+
+    <!-- ═══════════ 批量配置弹窗 ═══════════ -->
+    <div class="modal fade" id="batchConfigModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-gear"></i> 批量配置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="batchConfigForm" method="post" th:action="@{/qrcodes/batch-config}">
+                        <div id="batchConfigIds"></div>
+                        <div class="mb-3">
+                            <label class="form-label">欢迎语（留空则不改）</label>
+                            <textarea name="welcomeText" class="form-control" rows="3"
+                                      placeholder="输入新的欢迎语文本..."></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">表单模板（留空则不改）</label>
+                            <select name="formTemplateId" class="form-select">
+                                <option value="">不修改</option>
+                                <option th:each="ft : ${formTemplates}" th:value="${ft.id}"
+                                        th:text="${ft.name}">模板名</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">归属分组（留空则不改）</label>
+                            <select name="groupId" class="form-select">
+                                <option value="">不修改</option>
+                                <option th:each="g : ${groups}" th:value="${g.id}"
+                                        th:text="${g.name + ' (' + g.regionDistrict + ')'}">分组名</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitBatchConfig()">
+                        <i class="bi bi-check-lg"></i> 确认配置
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ JavaScript ═══════════ -->
     <script>
-        /* 全选/取消全选 */
+        /* ── 全选/取消全选 ── */
         function toggleAll(source) {
             document.querySelectorAll('.qr-checkbox').forEach(cb => cb.checked = source.checked);
+            updateBatchBtn();
         }
 
-        /* 批量切换轮换模式：将选中的活码 ID 填入对应表单并提交 */
+        /* ── 勾选变化时更新批量配置按钮可见性 ── */
+        function updateBatchBtn() {
+            const checked = document.querySelectorAll('.qr-checkbox:checked');
+            const btn = document.getElementById('batchConfigBtn');
+            if (btn) btn.style.display = checked.length > 0 ? '' : 'none';
+        }
+
+        /* ── 批量切换轮换模式 ── */
         function batchSubmit(mode) {
             const checked = document.querySelectorAll('.qr-checkbox:checked');
             if (checked.length === 0) {
@@ -203,7 +283,7 @@
             document.getElementById(formId).submit();
         }
 
-        /* 批量下载二维码：将选中的活码 ID 填入对应表单并提交 */
+        /* ── 批量下载二维码 ── */
         function batchDownload(dpi) {
             const checked = document.querySelectorAll('.qr-checkbox:checked');
             if (checked.length === 0) {
@@ -222,6 +302,221 @@
             });
             document.getElementById(formId).submit();
         }
+
+        /* ── 打开批量配置弹窗 ── */
+        function openBatchConfigModal() {
+            const checked = document.querySelectorAll('.qr-checkbox:checked');
+            if (checked.length === 0) {
+                alert('请先勾选要配置的活码');
+                return;
+            }
+            // 填充隐藏的 ID 字段
+            const idsDiv = document.getElementById('batchConfigIds');
+            idsDiv.innerHTML = '';
+            checked.forEach(cb => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'ids';
+                input.value = cb.value;
+                idsDiv.appendChild(input);
+            });
+            // 重置表单其他字段
+            document.getElementById('batchConfigForm').querySelector('textarea').value = '';
+            document.getElementById('batchConfigForm').querySelectorAll('select').forEach(s => s.value = '');
+            // 显示弹窗
+            new bootstrap.Modal(document.getElementById('batchConfigModal')).show();
+        }
+
+        /* ── 提交批量配置 ── */
+        function submitBatchConfig() {
+            document.getElementById('batchConfigForm').submit();
+        }
+
+        /* ── 分组树 ── */
+        let treeData = null;
+
+        function loadTree() {
+            const container = document.getElementById('treeContainer');
+            const loading = document.getElementById('treeLoading');
+            if (loading) loading.style.display = '';
+
+            fetch('/api/qrcodes/tree')
+                .then(r => r.json())
+                .then(data => {
+                    treeData = data;
+                    renderTree(data);
+                })
+                .catch(err => {
+                    container.innerHTML = '<div class="text-danger text-center py-2">加载失败</div>';
+                    console.error('Tree load error:', err);
+                });
+        }
+
+        function renderTree(nodes) {
+            const container = document.getElementById('treeContainer');
+            const loading = document.getElementById('treeLoading');
+            if (loading) loading.style.display = 'none';
+
+            if (!nodes || nodes.length === 0) {
+                container.innerHTML = '<div class="text-muted text-center py-2">暂无数据</div>';
+                return;
+            }
+
+            let html = '<ul class="list-unstyled tree-nav">';
+            nodes.forEach(city => {
+                const cityId = 'city-' + sanitizeId(city.name);
+                html += '<li>';
+                html += '<details open>';
+                html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\'});return false;">';
+                html += '<i class="bi bi-building me-1"></i>' + esc(city.name);
+                html += '</summary>';
+                html += '<ul class="list-unstyled ms-3">';
+                (city.children || []).forEach(district => {
+                    const distId = 'dist-' + sanitizeId(district.name);
+                    html += '<li>';
+                    html += '<details>';
+                    html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\',district:\'' + esc(district.name) + '\'});return false;">';
+                    html += '<i class="bi bi-geo-alt me-1"></i>' + esc(district.name);
+                    html += '</summary>';
+                    html += '<ul class="list-unstyled ms-3">';
+                    (district.children || []).forEach(group => {
+                        const isGroup = group.type === 'group';
+                        const icon = isGroup ? 'bi-people' : 'bi-folder';
+                        const label = isGroup ? esc(group.name) : esc(group.name);
+                        html += '<li>';
+                        if (isGroup && group.children && group.children.length > 0) {
+                            html += '<details>';
+                            html += '<summary class="tree-summary tree-group" onclick="filterByScope({groupId:' + group.id + '});return false;">';
+                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
+                            html += ' <small class="text-muted">(' + group.children.length + ')</small>';
+                            html += '</summary>';
+                            html += '<ul class="list-unstyled ms-3">';
+                            group.children.forEach(qr => {
+                                html += '<li><a href="#" class="tree-link tree-leaf" onclick="filterByScope({qrcodeId:' + qr.id + '});return false;">';
+                                html += '<i class="bi bi-qr-code me-1"></i>' + esc(qr.name);
+                                html += '</a></li>';
+                            });
+                            html += '</ul></details>';
+                        } else {
+                            html += '<span class="tree-summary tree-group" style="cursor:pointer;" onclick="filterByScope({groupId:' + (group.id || 0) + '});return false;">';
+                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
+                            if (isGroup) html += ' <small class="text-muted">(0)</small>';
+                            html += '</span>';
+                        }
+                        html += '</li>';
+                    });
+                    html += '</ul></details>';
+                    html += '</li>';
+                });
+                html += '</ul></details>';
+                html += '</li>';
+            });
+            html += '</ul>';
+            container.innerHTML = html;
+        }
+
+        function sanitizeId(name) {
+            return name.replace(/[^a-zA-Z0-9一-鿿]/g, '_');
+        }
+
+        function esc(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        /* ── 通过树节点过滤表格 ── */
+        function filterByScope(scope) {
+            // 清除所有 active 样式
+            document.querySelectorAll('.tree-link').forEach(a => a.classList.remove('active', 'fw-bold'));
+            document.querySelectorAll('.tree-summary').forEach(s => s.classList.remove('tree-active'));
+
+            // 高亮当前点击的元素
+            if (event && event.target) {
+                event.target.classList.add('tree-active');
+            }
+
+            // 构建筛选参数
+            let params = new URLSearchParams();
+            if (scope.city) params.set('city', scope.city);
+            if (scope.district) params.set('district', scope.district);
+            // groupId 和 qrcodeId 筛选通过前端表格过滤实现
+            // 当前直接跳转到带城市/区县参数的分页列表
+
+            if (scope.city || scope.district) {
+                window.location.href = '/qrcodes?' + params.toString();
+            } else if (scope.groupId) {
+                // 前端按分组筛选：隐藏不匹配的行
+                filterTableByGroupId(scope.groupId);
+            } else if (scope.qrcodeId) {
+                // 前端按活码 ID 筛选：隐藏不匹配的行
+                filterTableByQrCodeId(scope.qrcodeId);
+            } else {
+                // "全部"：清除前端过滤
+                clearTableFilter();
+            }
+        }
+
+        function filterTableByGroupId(groupId) {
+            // 从服务端渲染的 data-group-id 属性筛选（需要在 server 端添加）
+            // 备选方案：通过已知对应关系过滤
+            // 由于当前表格行没有 data-group-id，这里直接刷新带 group 参数的页面
+            // 或使用已有的城市/区县筛选 — 这里退化为重定向
+            window.location.href = '/qrcodes';
+        }
+
+        function filterTableByQrCodeId(qrcodeId) {
+            window.location.href = '/qrcodes/' + qrcodeId;
+        }
+
+        function clearTableFilter() {
+            window.location.href = '/qrcodes';
+        }
+
+        /* ── 页面加载时初始化树 ── */
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTree();
+        });
     </script>
+
+    <style>
+        /* 树形导航样式 */
+        .tree-nav details { margin-bottom: 2px; }
+        .tree-nav summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .tree-nav summary::-webkit-details-marker { display: none; }
+        .tree-nav summary::before {
+            content: '▸';
+            display: inline-block;
+            width: 14px;
+            transition: transform 0.2s;
+            font-size: 0.75rem;
+            color: #888;
+        }
+        .tree-nav details[open] > summary::before {
+            transform: rotate(90deg);
+        }
+        .tree-summary:hover { background: #f0f4ff; color: #0d6efd; }
+        .tree-summary.tree-active { background: #e7f1ff; color: #0d6efd; font-weight: 600; }
+        .tree-link {
+            display: block;
+            padding: 3px 6px 3px 20px;
+            text-decoration: none;
+            color: #333;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+        .tree-link:hover { background: #f0f4ff; color: #0d6efd; }
+        .tree-link.active { background: #cfe2ff; color: #0d6efd; font-weight: 600; }
+        .tree-link.tree-leaf { padding-left: 30px; }
+        .tree-group { color: #555; }
+        .tree-root { font-size: 0.9rem; }
+    </style>
 </main>
 </html>

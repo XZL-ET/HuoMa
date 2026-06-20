@@ -8,6 +8,7 @@ import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.QrCodeGroup;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
@@ -185,7 +186,138 @@ public class QrCodeController {
         model.addAttribute("districts", districts);
         model.addAttribute("agentCountMap", agentCountMap);
         model.addAttribute("todayCountMap", todayCountMap);
+        model.addAttribute("groups", groupRepo.findAllByOrderByName());
+        model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
         return "qrcode/list";
+    }
+
+    /**
+     * 活码分组树 JSON 接口 —— 返回 city → district → group → qrcode 层级结构。
+     *
+     * <p>GET /api/qrcodes/tree —— 用于列表页左侧边栏树形导航，
+     * 聚合所有活码和分组，支持以下场景：
+     * <ul>
+     *   <li>已有分组的活码：正常嵌套在 city → district → group → qrcode 下</li>
+     *   <li>未分组的活码：在对应 city/district 下归入"未分组"节点</li>
+     *   <li>无活码的分组：作为空叶子节点展示（children 为空列表）</li>
+     * </ul>
+     *
+     * <p>返回 JSON 结构：</p>
+     * <pre>{@code
+     * [
+     *   {
+     *     "type": "city",
+     *     "name": "兰州市",
+     *     "children": [
+     *       {
+     *         "type": "district",
+     *         "name": "城关区",
+     *         "children": [
+     *           { "type": "group", "id": 1, "name": "城关联盟", "children": [
+     *             { "type": "qrcode", "id": 1, "name": "某某中学" }
+     *           ]},
+     *           { "type": "group", "id": 2, "name": "城关二盟", "children": [] }
+     *         ]
+     *       }
+     *     ]
+     *   }
+     * ]
+     * }</pre>
+     *
+     * @return 树形结构列表，按城市→区县→分组→活码嵌套
+     */
+    @GetMapping("/api/qrcodes/tree")
+    @ResponseBody
+    public List<Map<String, Object>> tree() {
+        List<QrCode> qrs = qrCodeRepo.findAll();
+        List<QrCodeGroup> groups = groupRepo.findAllByOrderByName();
+
+        // 按 groupId 索引分组，用于 O(1) 查找分组名称
+        Map<Long, QrCodeGroup> groupMap = new LinkedHashMap<>();
+        Set<Long> coveredGroupIds = new LinkedHashSet<>();
+
+        // 中间结构：city → district → (groupId: "g:123" 或 "u:ungrouped") → [qrcode...]
+        // 使用 LinkedHashMap 保持插入顺序
+        Map<String, Map<String, Map<String, List<QrCode>>>> mid = new LinkedHashMap<>();
+
+        // ── 1. 遍历所有活码，归入对应的 city → district → group ──
+        for (QrCode qr : qrs) {
+            String city = qr.getRegionCity() != null ? qr.getRegionCity() : "未分类";
+            String district = qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "未分类";
+
+            mid.putIfAbsent(city, new LinkedHashMap<>());
+            mid.get(city).putIfAbsent(district, new LinkedHashMap<>());
+
+            String bucketKey;
+            if (qr.getGroupId() != null && groupMap.containsKey(qr.getGroupId())) {
+                QrCodeGroup g = groupMap.get(qr.getGroupId());
+                bucketKey = "g:" + g.getId() + "|" + g.getName();
+                coveredGroupIds.add(g.getId());
+            } else if (qr.getGroupId() != null) {
+                // groupId 指向已删除的分组
+                bucketKey = "g:" + qr.getGroupId() + "|已删除分组";
+            } else {
+                bucketKey = "u:未分组";
+            }
+
+            mid.get(city).get(district).putIfAbsent(bucketKey, new ArrayList<>());
+            mid.get(city).get(district).get(bucketKey).add(qr);
+        }
+
+        // ── 2. 补充分组中没有活码的空分组节点 ──
+        for (QrCodeGroup g : groups) {
+            if (coveredGroupIds.contains(g.getId())) continue;
+            String city = g.getRegionCity() != null ? g.getRegionCity() : "未分类";
+            String district = g.getRegionDistrict() != null ? g.getRegionDistrict() : "未分类";
+            mid.putIfAbsent(city, new LinkedHashMap<>());
+            mid.get(city).putIfAbsent(district, new LinkedHashMap<>());
+            String bucketKey = "g:" + g.getId() + "|" + g.getName();
+            mid.get(city).get(district).putIfAbsent(bucketKey, new ArrayList<>());
+        }
+
+        // ── 3. 将中间 Map 结构转换为 JSON 友好的 List<Map> 树 ──
+        List<Map<String, Object>> treeList = new ArrayList<>();
+        for (var cityEntry : mid.entrySet()) {
+            Map<String, Object> cityNode = new LinkedHashMap<>();
+            cityNode.put("type", "city");
+            cityNode.put("name", cityEntry.getKey());
+            List<Map<String, Object>> districtNodes = new ArrayList<>();
+            for (var districtEntry : cityEntry.getValue().entrySet()) {
+                Map<String, Object> districtNode = new LinkedHashMap<>();
+                districtNode.put("type", "district");
+                districtNode.put("name", districtEntry.getKey());
+                List<Map<String, Object>> childNodes = new ArrayList<>();
+                for (var bucketEntry : districtEntry.getValue().entrySet()) {
+                    String key = bucketEntry.getKey();
+                    List<QrCode> bucketQrs = bucketEntry.getValue();
+                    Map<String, Object> groupNode = new LinkedHashMap<>();
+                    if (key.startsWith("g:")) {
+                        String[] parts = key.substring(2).split("\\|", 2);
+                        groupNode.put("type", "group");
+                        groupNode.put("id", Long.valueOf(parts[0]));
+                        groupNode.put("name", parts[1]);
+                    } else {
+                        groupNode.put("type", "ungrouped");
+                        groupNode.put("name", "未分组");
+                    }
+                    List<Map<String, Object>> qrNodes = new ArrayList<>();
+                    for (QrCode qr : bucketQrs) {
+                        Map<String, Object> qrNode = new LinkedHashMap<>();
+                        qrNode.put("type", "qrcode");
+                        qrNode.put("id", qr.getId());
+                        qrNode.put("name", qr.getSchoolName() != null ? qr.getSchoolName() : "");
+                        qrNodes.add(qrNode);
+                    }
+                    groupNode.put("children", qrNodes);
+                    childNodes.add(groupNode);
+                }
+                districtNode.put("children", childNodes);
+                districtNodes.add(districtNode);
+            }
+            cityNode.put("children", districtNodes);
+            treeList.add(cityNode);
+        }
+        return treeList;
     }
 
     /**
