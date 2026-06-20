@@ -156,7 +156,9 @@ public class DataFillWorker {
                             RedisConfig.DATAFILL_STREAM_KEY,
                             ReadOffset.from("0-0"), RedisConfig.DATAFILL_CONSUMER_GROUP);
                         redisTemplate.opsForStream().delete(RedisConfig.DATAFILL_STREAM_KEY, initId);
-                    } catch (Exception ignored) {}
+                    } catch (Exception e2) {
+                        log.warn("DataFillWorker Stream/ConsumerGroup 创建异常: {}", e2.getMessage());
+                    }
                     continue;
                 }
                 log.error("DataFillWorker-{} 消费异常, 10s 后重试", threadId, e);

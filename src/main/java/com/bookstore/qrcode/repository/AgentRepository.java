@@ -78,4 +78,9 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
 
     /** 按姓名模糊搜索 — 替代 findAll 后 Java 过滤 */
     List<Agent> findByNameContaining(String name);
+
+    /** 批量重置熔断计数（每日凌晨调用，防止跨天累积永久封禁） */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("UPDATE Agent a SET a.meltedCount24h = 0 WHERE a.meltedCount24h > 0")
+    int batchResetMeltedCount();
 }

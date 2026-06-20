@@ -52,13 +52,20 @@ public class AgentDailyCountService {
         return val != null ? Long.parseLong(val) : 0;
     }
 
-    /** 午夜清零 — SCAN + DELETE（由 DailyResetWorker 调用） */
+    /** 午夜清零 — SCAN + UNLINK（非阻塞，由 DailyResetWorker 调用） */
     public void resetDailyCounts() {
         var pattern = RedisConfig.DAILY_COUNT_KEY_PREFIX + "*";
-        var keys = redisTemplate.keys(pattern);
-        if (keys != null && !keys.isEmpty()) {
-            redisTemplate.delete(keys);
-            log.info("每日计数器已清零: {} 个 key", keys.size());
+        var options = org.springframework.data.redis.core.ScanOptions.scanOptions()
+            .match(pattern).count(100).build();
+        int total = 0;
+        try (var cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                redisTemplate.unlink(cursor.next());
+                total++;
+            }
+        }
+        if (total > 0) {
+            log.info("每日计数器已清零: {} 个 key", total);
         }
     }
 

@@ -203,9 +203,17 @@ public class QrCodeService {
             throw new RuntimeException("创建企微活码失败 [" + e.getErrcode() + "]: " + e.getErrmsg(), e);
         }
         // config_id 是企微端活码的唯一标识，后续更新/删除都依赖它
-        String configId = result.get("config_id").asText();
+        JsonNode configIdNode = result.get("config_id");
+        JsonNode qrCodeNode = result.get("qr_code");
+        if (configIdNode == null || configIdNode.isNull()) {
+            throw new IllegalStateException("企微 createContactWay 响应缺少 config_id");
+        }
+        if (qrCodeNode == null || qrCodeNode.isNull()) {
+            throw new IllegalStateException("企微 createContactWay 响应缺少 qr_code");
+        }
+        String configId = configIdNode.asText();
         // qr_code 是活码图片的 URL，前端直接展示
-        String qrUrl = result.get("qr_code").asText();
+        String qrUrl = qrCodeNode.asText();
 
         // 2. 保存活码主表记录
         // createMode 标记为 manual 以区别于批量导入（batch）
@@ -251,7 +259,9 @@ public class QrCodeService {
                                 String.format("活码「%s」(config_id=%s) 创建后同步企微失败：%s",
                                     finalSchoolName, finalConfigId, e.getMessage()),
                                 AgentAlert.AutoAction.none, finalQrId);
-                        } catch (Exception ignored) {}
+                        } catch (Exception inner) {
+                            log.error("活码创建后同步企微失败告警发送异常: qrId={}", finalQrId, inner);
+                        }
                     }
                 }
             });
@@ -390,19 +400,32 @@ public class QrCodeService {
     @Transactional
     public void delete(Long qrCodeId) {
         QrCode qr = getById(qrCodeId);
-        // 先删企微端的活码（如果有 config_id）
-        if (qr.getQrConfigId() != null) {
-            wecomApi.deleteContactWay(qr.getQrConfigId());
-        }
-        // 级联删除活码下的联系人关联
+        String configId = qr.getQrConfigId();
+
+        // 1. 先级联删除活码下的联系人关联
         qrAgentRepo.findByQrCodeId(qrCodeId).forEach(qa -> qrAgentRepo.delete(qa));
-        // 级联删除后备池记录（全局池不按活码删除，此处不做额外操作；
-        // 员工保留在全局池中供其他活码使用）
-        // 级联删除轮换日志（不限制分页大小，全部删除）
+
+        // 2. 级联删除轮换日志
         rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(qrCodeId, Pageable.unpaged())
             .forEach(rl -> rotateLogRepo.delete(rl));
-        // 最后删除活码主记录
+
+        // 3. 先删 DB 记录（事务内）
         qrCodeRepo.delete(qr);
+
+        // 4. 事务提交后异步调 WeChat API 删除企微侧活码（失败由对账扫描补偿）
+        if (configId != null && !configId.isEmpty()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        try {
+                            wecomApi.deleteContactWay(configId);
+                        } catch (Exception ex) {
+                            log.error("WeChat 侧活码删除失败（由对账扫描补偿）: configId={}", configId, ex);
+                        }
+                    }
+                });
+        }
     }
 
     // ==================== 同步企微活码 ====================

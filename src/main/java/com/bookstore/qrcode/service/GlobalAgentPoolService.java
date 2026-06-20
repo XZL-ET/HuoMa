@@ -68,7 +68,7 @@ public class GlobalAgentPoolService {
     @Transactional
     public GlobalAgentPool takeStandby(Set<String> excludeUserids) {
         List<GlobalAgentPool> standbys = poolRepo
-            .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.standby);
+            .findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby);
         if (standbys.isEmpty()) {
             log.warn("全局员工池无 standby 员工可用！");
             return null;

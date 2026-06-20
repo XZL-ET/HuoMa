@@ -78,4 +78,21 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 批量异步任务线程池 — 供同步/批量方法使用，CallerRunsPolicy 防丢弃。
+     * <p>与 taskExecutor 的 AbortPolicy 不同，此线程池使用 CallerRunsPolicy，
+     * 确保批量导入等任务在满载时由调用线程接管，而非静默丢弃。</p>
+     */
+    @Bean("batchExecutor")
+    public Executor batchExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("batch-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
 }

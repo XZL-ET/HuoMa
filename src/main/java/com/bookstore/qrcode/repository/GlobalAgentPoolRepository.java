@@ -1,11 +1,15 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
@@ -30,6 +34,13 @@ public interface GlobalAgentPoolRepository
     /** 按状态查询，按优先级升序（越小越优先） */
     List<GlobalAgentPool> findByStatusOrderBySortOrder(
         GlobalAgentPool.PoolStatus status);
+
+    /** 按状态查询（带悲观写锁，3s 超时），用于 takeStandby 原子取人 */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.status = :status ORDER BY p.sortOrder ASC")
+    List<GlobalAgentPool> findStandbysForUpdate(
+        @Param("status") GlobalAgentPool.PoolStatus status);
 
     /** 统计指定状态的员工数 */
     long countByStatus(GlobalAgentPool.PoolStatus status);

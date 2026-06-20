@@ -170,7 +170,9 @@ public class TagWorker {
                         redisTemplate.opsForStream().createGroup(RedisConfig.TAG_STREAM_KEY,
                             ReadOffset.from("0-0"), RedisConfig.TAG_CONSUMER_GROUP);
                         redisTemplate.opsForStream().delete(RedisConfig.TAG_STREAM_KEY, initId);
-                    } catch (Exception ignored) {}
+                    } catch (Exception e2) {
+                        log.warn("TagWorker Stream/ConsumerGroup 创建异常: {}", e2.getMessage());
+                    }
                     continue;
                 }
                 log.error("TagWorker-{} 消费异常, 5s 后重试", threadId, e);

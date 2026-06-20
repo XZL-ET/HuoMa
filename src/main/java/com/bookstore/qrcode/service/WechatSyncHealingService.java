@@ -107,7 +107,9 @@ public class WechatSyncHealingService {
                             String.format("企微不可用员工已被自愈移除: userid=%s 活码=%d",
                                 failing, qrCodeId),
                             AgentAlert.AutoAction.removed, qrCodeId);
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e);
+                    }
 
                     // ④ 需要补充新成员
                     result.needReplacement = true;

@@ -122,6 +122,15 @@ public class DailyResetWorker {
             failDetails.append("日报生成失败; ");
         }
 
+        // 5. 清零熔断计数，防止跨天累积永久封禁
+        try {
+            int reset = agentRepo.batchResetMeltedCount();
+            if (reset > 0) log.info("熔断计数清零: {} 人", reset);
+        } catch (Exception e) {
+            failures++;
+            failDetails.append("熔断计数清零失败; ");
+        }
+
         // 任一步骤失败均告警
         if (failures > 0) {
             String msg = String.format("每日重置 %d 项失败: %s", failures, failDetails);

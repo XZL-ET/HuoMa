@@ -1,10 +1,12 @@
 package com.bookstore.qrcode.config;
 
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.service.WecomOAuthService;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -16,6 +18,7 @@ import java.io.IOException;
  * 检查访问 /download/** 的请求是否持有有效的企微 OAuth Session。
  * 未认证的请求重定向到 OAuth 入口，已认证的放行。
  * OAuth 入口和回调路径跳过本过滤器。
+ * 每次请求时重新验证员工活跃状态，防止已离职员工通过旧 Session 继续访问。
  * </p>
  *
  * @author Bookstore Dev
@@ -23,7 +26,10 @@ import java.io.IOException;
  */
 @Component
 @Order(1)
+@RequiredArgsConstructor
 public class DownloadAuthenticationFilter implements Filter {
+
+    private final EmployeeRepository employeeRepo;
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response,
@@ -51,6 +57,18 @@ public class DownloadAuthenticationFilter implements Filter {
             String entryUrl = req.getContextPath() + "/download/oauth/entry";
             resp.sendRedirect(entryUrl);
             return;
+        }
+
+        // 每次请求重新验证员工活跃状态，防止已离职员工通过旧 Session 继续访问
+        String userid = (String) session.getAttribute(WecomOAuthService.SESSION_EMPLOYEE_USERID);
+        if (userid != null) {
+            var employee = employeeRepo.findByUserid(userid).orElse(null);
+            if (employee == null || !employee.getActive()) {
+                session.removeAttribute(WecomOAuthService.SESSION_EMPLOYEE_USERID);
+                session.removeAttribute(WecomOAuthService.SESSION_EMPLOYEE_NAME);
+                resp.sendRedirect(req.getContextPath() + "/download/oauth/entry");
+                return;
+            }
         }
 
         chain.doFilter(request, response);

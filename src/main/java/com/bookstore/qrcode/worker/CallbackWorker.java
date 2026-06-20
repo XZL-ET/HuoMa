@@ -181,7 +181,9 @@ public class CallbackWorker {
                             RedisConfig.CALLBACK_STREAM_KEY,
                             ReadOffset.from("0-0"), RedisConfig.CALLBACK_CONSUMER_GROUP);
                         redisTemplate.opsForStream().delete(RedisConfig.CALLBACK_STREAM_KEY, initId);
-                    } catch (Exception ignored) {}
+                    } catch (Exception e2) {
+                        log.warn("CallbackWorker Stream/ConsumerGroup 创建异常: {}", e2.getMessage());
+                    }
                     continue;
                 }
                 log.error("CallbackWorker-{} 消费异常, 5s 后重试", threadId, e);

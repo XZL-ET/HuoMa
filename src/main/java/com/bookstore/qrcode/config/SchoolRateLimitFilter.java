@@ -72,7 +72,8 @@ public class SchoolRateLimitFilter implements Filter {
         HttpServletRequest request = (HttpServletRequest) req;
         HttpServletResponse response = (HttpServletResponse) resp;
 
-        if (!request.getRequestURI().startsWith("/s")) {
+        String uri = request.getRequestURI();
+        if (!uri.startsWith("/s/") && !uri.equals("/s")) {
             chain.doFilter(req, resp);
             return;
         }
@@ -106,7 +107,7 @@ public class SchoolRateLimitFilter implements Filter {
         Long count = rateLimitRedis.execute(
                 RATE_SCRIPT,
                 java.util.List.of(key),
-                String.valueOf(now), "60", member,
+                String.valueOf(now), String.valueOf(windowMs / 1000), member,
                 String.valueOf(maxPerMinute), "120");
 
         return count != null && count > maxPerMinute;

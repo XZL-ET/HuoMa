@@ -130,8 +130,8 @@ public class WecomCallbackValidator {
             // 步骤2：SHA-1 签名校验
             // 排序规则：token、timestamp、nonce、encrypt（实际密文，不是原始 XML Body）
             String callbackToken = config.getCallbackToken();
-            log.info("回调签名调试: token={}, timestamp={}, nonce={}, encrypt前20字符={}",
-                callbackToken, timestamp, nonce, encrypt != null ? encrypt.substring(0, Math.min(20, encrypt.length())) : "null");
+            log.info("回调签名调试: timestamp={}, nonce={}, encrypt前20字符={}",
+                timestamp, nonce, encrypt != null ? encrypt.substring(0, Math.min(20, encrypt.length())) : "null");
             String signature = sha1(callbackToken, timestamp, nonce, encrypt);
             if (!signature.equals(msgSignature)) {
                 log.error("回调消息签名校验失败, 期望={}, 实际={}", msgSignature, signature);

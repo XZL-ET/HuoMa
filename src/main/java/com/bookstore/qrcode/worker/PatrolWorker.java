@@ -283,7 +283,12 @@ public class PatrolWorker {
             if (receptionists.isEmpty()) continue;
 
             boolean allOverloaded = receptionists.stream().allMatch(a -> {
-                double ratio = (double) a.getDailyCurrent() / (double) a.getDailyMax();
+                int dailyMax = a.getDailyMax();
+                if (dailyMax <= 0) {
+                    log.warn("员工 {} dailyMax={} 异常，跳过负载检查", a.getAgentUserid(), dailyMax);
+                    return false;
+                }
+                double ratio = (double) a.getDailyCurrent() / (double) dailyMax;
                 return ratio >= 0.9;
             });
 
@@ -324,7 +329,7 @@ public class PatrolWorker {
     @Scheduled(cron = "30 */1 * * * *")
     public void recoverOrphanedPending() {
         log.debug("PEL 崩溃回收巡检开始");
-        long idleMs = 30_000;
+        long idleMs = 120_000; // 给滚动重启留足缓冲，避免 PEL 误回收
 
         try {
             int cb = messageGuardService.recoverOrphanedPending(

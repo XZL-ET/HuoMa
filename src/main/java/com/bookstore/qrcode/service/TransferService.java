@@ -39,6 +39,7 @@ public class TransferService {
     private final QrCodeRepository qrCodeRepo;
     private final CustomerRepository customerRepo;
     private final CustomerTagRepository customerTagRepo;
+    private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
 
@@ -278,7 +279,7 @@ public class TransferService {
                 String greeting = fillTemplate(greetingTemplate,
                     Map.of("parent_name", customer.getName(),
                            "school_name", qr.getSchoolName(),
-                           "teacher_name", transfer.getToUserid()));
+                           "teacher_name", getTeacherName(transfer.getToUserid())));
                 wecomApi.sendMessage(transfer.getToUserid(), customer.getExternalUserid(), greeting);
                 transfer.setGreetingType(CustomerTransfer.GreetingType.filled);
             } else {
@@ -290,7 +291,7 @@ public class TransferService {
                 String greeting = fillTemplate(greetingTemplate,
                     Map.of("parent_name", customer.getName(),
                            "school_name", qr.getSchoolName(),
-                           "teacher_name", transfer.getToUserid(),
+                           "teacher_name", getTeacherName(transfer.getToUserid()),
                            "form_link", resolvedFormUrl));
                 wecomApi.sendMessage(transfer.getToUserid(), customer.getExternalUserid(), greeting);
                 transfer.setGreetingType(CustomerTransfer.GreetingType.unfilled);
@@ -323,5 +324,12 @@ public class TransferService {
                 entry.getValue() != null ? entry.getValue() : "");
         }
         return result;
+    }
+
+    /** 从 Employee 表获取员工真实姓名，查不到时回退到 userid */
+    private String getTeacherName(String userid) {
+        return employeeRepo.findByUserid(userid)
+            .map(Employee::getName)
+            .orElse(userid);
     }
 }
