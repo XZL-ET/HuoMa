@@ -34,7 +34,7 @@ echo "========================================="
 echo ""
 echo "[1/5] 编译项目..."
 cd "$(dirname "$0")/.."
-./mvnw clean package -DskipTests -P${PROFILE} 2>&1 | tail -5
+./mvnw clean package -DskipTests 2>&1 | tail -5
 echo "  ✅ 编译完成"
 
 # 2. 停止 ECS-1
@@ -104,26 +104,25 @@ sleep 8
 check_health() {
     local host=$1
     local label=$2
-    STATUS=\$(ssh "${SERVER_USER}@${host}" \
+    local status=$(ssh "${SERVER_USER}@${host}" \
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/actuator/health" 2>/dev/null || echo "000")
-    if [ "\$STATUS" = "200" ]; then
-        echo "  ✅ \${label} 健康 (HTTP \${STATUS})"
+    if [ "$status" = "200" ]; then
+        echo "  ✅ ${label} 健康 (HTTP ${status})"
     else
-        echo "  ⚠️  \${label} 异常 (HTTP \${STATUS}), 请检查日志"
+        echo "  ⚠️  ${label} 异常 (HTTP ${status}), 请检查日志"
     fi
 }
 
 check_health "${SERVER_IP}" "ECS-1"
 
 if [ -n "${ECS2_IP}" ]; then
-    # ECS-2 通过 ECS-1 跳板检查
-    C2_STATUS=\$(ssh "${SERVER_USER}@${SERVER_IP}" \
+    c2_status=$(ssh "${SERVER_USER}@${SERVER_IP}" \
         "ssh -o ConnectTimeout=5 root@${ECS2_IP} \
         \"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/actuator/health\"" 2>/dev/null || echo "000")
-    if [ "\$C2_STATUS" = "200" ]; then
-        echo "  ✅ ECS-2 健康 (HTTP \${C2_STATUS})"
+    if [ "$c2_status" = "200" ]; then
+        echo "  ✅ ECS-2 健康 (HTTP ${c2_status})"
     else
-        echo "  ⚠️  ECS-2 异常 (HTTP \${C2_STATUS}), 请检查日志"
+        echo "  ⚠️  ECS-2 异常 (HTTP ${c2_status}), 请检查日志"
     fi
 fi
 
