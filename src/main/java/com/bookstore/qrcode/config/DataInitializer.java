@@ -28,29 +28,27 @@ public class DataInitializer implements ApplicationRunner {
     @Value("${app.admin.default-username:admin}")
     private String defaultUsername;
 
-    @Value("${app.admin.default-password:admin123}")
+    @Value("${app.admin.default-password:}")
     private String defaultPassword;
 
     @Override
     public void run(ApplicationArguments args) {
-        if (userRepository.countByEnabledTrue() == 0) {
-            User admin = User.builder()
-                    .username(defaultUsername)
-                    .passwordHash(passwordEncoder.encode(defaultPassword))
-                    .displayName("系统管理员")
-                    .role(User.UserRole.admin)
-                    .enabled(true)
-                    .build();
-            userRepository.save(admin);
-            log.info("========================================");
-            log.info("  默认管理员账号已创建");
-            log.info("  用户名: {}", defaultUsername);
-            log.info("  密码: {}", defaultPassword);
-            log.info("  请登录后立即修改密码！");
-            log.info("========================================");
-        } else {
-            log.info("用户表已有 {} 个启用的用户，跳过默认账号初始化",
-                    userRepository.countByEnabledTrue());
+        if (userRepository.countByEnabledTrue() > 0) {
+            return;
         }
+        if (defaultPassword == null || defaultPassword.isBlank()) {
+            log.warn("未配置默认管理员密码(app.admin.default-password)，跳过自建。"
+                + "请手动创建管理员账户或设置 ADMIN_DEFAULT_PASSWORD 环境变量");
+            return;
+        }
+        User admin = User.builder()
+                .username(defaultUsername)
+                .passwordHash(passwordEncoder.encode(defaultPassword))
+                .displayName("系统管理员")
+                .role(User.UserRole.admin)
+                .enabled(true)
+                .build();
+        userRepository.save(admin);
+        log.info("默认管理员已创建: {}（密码请查看环境变量或配置文件）", defaultUsername);
     }
 }

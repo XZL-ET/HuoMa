@@ -35,11 +35,33 @@ management:
       probes:
         enabled: true
 
-# ===== 应用配置 =====
+# ===== 应用业务配置 =====
 app:
   admin:
-    default-username: admin
-    default-password: ${ADMIN_DEFAULT_PASSWORD:admin123}
+    default-username: ${ADMIN_DEFAULT_USERNAME:admin}
+    default-password: ${ADMIN_DEFAULT_PASSWORD:}   # 生产必设，空则跳过自建
+  qr-image:
+    font-name: ${QR_FONT_NAME:SansSerif}            # Linux 兼容默认字体
+  worker:
+    callback:
+      threads: ${CALLBACK_THREADS:4}
+    tag:
+      threads: ${TAG_THREADS:8}
+      delay-ms: ${TAG_DELAY_MS:50}
+    datafill:
+      threads: ${DATAFILL_THREADS:4}
+  redis-stream:
+    callback-maxlen: ${CALLBACK_STREAM_MAXLEN:10000}
+    tag-maxlen: ${TAG_STREAM_MAXLEN:50000}
+    datafill-maxlen: ${DATAFILL_STREAM_MAXLEN:50000}
+    dlq-maxlen: ${DLQ_STREAM_MAXLEN:10000}
+  wecom:
+    root-department-id: ${WECOM_ROOT_DEPT_ID:1}
+  agent:
+    daily-max-default: ${AGENT_DAILY_MAX:100}
+    batch-import-daily-max: ${AGENT_BATCH_IMPORT_DAILY_MAX:200}
+  transfer:
+    form-url: ${TRANSFER_FORM_URL:}
   school-entry-url: http://<YOUR_SERVER_IP>:8080/s
 
 ---

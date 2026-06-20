@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -76,6 +77,14 @@ public class QrCodeService {
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
+
+    /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
+    @Value("${app.agent.daily-max-default:100}")
+    private int dailyMaxDefault;
+
+    /** 批量导入时日接待上限，可通过 app.agent.batch-import-daily-max 配置 */
+    @Value("${app.agent.batch-import-daily-max:200}")
+    private int batchImportDailyMax;
 
     // ==================== 查询 ====================
 
@@ -650,7 +659,7 @@ public class QrCodeService {
             .qrCodeId(qrCodeId)
             .agentUserid(agentUserid)
             .role(QrAgent.AgentRole.receptionist)   // 手动添加的默认为接待员角色
-            .dailyMax(100)                            // 默认日接待上限 100 人
+            .dailyMax(dailyMaxDefault)                            // 默认日接待上限，可通过 app.agent.daily-max-default 配置
             .sortOrder(maxOrder + 1)
             .status(QrAgent.AgentStatus.active)       // 添加即启用
             .build());

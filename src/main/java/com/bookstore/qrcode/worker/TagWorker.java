@@ -56,25 +56,26 @@ public class TagWorker {
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
-    /** 打标并发线程数 */
-    private static final int CONSUMER_THREADS = 8;
+    /** 打标并发线程数，可通过 app.worker.tag.threads 配置 */
+    @Value("${app.worker.tag.threads:8}")
+    private int consumerThreads;
     private static final String CONSUMER_PREFIX = "tag-worker";
-    /** 每条消息间的间隔 ms，可通过 worker.tag.delay-ms 配置，默认 50ms 防限流 */
-    @Value("${worker.tag.delay-ms:50}")
-    private int tagDelayMs;
+    /** 每条消息间的间隔 ms，可通过 app.worker.tag.delay-ms 配置，默认 50ms 防限流 */
+    @Value("${app.worker.tag.delay-ms:50}")
+    private long tagDelayMs;
 
     /**
      * 启动 4 个并行打标消费线程。
      */
     @PostConstruct
     public void start() {
-        for (int i = 1; i <= CONSUMER_THREADS; i++) {
+        for (int i = 1; i <= consumerThreads; i++) {
             final int threadId = i;
             final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
             taskExecutor.execute(() -> consumeLoop(consumerName, threadId));
         }
         log.info("TagWorker 已启动 {} 个消费线程, Stream={}, Group={}",
-            CONSUMER_THREADS, RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP);
+            consumerThreads, RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP);
     }
 
     /**

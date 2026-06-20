@@ -8,6 +8,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -66,7 +67,9 @@ public class CallbackWorker {
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
 
     private volatile boolean running = true;
-    private static final int CONSUMER_THREADS = 4;
+    /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
+    @Value("${app.worker.callback.threads:4}")
+    private int consumerThreads;
     private static final String CONSUMER_PREFIX = "callback-worker";
 
     /**
@@ -77,13 +80,13 @@ public class CallbackWorker {
      */
     @PostConstruct
     public void start() {
-        for (int i = 1; i <= CONSUMER_THREADS; i++) {
+        for (int i = 1; i <= consumerThreads; i++) {
             final int threadId = i;
             final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
             callbackExecutor.execute(() -> consumeLoop(consumerName, threadId));
         }
         log.info("CallbackWorker 已启动 {} 个消费线程, Stream={}, Group={}",
-            CONSUMER_THREADS, RedisConfig.CALLBACK_STREAM_KEY,
+            consumerThreads, RedisConfig.CALLBACK_STREAM_KEY,
             RedisConfig.CALLBACK_CONSUMER_GROUP);
     }
 

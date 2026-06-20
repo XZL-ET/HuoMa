@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -52,6 +53,10 @@ public class WecomApiClient {
     private final WecomConfig config;
     private final RestTemplate restTemplate = createRestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** 企微根部门 ID，用于递归拉取成员列表，可通过 app.wecom.root-department-id 配置 */
+    @Value("${app.wecom.root-department-id:1}")
+    private int rootDepartmentId;
 
     private static RestTemplate createRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -549,7 +554,7 @@ public class WecomApiClient {
      */
     public JsonNode getUserSimplelist() {
         String url = BASE_URL + "/user/simplelist?access_token=" + getAccessToken()
-                     + "&department_id=1&fetch_child=1";
+                     + "&department_id=" + rootDepartmentId + "&fetch_child=1";
         String resp = restTemplate.getForObject(url, String.class);
         return parseOrThrow(resp, "获取成员列表");
     }
@@ -566,7 +571,7 @@ public class WecomApiClient {
      */
     public JsonNode getUserList() {
         String url = BASE_URL + "/user/list?access_token=" + getAccessToken()
-                     + "&department_id=1&fetch_child=1";
+                     + "&department_id=" + rootDepartmentId + "&fetch_child=1";
         String resp = restTemplate.getForObject(url, String.class);
         return parseOrThrow(resp, "获取成员详情列表");
     }

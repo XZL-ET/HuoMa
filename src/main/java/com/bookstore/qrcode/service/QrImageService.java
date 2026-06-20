@@ -14,6 +14,7 @@ import com.google.zxing.qrcode.QRCodeWriter;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.imageio.ImageIO;
@@ -67,6 +68,10 @@ public class QrImageService {
 
     /** 默认主题色（蓝色），用于未指定 theme 时的降级 */
     private static final Color DEFAULT_COLOR = new Color(0x0d, 0x6e, 0xfd);
+
+    /** 二维码底部文字的字体名，可通过 app.qr-image.font-name 配置，默认 SansSerif（Linux 兼容） */
+    @Value("${app.qr-image.font-name:SansSerif}")
+    private String fontName;
 
     /**
      * 生成二维码图片。
@@ -144,7 +149,7 @@ public class QrImageService {
             // 第六步：在底部绘制引导文字或学校名称（居中显示）
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g.setColor(Color.BLACK);
-            Font font = new Font("Microsoft YaHei", Font.PLAIN, fontSize);
+            Font font = new Font(fontName, Font.PLAIN, fontSize);
             g.setFont(font);
 
             // 确定显示文案：优先引导文字，其次学校名称，二者都没有则不渲染

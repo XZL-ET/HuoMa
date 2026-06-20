@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +39,10 @@ public class TransferService {
     private final CustomerTagRepository customerTagRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+
+    /** 收集表单链接，可通过 app.transfer.form-url 配置，空则使用占位符 */
+    @Value("${app.transfer.form-url:}")
+    private String formUrl;
 
     /**
      * 发起在职继承：将客户的接待关系从前任接待员转移至该活码对应的服务老师。
@@ -262,11 +267,13 @@ public class TransferService {
                 // 路径 B：未填写 → 提醒填写 + 重新发收集表单
                 String greetingTemplate = wc.has("transfer_unfilled_greeting")
                     ? wc.get("transfer_unfilled_greeting").asText() : "";
+                String resolvedFormUrl = (formUrl != null && !formUrl.isBlank())
+                    ? formUrl : "[表单链接]";
                 String greeting = fillTemplate(greetingTemplate,
                     Map.of("parent_name", customer.getName(),
                            "school_name", qr.getSchoolName(),
                            "teacher_name", transfer.getToUserid(),
-                           "form_link", "[表单链接]")); // TODO: 生成实际表单链接并插入
+                           "form_link", resolvedFormUrl));
                 wecomApi.sendMessage(transfer.getToUserid(), customer.getExternalUserid(), greeting);
                 transfer.setGreetingType(CustomerTransfer.GreetingType.unfilled);
             }

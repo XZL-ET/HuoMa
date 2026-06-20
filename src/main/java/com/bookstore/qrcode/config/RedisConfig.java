@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -35,12 +36,21 @@ public class RedisConfig {
     public static final String CALLBACK_CONSUMER_GROUP = "callback-worker-group";
     /** Consumer 名称：当前实例的消费者标识（单线程模式） */
     public static final String CALLBACK_CONSUMER_NAME = "worker-1";
-    /** Stream 最大长度（近似），Tag/DataFill 流用 */
-    public static final long STREAM_MAXLEN = 10000;
-    /** Tag Stream 最大长度（高吞吐场景扩容），防止高峰期 trim 丢打标事件 */
-    public static final long TAG_STREAM_MAXLEN = 50000;
-    /** DataFill Stream 最大长度，缓冲约 1 小时新客户高峰 */
-    public static final long DATAFILL_STREAM_MAXLEN = 50000;
+    /** Stream 最大长度（近似），Tag/DataFill 流用；可通过 app.redis-stream.callback-maxlen 配置 */
+    public static long STREAM_MAXLEN = 10000;
+    /** Tag Stream 最大长度（高吞吐场景扩容），防止高峰期 trim 丢打标事件；可通过 app.redis-stream.tag-maxlen 配置 */
+    public static long TAG_STREAM_MAXLEN = 50000;
+    /** DataFill Stream 最大长度，缓冲约 1 小时新客户高峰；可通过 app.redis-stream.datafill-maxlen 配置 */
+    public static long DATAFILL_STREAM_MAXLEN = 50000;
+
+    @Value("${app.redis-stream.callback-maxlen:10000}")
+    public void setStreamMaxlen(long val) { RedisConfig.STREAM_MAXLEN = val; }
+
+    @Value("${app.redis-stream.tag-maxlen:50000}")
+    public void setTagStreamMaxlen(long val) { RedisConfig.TAG_STREAM_MAXLEN = val; }
+
+    @Value("${app.redis-stream.datafill-maxlen:50000}")
+    public void setDatafillStreamMaxlen(long val) { RedisConfig.DATAFILL_STREAM_MAXLEN = val; }
 
     // ==================== 死信队列 (DLQ) Stream 相关常量 ====================
 
@@ -48,8 +58,11 @@ public class RedisConfig {
     public static final String DLQ_STREAM_KEY = "wecom:dlq:stream";
     /** Consumer Group 名称：死信队列消费组（重放时使用） */
     public static final String DLQ_CONSUMER_GROUP = "dlq-worker-group";
-    /** DLQ Stream 最大长度，防止 OOM（死信通常很少，设保守上限） */
-    public static final long DLQ_STREAM_MAXLEN = 10000;
+    /** DLQ Stream 最大长度，防止 OOM（死信通常很少，设保守上限）；可通过 app.redis-stream.dlq-maxlen 配置 */
+    public static long DLQ_STREAM_MAXLEN = 10000;
+
+    @Value("${app.redis-stream.dlq-maxlen:10000}")
+    public void setDlqStreamMaxlen(long val) { RedisConfig.DLQ_STREAM_MAXLEN = val; }
 
     // ==================== 消息去重 Key 前缀常量 ====================
 
