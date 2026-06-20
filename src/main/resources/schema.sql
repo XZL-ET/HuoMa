@@ -561,3 +561,72 @@ SET @stmt = (SELECT IF(
     'CREATE INDEX idx_qr_code_school_name ON qr_code (school_name)',
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ============================================
+-- 新增功能：欢迎语·收集表单·在职继承
+-- ============================================
+
+-- form_template：表单模板
+CREATE TABLE IF NOT EXISTS form_template (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL COMMENT '模板名称',
+    description VARCHAR(500) COMMENT '备注',
+    fields JSON NOT NULL COMMENT '字段定义',
+    tag_mapping JSON NOT NULL COMMENT '字段→打标/备注映射规则',
+    remark_template VARCHAR(500) COMMENT '备注模板, 如 {{child_name}}-{{grade}}{{class}}',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单模板';
+
+-- form_submission：表单提交记录
+CREATE TABLE IF NOT EXISTS form_submission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    form_template_id BIGINT NOT NULL COMMENT 'FK→form_template.id',
+    customer_id BIGINT NOT NULL COMMENT 'FK→customer.id',
+    qr_code_id BIGINT COMMENT '来源活码',
+    field_data JSON NOT NULL COMMENT '提交数据',
+    tags_applied VARCHAR(500) COMMENT '已打标签,逗号分隔',
+    remark_updated VARCHAR(500) COMMENT '已设备注',
+    submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_fs_customer (customer_id),
+    INDEX idx_fs_template (form_template_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单提交记录';
+
+-- qr_code_group：活码分组（教育联盟）
+CREATE TABLE IF NOT EXISTS qr_code_group (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL COMMENT '分组名称',
+    region_city VARCHAR(50) COMMENT '市州',
+    region_district VARCHAR(50) NOT NULL COMMENT '县区',
+    group_type VARCHAR(20) NOT NULL DEFAULT 'alliance' COMMENT 'alliance=教育联盟',
+    default_welcome_text VARCHAR(500) COMMENT '分组默认欢迎语',
+    default_form_template_id BIGINT COMMENT 'FK→form_template.id',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码分组（教育联盟）';
+
+-- qr_code 新增字段（欢迎语+表单+分组）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'form_template_id') = 0,
+    'ALTER TABLE qr_code ADD COLUMN form_template_id BIGINT COMMENT ''FK→form_template, null=无表单''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'welcome_text') = 0,
+    'ALTER TABLE qr_code ADD COLUMN welcome_text VARCHAR(500) COMMENT ''欢迎语, null=继承分组/系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'group_id') = 0,
+    'ALTER TABLE qr_code ADD COLUMN group_id BIGINT COMMENT ''FK→qr_code_group, null=未分组''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 系统配置：默认欢迎语
+INSERT IGNORE INTO system_config (config_key, config_value) VALUES
+('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
