@@ -1,8 +1,10 @@
 package com.bookstore.qrcode.config;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -171,6 +173,7 @@ public class RedisConfig {
      * @return 配置好的 StringRedisTemplate 实例
      */
     @Bean
+    @Primary
     public StringRedisTemplate stringRedisTemplate(RedisConnectionFactory factory) {
         StringRedisTemplate template = new StringRedisTemplate(factory);
         template.setKeySerializer(StringRedisSerializer.UTF_8);
@@ -193,7 +196,7 @@ public class RedisConfig {
      * @return 消费组名称，供其他组件引用
      */
     @Bean
-    public String callbackConsumerGroup(StringRedisTemplate redisTemplate) {
+    public String callbackConsumerGroup(@Qualifier("stringRedisTemplate") StringRedisTemplate redisTemplate) {
         try {
             // 先 XADD 占位消息确保 Stream 存在（XADD 自动创建 Stream），
             // 否则 Redis < 7.0 时 XGROUP CREATE 对不存在的 key 返回 ERR
@@ -221,7 +224,7 @@ public class RedisConfig {
      * @return 消费组名称，供 TagWorker 引用
      */
     @Bean
-    public String tagConsumerGroup(StringRedisTemplate redisTemplate) {
+    public String tagConsumerGroup(@Qualifier("stringRedisTemplate") StringRedisTemplate redisTemplate) {
         try {
             // 先 XADD 一条占位消息确保 Stream 存在（XADD 会自动创建不存在的 Stream），
             // 否则后续 XGROUP CREATE 会因 Stream 不存在而报 NOGROUP 错误。
@@ -241,7 +244,7 @@ public class RedisConfig {
      * 应用启动时自动创建客户信息补全 Redis Stream Consumer Group。
      */
     @Bean
-    public String datafillConsumerGroup(StringRedisTemplate redisTemplate) {
+    public String datafillConsumerGroup(@Qualifier("stringRedisTemplate") StringRedisTemplate redisTemplate) {
         try {
             RecordId initId = redisTemplate.opsForStream()
                 .add(DATAFILL_STREAM_KEY, Map.of("_init", "1"));
@@ -267,6 +270,7 @@ public class RedisConfig {
      * @return 限流专用的 StringRedisTemplate 实例
      */
     @Bean
+    @Qualifier("rateLimitRedisTemplate")
     public StringRedisTemplate rateLimitRedisTemplate(
             LettuceConnectionFactory factory) {
         LettuceClientConfiguration config = LettuceClientConfiguration.builder()

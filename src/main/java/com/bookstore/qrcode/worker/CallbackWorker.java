@@ -134,6 +134,14 @@ public class CallbackWorker {
                     String msgId = record.getId().getValue();
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
+                    if (eventJson == null) {
+                        // 跳过空消息（如 Init 占位、异常数据等），ACK 防止 PEL 泄漏
+                        log.warn("跳过空消息: msgId={}, value={}", msgId, value);
+                        redisTemplate.opsForStream().acknowledge(
+                            RedisConfig.CALLBACK_STREAM_KEY,
+                            RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
+                        continue;
+                    }
                     Map<String, String> fields = Map.of("event", eventJson);
 
                     // 检查 _retry_at 时间戳（指数退避），未到时间则跳过

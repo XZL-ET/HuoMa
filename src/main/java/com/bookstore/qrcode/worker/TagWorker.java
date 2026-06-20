@@ -123,6 +123,13 @@ public class TagWorker {
                     String msgId = record.getId().getValue();
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
+                    if (eventJson == null) {
+                        log.warn("跳过空消息(Tag): msgId={}, value={}", msgId, value);
+                        redisTemplate.opsForStream().acknowledge(
+                            RedisConfig.TAG_STREAM_KEY,
+                            RedisConfig.TAG_CONSUMER_GROUP, msgId);
+                        continue;
+                    }
                     Map<String, String> fields = Map.of("event", eventJson);
 
                     // 检查 _retry_at 时间戳（指数退避），未到时间则跳过
