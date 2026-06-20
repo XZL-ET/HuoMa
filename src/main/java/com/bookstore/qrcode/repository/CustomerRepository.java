@@ -136,6 +136,32 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     long countBySourceQrIdAndAddTimeBetween(Long sourceQrId, LocalDateTime start, LocalDateTime end);
 
     /**
+     * 根据添加人（addedAgent）和添加时间下限查找客户列表。
+     * <p>
+     * 用于在职继承场景：查找某个接待员在今天添加的全部客户，
+     * 以便将这些客户转移给服务老师。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid，不可为 null
+     * @param addTime    添加时间下限（含），不可为 null
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndAddTimeAfter(String addedAgent, LocalDateTime addTime);
+
+    /**
+     * 根据添加人（addedAgent）和添加时间下限统计客户数量。
+     * <p>
+     * 用于在职继承预览：快速统计某个接待员在今天添加的客户总数，
+     * 无需加载完整实体列表。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid，不可为 null
+     * @param addTime    添加时间下限（含），不可为 null
+     * @return 满足条件的客户数量
+     */
+    long countByAddedAgentAndAddTimeAfter(String addedAgent, LocalDateTime addTime);
+
+    /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
      * 仅返回需要修复的记录，避免全表扫描。
      */

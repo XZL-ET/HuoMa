@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
+import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
@@ -20,6 +22,8 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.FormTemplateRepository;
 import com.bookstore.qrcode.repository.QrCodeGroupRepository;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,6 +91,8 @@ public class QrCodeController {
     private final EmployeeSyncService employeeSyncService;
     private final FormTemplateRepository formTemplateRepo;
     private final QrCodeGroupRepository groupRepo;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
     // 企微标签缓存（避免每次打开创建页都调企微接口）
     private volatile java.time.LocalDateTime lastTagSyncTime = null;
@@ -1163,6 +1169,140 @@ public class QrCodeController {
         // 写入响应流
         response.getOutputStream().write(zipBytes);
         response.getOutputStream().flush();
+    }
+
+    /**
+     * 在职继承预览 —— 查询指定活码的待转移客户数量。
+     *
+     * <p>GET /qrcodes/{id}/transfer/preview —— 统计该活码下所有接待员
+     * 在今天添加的客户总数，以及接待员人数和服务老师是否已配置。
+     * 用于在手动触发在职继承前预览影响范围。
+     * </p>
+     *
+     * @param id 活码 ID
+     * @return Map 包含：
+     *         <ul>
+     *           <li>{@code receptionistCount} —— 接待员人数</li>
+     *           <li>{@code customerCount} —— 今天添加的待转移客户数</li>
+     *           <li>{@code error} —— 错误信息（仅在出错或未配置服务老师时出现）</li>
+     *         </ul>
+     */
+    @GetMapping("/{id}/transfer/preview")
+    @ResponseBody
+    public Map<String, Object> transferPreview(@PathVariable Long id) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            QrCode qr = qrCodeService.getById(id);
+            List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId());
+
+            // 统计接待员人数
+            long recCount = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.receptionist)
+                .count();
+
+            // 检查是否有服务老师
+            boolean hasService = agents.stream()
+                .anyMatch(a -> a.getRole() == QrAgent.AgentRole.service);
+
+            if (!hasService) {
+                result.put("error", "该活码未配置服务老师");
+                return result;
+            }
+
+            // 统计所有接待员今天添加的客户总数
+            LocalDateTime todayStart = LocalDateTime.now()
+                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+            long customerCount = 0;
+            for (QrAgent a : agents) {
+                if (a.getRole() == QrAgent.AgentRole.receptionist) {
+                    customerCount += customerRepo
+                        .countByAddedAgentAndAddTimeAfter(a.getAgentUserid(), todayStart);
+                }
+            }
+            result.put("receptionistCount", recCount);
+            result.put("customerCount", customerCount);
+        } catch (Exception e) {
+            result.put("error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 手动触发生在职继承 —— 对指定活码立即执行客户转移。
+     *
+     * <p>POST /qrcodes/{id}/transfer/trigger —— 将该活码下所有接待员
+     * 今天添加的客户转移给服务老师。转移事件通过 XADD 写入 Redis Stream
+     * {@value RedisConfig#TRANSFER_STREAM_KEY}，由 {@code TransferWorker} 异步消费执行。
+     * </p>
+     *
+     * <p>与 {@link com.bookstore.qrcode.job.InheritanceJob#execute()} 逻辑一致，
+     * 但作用域限定为单个活码，适用于管理员即时操作场景。
+     * </p>
+     *
+     * @param id 活码 ID
+     * @return Map 包含：
+     *         <ul>
+     *           <li>{@code transferred} —— 已发起的转移事件数</li>
+     *           <li>{@code error} —— 错误信息（仅在出错或缺少必要角色时出现）</li>
+     *         </ul>
+     */
+    @PostMapping("/{id}/transfer/trigger")
+    @ResponseBody
+    public Map<String, Object> transferTrigger(@PathVariable Long id) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            QrCode qr = qrCodeService.getById(id);
+            List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId());
+
+            // 筛选接待员
+            List<QrAgent> receptionists = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.receptionist)
+                .toList();
+
+            // 查找服务老师
+            QrAgent serviceTeacher = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.service)
+                .findFirst().orElse(null);
+
+            if (receptionists.isEmpty()) {
+                result.put("error", "该活码未配置接待员");
+                return result;
+            }
+            if (serviceTeacher == null) {
+                result.put("error", "该活码未配置服务老师");
+                return result;
+            }
+
+            // 当天 00:00:00 作为时间下限
+            LocalDateTime todayStart = LocalDateTime.now()
+                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+
+            int totalTransfers = 0;
+            for (QrAgent rec : receptionists) {
+                List<Customer> customers = customerRepo
+                    .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), todayStart);
+
+                for (Customer c : customers) {
+                    Map<String, Object> event = new LinkedHashMap<>();
+                    event.put("customer_id", c.getId().toString());
+                    event.put("from_userid", rec.getAgentUserid());
+                    event.put("to_userid", serviceTeacher.getAgentUserid());
+                    event.put("external_userid", c.getExternalUserid());
+                    event.put("state", qr.getSchoolId());
+
+                    redisTemplate.opsForStream().add(
+                        RedisConfig.TRANSFER_STREAM_KEY,
+                        Map.of("event", objectMapper.writeValueAsString(event)));
+                    totalTransfers++;
+                }
+            }
+            result.put("transferred", totalTransfers);
+            log.info("手动触发生在职继承: qrCodeId={}, 转移数={}", id, totalTransfers);
+        } catch (Exception e) {
+            log.error("手动触发生在职继承失败: qrCodeId={}", id, e);
+            result.put("error", e.getMessage());
+        }
+        return result;
     }
 
 }
