@@ -724,6 +724,28 @@ public class WecomApiClient {
         }
     }
 
+    /**
+     * 修改客户备注。
+     * POST /cgi-bin/externalcontact/remark
+     */
+    public void updateRemark(String userId, String externalUserid, String remark) {
+        String url = BASE_URL + "/externalcontact/remark?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("userid", userId);
+            bodyMap.put("external_userid", externalUserid);
+            bodyMap.put("remark", remark != null ? remark : "");
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            parseAndCheck(resp, "修改备注");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "修改备注失败: " + e.getMessage(), null);
+        }
+    }
+
     // ========================================================================
     //  内部工具方法
     // ========================================================================
