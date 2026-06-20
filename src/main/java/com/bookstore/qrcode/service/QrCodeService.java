@@ -78,6 +78,7 @@ public class QrCodeService {
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
+    private final WechatSyncHealingService healingService;
 
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:100}")
@@ -422,188 +423,21 @@ public class QrCodeService {
         }
 
         List<QrAgent> allAgents = qrAgentRepo.findByQrCodeId(qrCodeId);
-        Set<String> userIds = new LinkedHashSet<>();
+        List<String> userIds = new ArrayList<>();
         for (QrAgent a : allAgents) {
             if (a.getStatus() == QrAgent.AgentStatus.active) {
                 userIds.add(a.getAgentUserid());
             }
         }
 
-        syncQrUsersToWechatWithHealing(qrCodeId, qr.getQrConfigId(), new ArrayList<>(userIds), 0);
-    }
+        // 委托给统一自愈服务
+        WechatSyncHealingService.SyncResult result =
+            healingService.syncWithHealing(qrCodeId, userIds, "qr-service");
 
-    /**
-     * Layer 2 自愈：同步联系人到企微，遇到 40098/41054 自动定位并替换不可用员工。
-     *
-     * <p>递归重试最多 5 次。每次遇到不可用用户：
-     * <ol>
-     *   <li>二分查找定位不可用的 userid</li>
-     *   <li>从 qr_agent 移除（status=removed）</li>
-     *   <li>调用 poolService.blockAgentForWechatIssue 封锁</li>
-     *   <li>从全局池选取替代员工加入 qr_agent</li>
-     *   <li>使用新用户列表递归重试</li>
-     * </ol>
-     */
-    private void syncQrUsersToWechatWithHealing(Long qrCodeId, String configId,
-                                                 List<String> userIds, int attempt) {
-        if (userIds.isEmpty()) {
-            log.warn("活码 {} 无可用联系人，无法同步", configId);
-            return;
+        if (!result.success) {
+            log.error("同步企微活码失败: qrCodeId={}, reason={}", qrCodeId, result.reason);
+            throw new RuntimeException("同步企微活码失败: " + result.reason);
         }
-        if (attempt >= 5) {
-            log.error("活码 {} 自愈重试已达上限({}次)，放弃同步。当前用户: {}",
-                configId, attempt, userIds);
-            alertService.createAlert("system", "qr_sync_heal_exhausted",
-                AgentAlert.AlertSeverity.high,
-                String.format("活码 %s 自愈重试 %d 次后仍失败，需人工介入。当前用户: %s",
-                    configId, attempt, userIds),
-                AgentAlert.AutoAction.none, qrCodeId);
-            return;
-        }
-
-        try {
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("config_id", configId);
-            body.put("user", new ArrayList<>(userIds));
-            String json = objectMapper.writeValueAsString(body);
-            wecomApi.updateContactWay(json);
-            // parseAndCheck 确保 errcode=0 才会返回
-            log.info("同步企微活码成功: config_id={}, users={}", configId, userIds);
-            return;
-
-        } catch (WecomApiException we) {
-            // 可自愈错误（40098=未实名, 41054=未激活）→ 继续自愈流程
-            if (we.getErrcode() == 40098 || we.getErrcode() == 41054) {
-                log.error("同步企微活码失败 (errcode={}): config_id={}, users={}",
-                    we.getErrcode(), configId, userIds);
-
-                // 二分查找定位不可用用户
-                String badUserid = findFailingUser(configId, userIds);
-                if (badUserid == null) {
-                    log.error("活码 {} 无法通过二分查找定位不可用用户 (errcode={})", configId, we.getErrcode());
-                    throw new RuntimeException("无法定位不可用用户: errcode=" + we.getErrcode());
-                }
-
-                log.warn("Layer2自愈: 活码 {} 定位到不可用用户 userid={}, errcode={}",
-                    configId, badUserid, we.getErrcode());
-
-                // ① 从 qr_agent 移除
-                qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, badUserid).ifPresent(qa -> {
-                    qa.setStatus(QrAgent.AgentStatus.removed);
-                    qrAgentRepo.save(qa);
-                });
-
-                // ② 封锁 agent 并从全局池移除
-                poolService.blockAgentForWechatIssue(badUserid, we.getErrcode());
-
-                // ③ 从当前用户列表中移除
-                userIds.remove(badUserid);
-
-                // ④ 从全局池选取替代员工
-                Set<String> excludeUserids = new HashSet<>(userIds);
-                GlobalAgentPool replacement = poolService.takeStandby(excludeUserids);
-                if (replacement != null) {
-                    userIds.add(replacement.getAgentUserid());
-                    int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId)
-                        .stream().mapToInt(QrAgent::getSortOrder).max().orElse(0);
-                    qrAgentRepo.save(QrAgent.builder()
-                        .qrCodeId(qrCodeId).agentUserid(replacement.getAgentUserid())
-                        .role(QrAgent.AgentRole.receptionist)
-                        .dailyMax(replacement.getDailyMax())
-                        .sortOrder(maxOrder + 1)
-                        .status(QrAgent.AgentStatus.active).build());
-                    log.info("Layer2自愈: 活码 {} 替代 {} -> {} (attempt={})",
-                        qrCodeId, badUserid, replacement.getAgentUserid(), attempt + 1);
-                } else {
-                    log.warn("Layer2自愈: 活码 {} 无替代员工可用（池枯竭），移除 {} 后继续",
-                        qrCodeId, badUserid);
-                }
-
-                // ⑤ 创建告警
-                alertService.createAlert(badUserid, "wechat_unavailable",
-                    AgentAlert.AlertSeverity.medium,
-                    String.format("企微不可用员工已被自愈移除: userid=%s errcode=%d 活码=%d 替换=%s",
-                        badUserid, we.getErrcode(), qrCodeId,
-                        replacement != null ? replacement.getAgentUserid() : "无"),
-                    AgentAlert.AutoAction.removed, qrCodeId);
-
-                // 重试
-                syncQrUsersToWechatWithHealing(qrCodeId, configId, userIds, attempt + 1);
-                return;
-            }
-
-            // 非可自愈错误：直接抛异常
-            throw new RuntimeException(String.format(
-                "同步企微活码失败 config_id=%s errcode=%d errmsg=%s",
-                configId, we.getErrcode(), we.getErrmsg()), we);
-
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("同步企微活码失败: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 二分查找定位不可用用户（errcode=40098 或 41054）。
-     *
-     * <p>将用户列表对半分，分别调用 updateContactWay。失败的一半包含不可用用户，
-     * 继续二分直到定位到单个用户。O(log N) 次 API 调用。</p>
-     */
-    private String findFailingUser(String configId, List<String> userIds) {
-        if (userIds.isEmpty()) return null;
-        if (userIds.size() == 1) return userIds.get(0);
-
-        List<String> mutable = new ArrayList<>(userIds);
-        int left = 0, right = mutable.size();
-
-        while (left + 1 < right) {
-            int mid = (left + right) / 2;
-            List<String> leftHalf = mutable.subList(left, mid);
-
-            try {
-                Map<String, Object> body = new LinkedHashMap<>();
-                body.put("config_id", configId);
-                body.put("user", new ArrayList<>(leftHalf));
-                String json = objectMapper.writeValueAsString(body);
-                wecomApi.updateContactWay(json);
-                // parseAndCheck 保证 errcode=0，左半正常
-                left = mid;
-            } catch (WecomApiException e) {
-                if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
-                    right = mid;  // 不可用用户在左半
-                } else {
-                    // 非可自愈错误，退化为线性扫描
-                    log.warn("二分查找遇到非可自愈错误 errcode={}，退化为线性扫描", e.getErrcode());
-                    break;
-                }
-            } catch (Exception e) {
-                // API 调用异常时退化为线性扫描
-                log.warn("二分查找 API 异常，退化为线性扫描", e);
-                break;
-            }
-        }
-
-        // 兜底：线性扫描 [left, right) 范围
-        for (int i = left; i < Math.min(right, mutable.size()); i++) {
-            String uid = mutable.get(i);
-            try {
-                Map<String, Object> body = new LinkedHashMap<>();
-                body.put("config_id", configId);
-                body.put("user", List.of(uid));
-                String json = objectMapper.writeValueAsString(body);
-                wecomApi.updateContactWay(json);
-                // parseAndCheck 保证 errcode=0，该用户正常
-            } catch (WecomApiException e) {
-                if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
-                    return uid;
-                }
-            } catch (Exception ex) {
-                log.warn("线性扫描查用户异常: userid={}", uid, ex);
-            }
-        }
-
-        return null;
     }
 
     // ==================== 后备池管理（全局池版本） ====================

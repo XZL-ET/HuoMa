@@ -114,6 +114,16 @@ public class RedisConfig {
     public static final String AGENT_DAILY_TOTAL_PREFIX = "agent:daily:total:";
 
     /**
+     * QrAgent 日计数 Key 前缀。
+     * <p>
+     * 完整 Key 格式：<code>agent:daily:qa:{qrAgentId}</code>
+     * <br>以 QrAgent 主键 ID 为粒度，记录单个员工在单个活码上的今日添加数。
+     * 用于阈值检查与自动轮换。
+     * </p>
+     */
+    public static final String DAILY_COUNT_KEY_PREFIX = "agent:daily:qa:";
+
+    /**
      * 速率限制滑窗 Key 前缀。
      * <p>
      * 完整 Key 格式：<code>rate:{userid}</code>

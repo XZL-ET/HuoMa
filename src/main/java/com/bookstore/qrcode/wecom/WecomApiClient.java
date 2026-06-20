@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -223,6 +224,53 @@ public class WecomApiClient {
         String url = BASE_URL + "/externalcontact/update_contact_way?access_token=" + getAccessToken();
         String resp = postForJson(url, requestJson);
         return parseAndCheck(resp, "更新活码");
+    }
+
+    /**
+     * 更新活码配置的便捷方法，接受 configId 与 user 列表。
+     *
+     * @param configId 活码配置 ID
+     * @param userIds  企微 userid 列表
+     * @return JsonNode {@code {errcode, errmsg}}
+     * @throws WecomApiException API 调用失败时抛出
+     */
+    public JsonNode updateContactWay(String configId, List<String> userIds) {
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("config_id", configId);
+            body.put("user", new ArrayList<>(userIds));
+            return updateContactWay(objectMapper.writeValueAsString(body));
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "更新活码失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
+     * 获取活码配置详情。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/get_contact_way}
+     *
+     * @param configId 活码配置 ID
+     * @return JsonNode 包含活码的完整配置信息（含 user 列表）
+     * @throws WecomApiException API 调用失败时抛出
+     */
+    public JsonNode getContactWay(String configId) {
+        String url = BASE_URL + "/externalcontact/get_contact_way?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("config_id", configId);
+            String json = objectMapper.writeValueAsString(body);
+            String resp = postForJson(url, json);
+            return parseAndCheck(resp, "获取活码详情");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "获取活码详情失败: " + e.getMessage(), null);
+        }
     }
 
     /**

@@ -59,7 +59,8 @@ public class DailyResetWorker {
     private final CustomerTransferRepository transferRepo;
     private final QrCodeService qrCodeService;
     private final GlobalAgentPoolService poolService;
-    private final com.bookstore.qrcode.service.AgentBindService agentBindService;
+    private final com.bookstore.qrcode.service.AgentDailyCountService countService;
+    private final com.bookstore.qrcode.service.AgentRotationService rotationService;
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
     /** 自身代理引用 — 通过 @Lazy 延迟注入，确保 @Transactional 走 AOP 代理 */
@@ -212,7 +213,7 @@ public class DailyResetWorker {
                     public void afterCommit() {
                         for (Long qrId : affectedQrIds) {
                             try {
-                                agentBindService.syncQrCodeToWechatAsync(qrId);
+                                rotationService.syncQrCodeToWechatAsync(qrId);
                             } catch (Exception e) {
                                 log.error("日重置后异步同步活码失败: qrId={}", qrId, e);
                             }

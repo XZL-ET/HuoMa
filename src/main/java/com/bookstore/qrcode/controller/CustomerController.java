@@ -5,7 +5,7 @@ import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.service.CustomerService;
-import com.bookstore.qrcode.service.AgentBindService;
+import com.bookstore.qrcode.service.AgentRotationService;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.TagRepository;
@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  * <p>
  * 处理客户列表、客户详情、数据修复、员工名称同步以及测试客户创建等页面的请求。
  * 依赖 {@link CustomerService} 进行核心业务操作，通过 {@link WecomApiClient} 调用企业微信 API
- * 获取员工信息，并结合 {@link AgentBindService} 完成客户分配与日接计数更新。
+ * 获取员工信息，并结合 {@link AgentRotationService} 完成客户分配与日接计数更新。
  * </p>
  *
  * @author Bookstore Dev
@@ -51,7 +51,7 @@ import java.util.stream.Collectors;
 public class CustomerController {
 
     private final CustomerService customerService;
-    private final AgentBindService agentBindService;
+    private final AgentRotationService rotationService;
     private final AgentRepository agentRepo;
     private final QrCodeRepository qrCodeRepo;
     private final TagRepository tagRepo;
@@ -377,7 +377,7 @@ public class CustomerController {
      * @param name        客户名称，默认为 "测试客户"
      * @return 重定向到客户列表页
      * @see CustomerService#createManual(String, String, String, String, Long)
-     * @see AgentBindService#incrementDailyCount(String, String)
+     * @see AgentRotationService#incrementDailyCount(String, String)
      */
     @PostMapping("/create-test")
     public String createTest(@RequestParam String agentUserid,
@@ -410,7 +410,7 @@ public class CustomerController {
 
         // 同步更新员工日接待计数，触发轮换检查（与真实客户分配后逻辑一致）
         if (schoolId != null) {
-            agentBindService.incrementDailyCount(agentUserid, schoolId);
+            rotationService.incrementDailyCount(agentUserid, schoolId);
         }
 
         log.info("创建测试客户: name={}, agentUserid={}, schoolId={}", name, agentUserid, schoolId);

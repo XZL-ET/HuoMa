@@ -82,7 +82,7 @@ public class Agent {
     /**
      * 当日已接待客户总数（参考值，非实时）。
      * <p>注意：实时计数走 Redis key {@code agent:daily:total:{userid}}，
-     * 由 {@code AgentBindService.incrementDailyCount} 异步同步到
+     * 由 {@code AgentRotationService.incrementDailyCount} 异步同步到
      * {@code GlobalAgentPool.dailyCurrent}。此字段可能滞后，
      * 仅作为重启后恢复计数的持久化备份。</p>
      */

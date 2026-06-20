@@ -3,7 +3,7 @@ spring:
   profiles:
     active: dev
   main:
-    allow-circular-references: true   # 允许自注入（AgentBindService 通过 self 代理引用调用 @Async/@Transactional）
+    allow-circular-references: true   # 允许自注入（DailyResetWorker/PatrolWorker 通过 self 代理引用调用 @Transactional）
   thymeleaf:
     cache: false                    # 开发环境禁用模板缓存（实时刷新）
     prefix: classpath:/templates/   # 模板文件路径前缀

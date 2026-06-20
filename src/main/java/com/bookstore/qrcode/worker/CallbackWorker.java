@@ -59,7 +59,7 @@ public class CallbackWorker {
 
     private final StringRedisTemplate redisTemplate;
     private final CustomerService customerService;
-    private final AgentBindService agentBindService;
+    private final AgentRotationService rotationService;
     private final AlertService alertService;
     private final RateLimiterService rateLimiterService;
     private final ObjectMapper objectMapper;
@@ -290,7 +290,7 @@ public class CallbackWorker {
      *       将客户信息写入数据库；</li>
      *   <li><b>发布打标事件</b> —— 将打标所需数据以 XADD 方式发布到
      *       {@link RedisConfig#TAG_STREAM_KEY}，由 {@link TagWorker} 异步消费；</li>
-     *   <li><b>员工日计数 +1</b> —— 调用 {@link AgentBindService#incrementDailyCount}
+     *   <li><b>员工日计数 +1</b> —— 调用 {@link AgentRotationService#incrementDailyCount}
      *       累加该员工今日全局接待量，触发阈值检查与自动轮换。</li>
      * </ol>
      * </p>
@@ -345,7 +345,7 @@ public class CallbackWorker {
 
         // ④ 员工日计数 +1
         try {
-            agentBindService.incrementDailyCount(userId, state);
+            rotationService.incrementDailyCount(userId, state);
         } catch (Exception e) {
             log.error("日计数失败: userid={}, state={}", userId, state, e);
         }
