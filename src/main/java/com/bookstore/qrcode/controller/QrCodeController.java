@@ -17,6 +17,7 @@ import com.bookstore.qrcode.service.QrImageService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.repository.FormTemplateRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -83,6 +84,7 @@ public class QrCodeController {
     private final TagService tagService;
     private final EmployeeRepository employeeRepo;
     private final EmployeeSyncService employeeSyncService;
+    private final FormTemplateRepository formTemplateRepo;
 
     // 企微标签缓存（避免每次打开创建页都调企微接口）
     private volatile java.time.LocalDateTime lastTagSyncTime = null;
@@ -907,6 +909,46 @@ public class QrCodeController {
             redirect.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/qrcodes/" + id;
+    }
+
+    @PostMapping("/{id}/welcome")
+    public String updateWelcome(@PathVariable Long id,
+                                 @RequestParam(required = false) String welcomeText,
+                                 @RequestParam(required = false) Long formTemplateId,
+                                 RedirectAttributes redirect) {
+        try {
+            QrCode qr = qrCodeService.getById(id);
+            if (welcomeText != null) qr.setWelcomeText(welcomeText);
+            qr.setFormTemplateId(formTemplateId);
+            qrCodeRepo.save(qr);
+            redirect.addFlashAttribute("message", "客户配置已更新");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    @PostMapping("/batch-config")
+    public String batchConfig(@RequestParam List<Long> ids,
+                               @RequestParam(required = false) String welcomeText,
+                               @RequestParam(required = false) Long formTemplateId,
+                               @RequestParam(required = false) Long groupId,
+                               RedirectAttributes redirect) {
+        int count = 0;
+        for (Long id : ids) {
+            try {
+                QrCode qr = qrCodeService.getById(id);
+                if (welcomeText != null && !welcomeText.isBlank()) qr.setWelcomeText(welcomeText);
+                if (formTemplateId != null) qr.setFormTemplateId(formTemplateId);
+                if (groupId != null) qr.setGroupId(groupId);
+                qrCodeRepo.save(qr);
+                count++;
+            } catch (Exception e) {
+                log.warn("批量配置失败: id={}", id, e);
+            }
+        }
+        redirect.addFlashAttribute("message", "已更新 " + count + " 个活码");
+        return "redirect:/qrcodes";
     }
 
     /**
