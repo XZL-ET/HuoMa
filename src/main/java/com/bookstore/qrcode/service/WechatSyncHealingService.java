@@ -1,11 +1,9 @@
 package com.bookstore.qrcode.service;
 
-import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
-import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -36,8 +34,6 @@ public class WechatSyncHealingService {
     private final QrCodeRepository qrCodeRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
-    private final AgentRepository agentRepo;
-
     private static final int MAX_HEAL_ATTEMPTS = 5;
 
     /**
