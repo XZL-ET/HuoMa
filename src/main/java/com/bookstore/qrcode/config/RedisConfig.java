@@ -96,6 +96,13 @@ public class RedisConfig {
     /** Consumer Group 名称：客户信息补全消费组 */
     public static final String DATAFILL_CONSUMER_GROUP = "datafill-worker-group";
 
+    // ==================== 出站消息 Stream 相关常量 ====================
+
+    /** Redis Stream Key：出站事件流，OutboundWorker 从此消费出站事件 */
+    public static final String OUTBOUND_STREAM_KEY = "wecom:outbound:stream";
+    /** Consumer Group 名称：出站 Worker 消费组 */
+    public static final String OUTBOUND_CONSUMER_GROUP = "outbound-worker-group";
+
     // ==================== 业务 Key 前缀常量 ====================
 
     /**
@@ -255,6 +262,32 @@ public class RedisConfig {
             // 消费组已存在，忽略
         }
         return DATAFILL_CONSUMER_GROUP;
+    }
+
+    /**
+     * 应用启动时自动创建出站消息 Redis Stream Consumer Group。
+     * <p>
+     * 首次启动时创建消费组 {@value #OUTBOUND_CONSUMER_GROUP}，
+     * 绑定到 Stream {@value #OUTBOUND_STREAM_KEY}，从最早消息（0-0）开始消费。
+     * 若消费组已存在则静默忽略异常，保证重启不报错。
+     * </p>
+     *
+     * @param redisTemplate 已注入的 StringRedisTemplate
+     * @return 消费组名称，供 OutboundWorker 引用
+     */
+    @Bean
+    public String outboundConsumerGroup(
+            @Qualifier("stringRedisTemplate") StringRedisTemplate redisTemplate) {
+        try {
+            RecordId initId = redisTemplate.opsForStream()
+                .add(OUTBOUND_STREAM_KEY, Map.of("_init", "1"));
+            redisTemplate.opsForStream().createGroup(OUTBOUND_STREAM_KEY,
+                ReadOffset.from("0-0"), OUTBOUND_CONSUMER_GROUP);
+            redisTemplate.opsForStream().delete(OUTBOUND_STREAM_KEY, initId);
+        } catch (Exception e) {
+            // 消费组已存在，忽略
+        }
+        return OUTBOUND_CONSUMER_GROUP;
     }
 
     // ==================== 限流 RedisTemplate ====================
