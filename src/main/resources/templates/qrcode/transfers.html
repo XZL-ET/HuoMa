@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='在职继承记录', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <h5>🔄 在职继承记录 — <span th:text="${qr.schoolName}"></span></h5>
+    <a th:href="@{/qrcodes/{id}(id=${qr.id})}" class="btn btn-sm btn-outline-secondary mb-2">
+        ← 返回活码详情
+    </a>
+    <table class="table table-sm mt-3">
+        <thead><tr><th>客户ID</th><th>转出方</th><th>转入方</th><th>状态</th><th>时间</th></tr></thead>
+        <tbody>
+            <tr th:each="t : ${transfers.content}">
+                <td th:text="${t.customerId}"></td>
+                <td th:text="${nameMap.getOrDefault(t.fromUserid, t.fromUserid)}"></td>
+                <td th:text="${nameMap.getOrDefault(t.toUserid, t.toUserid)}"></td>
+                <td>
+                    <span class="badge"
+                          th:classappend="${t.status.name() == 'confirmed' ? 'bg-success'
+                              : t.status.name() == 'rejected' ? 'bg-danger'
+                              : t.status.name() == 'timeout' ? 'bg-warning'
+                              : t.status.name() == 'api_failed' ? 'bg-secondary'
+                              : t.status.name() == 'retry_limit' ? 'bg-dark'
+                              : 'bg-secondary'}"
+                          th:text="${t.status.name()}"></span>
+                </td>
+                <td th:text="${t.transferTime}"></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Pagination -->
+    <nav th:if="${transfers.totalPages > 1}">
+        <ul class="pagination pagination-sm justify-content-center">
+            <li class="page-item" th:classappend="${transfers.number == 0} ? 'disabled'">
+                <a class="page-link" th:href="@{/qrcodes/{id}/transfers(id=${qr.id}, page=${transfers.number - 1})}">上一页</a>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link" th:text="'第' + (${transfers.number} + 1) + '页 / 共' + ${transfers.totalPages} + '页'"></span>
+            </li>
+            <li class="page-item" th:classappend="${transfers.number + 1 >= transfers.totalPages} ? 'disabled'">
+                <a class="page-link" th:href="@{/qrcodes/{id}/transfers(id=${qr.id}, page=${transfers.number + 1})}">下一页</a>
+            </li>
+        </ul>
+    </nav>
+</div>
+</main>
+</html>

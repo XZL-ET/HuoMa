@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.CustomerTransfer;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -24,6 +26,15 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      * @return 该客户的转移记录列表
      */
     List<CustomerTransfer> findByCustomerId(Long customerId);
+
+    /**
+     * 根据活码 ID 分页查询转移记录，按转移时间倒序排列。
+     *
+     * @param qrCodeId 活码 ID
+     * @param pageable 分页参数
+     * @return 转移记录分页结果
+     */
+    Page<CustomerTransfer> findByQrCodeIdOrderByTransferTimeDesc(Long qrCodeId, Pageable pageable);
 
     /**
      * 根据转移状态查询所有符合条件的转移记录。

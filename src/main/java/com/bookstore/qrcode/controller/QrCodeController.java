@@ -3,6 +3,8 @@ package com.bookstore.qrcode.controller;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.CustomerTransfer;
+import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
@@ -18,6 +20,7 @@ import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.FormTemplateRepository;
 import com.bookstore.qrcode.repository.QrCodeGroupRepository;
@@ -88,6 +91,7 @@ public class QrCodeController {
     private final QrImageService qrImageService;
     private final TagService tagService;
     private final EmployeeRepository employeeRepo;
+    private final CustomerTransferRepository transferRepo;
     private final EmployeeSyncService employeeSyncService;
     private final FormTemplateRepository formTemplateRepo;
     private final QrCodeGroupRepository groupRepo;
@@ -1303,6 +1307,51 @@ public class QrCodeController {
             result.put("error", e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * 在职继承记录页 —— 查看指定活码的客户转移历史。
+     *
+     * <p>GET /qrcodes/{id}/transfers —— 分页展示该活码下的所有客户转移记录，
+     * 按转移时间倒序排列，每页 20 条。同时构建 userid 到姓名的映射表，
+     * 用于在页面上将企微 userid 解析为中文姓名展示。
+     * </p>
+     *
+     * @param id    活码 ID
+     * @param page  页码，从 0 开始，默认 0
+     * @param model Spring MVC {@link Model}
+     *              <ul>
+     *                <li>{@code qr} —— 活码实体</li>
+     *                <li>{@code transfers} —— 转移记录分页结果</li>
+     *                <li>{@code nameMap} —— userid 到姓名的映射</li>
+     *              </ul>
+     * @return 模板视图名 {@code "qrcode/transfers"}
+     */
+    @GetMapping("/{id}/transfers")
+    public String transfers(@PathVariable Long id,
+                             @RequestParam(defaultValue = "0") int page,
+                             Model model) {
+        QrCode qr = qrCodeService.getById(id);
+        model.addAttribute("qr", qr);
+
+        Page<CustomerTransfer> transfers = transferRepo
+            .findByQrCodeIdOrderByTransferTimeDesc(id,
+                PageRequest.of(page, 20));
+        model.addAttribute("transfers", transfers);
+
+        // Build name map from Employee table
+        Map<String, String> nameMap = new HashMap<>();
+        for (CustomerTransfer t : transfers.getContent()) {
+            nameMap.putIfAbsent(t.getFromUserid(),
+                employeeRepo.findByUserid(t.getFromUserid())
+                    .map(Employee::getName).orElse(t.getFromUserid()));
+            nameMap.putIfAbsent(t.getToUserid(),
+                employeeRepo.findByUserid(t.getToUserid())
+                    .map(Employee::getName).orElse(t.getToUserid()));
+        }
+        model.addAttribute("nameMap", nameMap);
+
+        return "qrcode/transfers";
     }
 
 }
