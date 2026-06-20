@@ -205,8 +205,11 @@ public class TransferService {
                     default:
                         // 未知状态或 API 未返回有效状态 → 继续等待
                         t.setRetryCount(t.getRetryCount() + 1);
-                        if (t.getTransferTime() != null
-                            && t.getTransferTime().plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
+                        // 优先用 transferTime，若为 null 则降级为 createdAt，再为 null 则用当前时间
+                        LocalDateTime referenceTime = t.getTransferTime() != null
+                            ? t.getTransferTime()
+                            : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
+                        if (referenceTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
                             t.setStatus(CustomerTransfer.TransferStatus.timeout);
                             t.setFailReason("转移超时 (24h)");
                         }
