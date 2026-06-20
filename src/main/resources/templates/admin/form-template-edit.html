@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='编辑表单模板', content=~{::main})}">
+<main>
+<div class="card p-4 mx-auto" style="max-width: 800px;">
+    <h5 th:text="${template == null ? '新建表单模板' : '编辑表单模板'}"></h5>
+    <form method="post"
+          th:action="${template == null ? '/admin/form-templates/create' : '/admin/form-templates/' + template.id + '/update'}">
+        <div class="mb-3">
+            <label class="form-label">模板名称 <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required
+                   th:value="${template?.name}" placeholder="如：学校通用表单">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">说明</label>
+            <input type="text" name="description" class="form-control"
+                   th:value="${template?.description}" placeholder="表单用途说明">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">字段定义 (JSON) <span class="text-danger">*</span></label>
+            <textarea name="fields" class="form-control" rows="12" required
+                      style="font-family:monospace;font-size:13px;"
+                      th:text="${template?.fields}">[{"name":"grade","label":"孩子年级","type":"select","required":true,"options":["一年级","二年级","三年级","四年级","五年级","六年级","初一","初二","初三","高一","高二","高三"]},{"name":"class","label":"孩子班级","type":"select","required":true,"options":["1班","2班",...,"20班"]},{"name":"child_name","label":"孩子姓名","type":"text","required":false}]</textarea>
+            <div class="form-text">type: text | select。select 需提供 options 数组。</div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">字段映射规则 (JSON) <span class="text-danger">*</span></label>
+            <textarea name="tagMapping" class="form-control" rows="4" required
+                      style="font-family:monospace;font-size:13px;"
+                      th:text="${template?.tagMapping}">{"grade":"tag","class":"tag","child_name":"remark"}</textarea>
+            <div class="form-text">tag=打企微标签, remark=写企微备注</div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">备注模板</label>
+            <input type="text" name="remarkTemplate" class="form-control"
+                   th:value="${template?.remarkTemplate}"
+                   placeholder="如：{{child_name}}-{{grade}}{{class}}">
+            <div class="form-text">支持 {{fieldName}} 占位符</div>
+        </div>
+        <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">保存</button>
+            <a href="/admin/form-templates" class="btn btn-outline-secondary">取消</a>
+        </div>
+    </form>
+</div>
+</main>
+</html>

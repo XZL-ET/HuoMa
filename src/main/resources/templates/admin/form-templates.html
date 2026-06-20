@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='表单模板管理', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>📋 收集表单模板</h5>
+        <a href="/admin/form-templates/create" class="btn btn-primary btn-sm">+ 新建模板</a>
+    </div>
+    <div th:if="${templates.isEmpty()}" class="text-muted text-center py-4">
+        暂无模板，点击「新建模板」创建第一个
+    </div>
+    <table th:if="${!templates.isEmpty()}" class="table table-sm">
+        <thead><tr><th>名称</th><th>说明</th><th>操作</th></tr></thead>
+        <tbody>
+            <tr th:each="t : ${templates}">
+                <td><strong th:text="${t.name}"></strong></td>
+                <td th:text="${t.description}"></td>
+                <td class="text-nowrap">
+                    <a th:href="@{/admin/form-templates/{id}/edit(id=${t.id})}"
+                       class="btn btn-sm btn-outline-secondary">编辑</a>
+                    <form th:action="@{/admin/form-templates/{id}/delete(id=${t.id})}"
+                          method="post" class="d-inline"
+                          onsubmit="return confirm('确定删除该模板？已有活码引用时不影响已收集数据。')">
+                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+</main>
+</html>
