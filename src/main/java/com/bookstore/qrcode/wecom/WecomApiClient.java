@@ -3,17 +3,17 @@ package com.bookstore.qrcode.wecom;
 import com.bookstore.qrcode.config.WecomConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,22 +47,25 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class WecomApiClient {
 
     private final WecomConfig config;
-    private final RestTemplate restTemplate = createRestTemplate();
+    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 企微根部门 ID，用于递归拉取成员列表，可通过 app.wecom.root-department-id 配置 */
     @Value("${app.wecom.root-department-id:1}")
     private int rootDepartmentId;
 
-    private static RestTemplate createRestTemplate() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(3000);   // 连接超时 3s
-        factory.setReadTimeout(10000);     // 读取超时 10s
-        return new RestTemplate(factory);
+    public WecomApiClient(WecomConfig config,
+                          @Value("${app.wecom.connect-timeout:3}") int connectTimeoutSec,
+                          @Value("${app.wecom.read-timeout:10}") int readTimeoutSec,
+                          RestTemplateBuilder builder) {
+        this.config = config;
+        this.restTemplate = builder
+            .connectTimeout(Duration.ofSeconds(connectTimeoutSec))
+            .readTimeout(Duration.ofSeconds(readTimeoutSec))
+            .build();
     }
 
     /** access_token 获取接口: GET https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ID&corpsecret=SECRET */
