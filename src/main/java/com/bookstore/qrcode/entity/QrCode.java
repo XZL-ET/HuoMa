@@ -59,6 +59,18 @@ public class QrCode {
     @Column(name = "qr_image_path", length = 500)
     private String qrImagePath;
 
+    /** 关联的表单模板 ID，用于信息收集表单 */
+    @Column(name = "form_template_id")
+    private Long formTemplateId;
+
+    /** 欢迎语文本 */
+    @Column(name = "welcome_text", length = 500)
+    private String welcomeText;
+
+    /** 所属活码分组 ID */
+    @Column(name = "group_id")
+    private Long groupId;
+
     /**
      * 样式配置（JSON 格式），控制二维码展示外观。
      * <p>JSON 结构示例：</p>
