@@ -63,6 +63,9 @@ app:
   transfer:
     form-url: ${TRANSFER_FORM_URL:}
   school-entry-url: http://<YOUR_SERVER_IP>:8080/s
+  school-rate-limit:
+    max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:30}
+    window-seconds: 60
 
 ---
 spring:

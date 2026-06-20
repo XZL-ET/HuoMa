@@ -4,12 +4,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -144,6 +147,15 @@ public class RedisConfig {
     public static final String ROTATE_LOCK_PREFIX = "rotate:lock:";
 
     /**
+     * 学校访问限流 Key 前缀。
+     * <p>
+     * 完整 Key 格式：<code>school_rate:{ip}</code>
+     * <br>基于 Redis Sorted Set 实现滑动窗口，用于限制学校自助查询页面的访问频率。
+     * </p>
+     */
+    public static final String SCHOOL_RATE_KEY_PREFIX = "school_rate:";
+
+    /**
      * 配置并注入 StringRedisTemplate Bean。
      * <p>
      * 显式设置所有序列化器为 UTF-8 字符串序列化，确保：
@@ -240,6 +252,31 @@ public class RedisConfig {
             // 消费组已存在，忽略
         }
         return DATAFILL_CONSUMER_GROUP;
+    }
+
+    // ==================== 限流 RedisTemplate ====================
+
+    /**
+     * 限流专用 StringRedisTemplate Bean，使用 200ms 短超时防止阻塞。
+     * <p>
+     * 基于主 Redis 连接工厂的 Standalone 配置构建独立连接工厂，
+     * 命令超时仅 200ms，确保限流检查在 Redis 故障时快速失败并降级到本地计数。
+     * </p>
+     *
+     * @param factory 主 Lettuce 连接工厂，由 Spring Boot 自动配置注入
+     * @return 限流专用的 StringRedisTemplate 实例
+     */
+    @Bean
+    public StringRedisTemplate rateLimitRedisTemplate(
+            LettuceConnectionFactory factory) {
+        LettuceClientConfiguration config = LettuceClientConfiguration.builder()
+                .commandTimeout(Duration.ofMillis(200))
+                .build();
+        LettuceConnectionFactory shortTimeoutFactory =
+                new LettuceConnectionFactory(
+                        factory.getStandaloneConfiguration(), config);
+        shortTimeoutFactory.afterPropertiesSet();
+        return new StringRedisTemplate(shortTimeoutFactory);
     }
 
     // ==================== 分布式锁 Lua 脚本 ====================

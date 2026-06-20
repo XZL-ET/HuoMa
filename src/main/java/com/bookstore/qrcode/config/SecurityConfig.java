@@ -1,7 +1,10 @@
 package com.bookstore.qrcode.config;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -18,6 +21,10 @@ import org.springframework.security.web.SecurityFilterChain;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    @Autowired
+    @Qualifier("rateLimitRedisTemplate")
+    private StringRedisTemplate rateLimitRedisTemplate;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -59,9 +66,14 @@ public class SecurityConfig {
                         .deleteCookies("JSESSIONID")
                         .permitAll()
                 )
-                .addFilterBefore(new SchoolRateLimitFilter(),
+                .addFilterBefore(schoolRateLimitFilter(),
                         org.springframework.security.web.access.intercept.AuthorizationFilter.class);
         return http.build();
+    }
+
+    @Bean
+    public SchoolRateLimitFilter schoolRateLimitFilter() {
+        return new SchoolRateLimitFilter(rateLimitRedisTemplate, 30);
     }
 
     @Bean

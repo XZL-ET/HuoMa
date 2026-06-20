@@ -3,22 +3,41 @@ package com.bookstore.qrcode.config;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
  * SchoolRateLimitFilter 单元测试。
- * <p>验证滑动窗口限流逻辑：允许范围内的请求，拒绝超限的请求。</p>
+ * <p>模拟 Redis 不可用场景，验证 Caffeine 本地降级路径的滑动窗口限流逻辑。</p>
  */
-@DisplayName("SchoolRateLimitFilter 限流")
+@DisplayName("SchoolRateLimitFilter 限流（Redis 降级路径）")
 class SchoolRateLimitFilterTest {
 
-    private final SchoolRateLimitFilter filter = new SchoolRateLimitFilter();
+    private SchoolRateLimitFilter filter;
+
+    @BeforeEach
+    void setUp() {
+        // 模拟 Redis 不可用：execute() 抛出 RedisConnectionFailureException，
+        // 触发 Caffeine 本地降级路径，验证与原有 Caffeine-only 行为一致。
+        StringRedisTemplate mockRedis = mock(StringRedisTemplate.class);
+        when(mockRedis.execute(any(RedisScript.class), anyList(),
+                any(), any(), any(), any(), any()))
+                .thenThrow(new RedisConnectionFailureException("Redis unavailable"));
+
+        filter = new SchoolRateLimitFilter(mockRedis, 30);
+    }
 
     @Test
     @DisplayName("允许首次 /s 请求通过")
@@ -78,11 +97,6 @@ class SchoolRateLimitFilterTest {
     @Test
     @DisplayName("不同 IP 应独立计数")
     void shouldCountPerIp() throws Exception {
-        MockHttpServletRequest req1 = request("/s");
-        req1.setRemoteAddr("10.0.0.1");
-        MockHttpServletRequest req2 = request("/s");
-        req2.setRemoteAddr("10.0.0.2");
-
         // IP1: 30次（满）
         for (int i = 0; i < 30; i++) {
             filter.doFilter(request("/s", "10.0.0.1"), new MockHttpServletResponse(), mock(FilterChain.class));
