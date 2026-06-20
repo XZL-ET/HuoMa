@@ -180,16 +180,22 @@
         if (!container || !steps || steps.length === 0) return;
         var maxVal = Math.max.apply(null, steps.map(function (s) { return s.value; }));
         if (maxVal === 0) maxVal = 1;
-        var html = '';
         var colors = ['#0d6efd', '#6f42c1', '#198754', '#fd7e14'];
+        container.innerHTML = '';
         steps.forEach(function (step, i) {
             var pct = Math.max(step.value * 100 / maxVal, 15);
-            html += '<div class="funnel-step" style="width:' + pct + '%;background:' + colors[i] + ';">' +
-                    '<span>' + step.label + '</span>' +
-                    '<strong>' + step.value.toLocaleString() + '</strong>' +
-                    '</div>';
+            var div = document.createElement('div');
+            div.className = 'funnel-step';
+            div.style.width = pct + '%';
+            div.style.background = colors[i];
+            var span = document.createElement('span');
+            span.textContent = step.label;
+            div.appendChild(span);
+            var strong = document.createElement('strong');
+            strong.textContent = step.value.toLocaleString();
+            div.appendChild(strong);
+            container.appendChild(div);
         });
-        container.innerHTML = html;
     }
 
     // ── 排行榜 ───────────────────────────────────
@@ -203,32 +209,69 @@
 
     function renderLeaderboards(d) {
         renderTable('leaderboardEmployees', d.employees, ['#', '员工', '添加数'], function (row) {
-            var badge = row.rank <= 3 ? ' <span class="badge bg-warning text-dark">Top' + row.rank + '</span>' : '';
-            return '<tr>' +
-                   '<td class="text-center fw-bold">' + row.rank + '</td>' +
-                   '<td>' + row.name + badge + '</td>' +
-                   '<td class="text-end fw-semibold">' + row.count.toLocaleString() + '</td>' +
-                   '</tr>';
+            var tr = document.createElement('tr');
+            var td1 = document.createElement('td');
+            td1.className = 'text-center fw-bold';
+            td1.textContent = row.rank;
+            tr.appendChild(td1);
+            var td2 = document.createElement('td');
+            td2.textContent = row.name;
+            if (row.rank <= 3) {
+                var badge = document.createElement('span');
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Top' + row.rank;
+                td2.appendChild(document.createTextNode(' '));
+                td2.appendChild(badge);
+            }
+            tr.appendChild(td2);
+            var td3 = document.createElement('td');
+            td3.className = 'text-end fw-semibold';
+            td3.textContent = row.count.toLocaleString();
+            tr.appendChild(td3);
+            return tr;
         });
 
         renderTable('leaderboardQr', d.qrCodes, ['#', '活码', '添加数'], function (row) {
-            var badge = row.rank <= 3 ? ' <span class="badge bg-warning text-dark">Top' + row.rank + '</span>' : '';
-            return '<tr>' +
-                   '<td class="text-center fw-bold">' + row.rank + '</td>' +
-                   '<td>' + row.schoolName + badge + '</td>' +
-                   '<td class="text-end fw-semibold">' + row.count.toLocaleString() + '</td>' +
-                   '</tr>';
+            var tr = document.createElement('tr');
+            var td1 = document.createElement('td');
+            td1.className = 'text-center fw-bold';
+            td1.textContent = row.rank;
+            tr.appendChild(td1);
+            var td2 = document.createElement('td');
+            td2.textContent = row.schoolName;
+            if (row.rank <= 3) {
+                var badge = document.createElement('span');
+                badge.className = 'badge bg-warning text-dark';
+                badge.textContent = 'Top' + row.rank;
+                td2.appendChild(document.createTextNode(' '));
+                td2.appendChild(badge);
+            }
+            tr.appendChild(td2);
+            var td3 = document.createElement('td');
+            td3.className = 'text-end fw-semibold';
+            td3.textContent = row.count.toLocaleString();
+            tr.appendChild(td3);
+            return tr;
         });
     }
 
     function renderTable(tbodyId, data, headers, rowFn) {
         var tbody = document.getElementById(tbodyId);
         if (!tbody) return;
+        tbody.innerHTML = '';
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="' + headers.length + '" class="text-center text-muted py-3">暂无数据</td></tr>';
+            var tr = document.createElement('tr');
+            var td = document.createElement('td');
+            td.colSpan = headers.length;
+            td.className = 'text-center text-muted py-3';
+            td.textContent = '暂无数据';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
             return;
         }
-        tbody.innerHTML = data.map(rowFn).join('');
+        data.forEach(function (row) {
+            tbody.appendChild(rowFn(row));
+        });
     }
 
     // ── 辅助 ─────────────────────────────────────
