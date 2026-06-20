@@ -268,11 +268,11 @@ public class TagWorker {
             if ("form_submit".equals(type)) {
                 String externalUserId = getField(event, "external_userid");
                 String userId = getField(event, "userid");
-                Long formTemplateId = event.has("form_template_id")
+                Long formTemplateId = (event.has("form_template_id") && !event.get("form_template_id").isNull())
                     ? Long.valueOf(event.get("form_template_id").asText()) : null;
-                Long submissionId = event.has("submission_id")
+                Long submissionId = (event.has("submission_id") && !event.get("submission_id").isNull())
                     ? Long.valueOf(event.get("submission_id").asText()) : null;
-                String fieldData = event.has("field_data")
+                String fieldData = (event.has("field_data") && !event.get("field_data").isNull())
                     ? event.get("field_data").asText() : "{}";
 
                 if (externalUserId == null || userId == null || formTemplateId == null) {
