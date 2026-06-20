@@ -125,6 +125,20 @@ public class TagWorker {
                     String eventJson = (String) value.get("event");
                     Map<String, String> fields = Map.of("event", eventJson);
 
+                    // 检查 _retry_at 时间戳（指数退避），未到时间则跳过
+                    String retryAt = (String) value.get("_retry_at");
+                    if (retryAt != null) {
+                        try {
+                            if (Long.parseLong(retryAt) > java.time.Instant.now().getEpochSecond()) {
+                                // 尚未到重试时间，放回并 ACK（会在 PEL 回收时重新处理）
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.TAG_STREAM_KEY,
+                                    RedisConfig.TAG_CONSUMER_GROUP, msgId);
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
+
                     try {
                         processEvent(eventJson);
                         redisTemplate.opsForStream().acknowledge(
