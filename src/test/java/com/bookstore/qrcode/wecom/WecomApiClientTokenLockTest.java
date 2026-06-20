@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.WecomConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 
 import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
@@ -151,13 +152,13 @@ class WecomApiClientTokenLockTest {
     /**
      * 创建注入 mock config 的 WecomApiClient 实例。
      *
-     * <p>使用 Lombok {@code @RequiredArgsConstructor} 生成的构造器，
-     * 只需传入 WecomConfig 即可（restTemplate / objectMapper 由字段初始化）。
+     * <p>构造器现在接收 4 个参数 (WecomConfig, connectTimeout, readTimeout, RestTemplateBuilder)。
      */
     private WecomApiClient createClientWithConfig(WecomConfig testConfig) throws Exception {
         java.lang.reflect.Constructor<WecomApiClient> ctor =
-            WecomApiClient.class.getDeclaredConstructor(WecomConfig.class);
+            WecomApiClient.class.getDeclaredConstructor(
+                WecomConfig.class, int.class, int.class, RestTemplateBuilder.class);
         ctor.setAccessible(true);
-        return ctor.newInstance(testConfig);
+        return ctor.newInstance(testConfig, 3, 10, new RestTemplateBuilder());
     }
 }

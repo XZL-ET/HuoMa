@@ -63,8 +63,8 @@ public class WecomApiClient {
                           RestTemplateBuilder builder) {
         this.config = config;
         this.restTemplate = builder
-            .connectTimeout(Duration.ofSeconds(connectTimeoutSec))
-            .readTimeout(Duration.ofSeconds(readTimeoutSec))
+            .setConnectTimeout(Duration.ofSeconds(connectTimeoutSec))
+            .setReadTimeout(Duration.ofSeconds(readTimeoutSec))
             .build();
     }
 
