@@ -229,32 +229,20 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void dailyReset() {
-        // 1. 全部员工日计数归零（Redis key 在每日过期，此处同步 DB 持久化值）
-        List<GlobalAgentPool> all = poolRepo.findAll();
-        for (GlobalAgentPool p : all) {
-            if (p.getDailyCurrent() > 0) {
-                p.setDailyCurrent(0);
-                poolRepo.save(p);
-            }
-        }
+        LocalDateTime now = LocalDateTime.now();
 
-        // 2. full → standby，移往队尾
-        List<GlobalAgentPool> fulls = poolRepo
-            .findByStatusOrderBySortOrder(GlobalAgentPool.PoolStatus.full);
-        if (fulls.isEmpty()) return;
+        // 1. full → standby，移往队尾（批量 UPDATE）
+        int updated = poolRepo.batchUpdateStatus(
+            GlobalAgentPool.PoolStatus.full,
+            GlobalAgentPool.PoolStatus.standby,
+            10000, // offset 足够大，确保移到现有队尾之后
+            now);
+        log.info("dailyReset 批量更新: {} 人 full→standby", updated);
 
-        // 取当前最大 sortOrder，满员恢复后依次排到队尾
-        int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
-            .map(GlobalAgentPool::getSortOrder).orElse(0);
-
-        for (GlobalAgentPool p : fulls) {
-            p.setStatus(GlobalAgentPool.PoolStatus.standby);
-            p.setSortOrder(++maxOrder);
-            p.setLastResetAt(LocalDateTime.now());
-            poolRepo.save(p);
-        }
-        log.info("全局池日重置: 恢复 {} 个 full 员工，已移至队尾 (maxOrder={})",
-            fulls.size(), maxOrder);
+        // 2. 全部 standby 员工日计数归零（批量 UPDATE）
+        int reset = poolRepo.batchResetDailyCurrent(
+            GlobalAgentPool.PoolStatus.standby);
+        log.info("dailyReset 计数清零: {} 人", reset);
     }
 
     /**

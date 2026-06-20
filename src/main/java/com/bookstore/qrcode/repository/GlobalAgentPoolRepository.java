@@ -4,8 +4,11 @@ import com.bookstore.qrcode.entity.GlobalAgentPool;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -65,4 +68,37 @@ public interface GlobalAgentPoolRepository
     /** 按 userid 列表 + 状态筛选（分页），按 sortOrder 升序 */
     Page<GlobalAgentPool> findByAgentUseridInAndStatusOrderBySortOrder(
             List<String> agentUserids, GlobalAgentPool.PoolStatus status, Pageable pageable);
+
+    // ── 批量更新（每日重置用） ──
+
+    /**
+     * 批量更新指定状态的员工池记录为新状态，并追加 sortOrder 偏移、记录重置时间。
+     *
+     * @param oldStatus 原状态
+     * @param newStatus 新状态
+     * @param offset    sortOrder 追加偏移量（用于移到队尾）
+     * @param now       当前时间
+     * @return 影响的记录数
+     */
+    @Modifying
+    @Query("UPDATE GlobalAgentPool p SET p.status = :newStatus, "
+            + "p.sortOrder = p.sortOrder + :offset, p.lastResetAt = :now "
+            + "WHERE p.status = :oldStatus")
+    int batchUpdateStatus(
+            @Param("oldStatus") GlobalAgentPool.PoolStatus oldStatus,
+            @Param("newStatus") GlobalAgentPool.PoolStatus newStatus,
+            @Param("offset") int offset,
+            @Param("now") LocalDateTime now);
+
+    /**
+     * 批量将指定状态员工的日计数清零。
+     *
+     * @param status 员工状态
+     * @return 影响的记录数
+     */
+    @Modifying
+    @Query("UPDATE GlobalAgentPool p SET p.dailyCurrent = 0 "
+            + "WHERE p.status = :status")
+    int batchResetDailyCurrent(
+            @Param("status") GlobalAgentPool.PoolStatus status);
 }
