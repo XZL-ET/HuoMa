@@ -18,6 +18,7 @@ import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.FormTemplateRepository;
+import com.bookstore.qrcode.repository.QrCodeGroupRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -85,6 +86,7 @@ public class QrCodeController {
     private final EmployeeRepository employeeRepo;
     private final EmployeeSyncService employeeSyncService;
     private final FormTemplateRepository formTemplateRepo;
+    private final QrCodeGroupRepository groupRepo;
 
     // 企微标签缓存（避免每次打开创建页都调企微接口）
     private volatile java.time.LocalDateTime lastTagSyncTime = null;
@@ -616,6 +618,10 @@ public class QrCodeController {
         model.addAttribute("rotateLogs",
             rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(id,
                 org.springframework.data.domain.PageRequest.of(0, 20)));
+
+        // ---- 7. 加载表单模板和分组列表（供客户侧配置和分组下拉选择） ----
+        model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
+        model.addAttribute("groups", groupRepo.findAllByOrderByName());
 
         return "qrcode/detail";
     }

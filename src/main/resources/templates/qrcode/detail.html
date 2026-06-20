@@ -62,6 +62,52 @@
             </div>
         </div>
 
+        <!-- 客户配置区 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>💬 客户侧配置</h6>
+                <form th:action="@{/qrcodes/{id}/welcome(id=${qr.id})}" method="post">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">欢迎语文案
+                                <small class="text-muted">（留空继承分组或系统默认）</small>
+                            </label>
+                            <textarea name="welcomeText" class="form-control" rows="2"
+                                      th:text="${qr.welcomeText}"
+                                      placeholder="留空使用默认：{{school_name}}家长您好～"></textarea>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">收集表单模板
+                                <small class="text-muted">（选"无"则不收集）</small>
+                            </label>
+                            <select name="formTemplateId" class="form-select">
+                                <option value="">无</option>
+                                <option th:each="t : ${formTemplates}"
+                                        th:value="${t.id}"
+                                        th:text="${t.name}"
+                                        th:selected="${qr.formTemplateId == t.id}"></option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary mt-3">保存配置</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 在职继承区 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>🔄 在职继承
+                    <a th:href="@{/qrcodes/{id}/transfers(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-secondary float-end">查看记录</a>
+                </h6>
+                <p class="small text-muted">将接待员当日积累的客户批量转移给服务老师</p>
+                <button class="btn btn-sm btn-outline-primary" id="triggerInheritanceBtn"
+                        th:attr="data-qrid=${qr.id}">执行在职继承</button>
+                <span id="transferPreview" class="ms-2 small text-muted"></span>
+            </div>
+        </div>
+
         <!-- 活码联系人列表 -->
         <div class="col-12">
             <div class="card p-4">
@@ -540,6 +586,26 @@
                 modal.querySelector('.agent-name-display').textContent = d.name + ' (' + d.userid + ')';
             });
         });
+    </script>
+
+    <!-- 在职继承触发与预览 -->
+    <script>
+    document.getElementById('triggerInheritanceBtn')?.addEventListener('click', async function() {
+        const qrId = this.dataset.qrid;
+        if (!confirm('确定要执行在职继承吗？')) return;
+        this.disabled = true;
+        this.textContent = '执行中...';
+        try {
+            const resp = await fetch('/api/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
+            const data = await resp.json();
+            document.getElementById('transferPreview').textContent =
+                data.success ? '已发起 ' + data.count + ' 条继承任务' : '失败: ' + data.error;
+        } catch(e) {
+            document.getElementById('transferPreview').textContent = '网络错误';
+        }
+        this.disabled = false;
+        this.textContent = '执行在职继承';
+    });
     </script>
 </main>
 </html>
