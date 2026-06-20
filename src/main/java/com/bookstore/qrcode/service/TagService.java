@@ -43,6 +43,7 @@ public class TagService {
     private final FormTemplateRepository formTemplateRepo;
     private final FormSubmissionRepository formSubmissionRepo;
     private final WecomApiClient wecomApi;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * 缓存的企微标签组 ID（按 group_name 索引）。
@@ -730,8 +731,8 @@ public class TagService {
             Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
             if (customer == null) { log.warn("客户不存在: {}", externalUserId); return; }
 
-            JsonNode fieldData = new ObjectMapper().readTree(fieldDataJson);
-            JsonNode tagMapping = new ObjectMapper().readTree(tpl.getTagMapping());
+            JsonNode fieldData = objectMapper.readTree(fieldDataJson);
+            JsonNode tagMapping = objectMapper.readTree(tpl.getTagMapping());
 
             List<String> appliedTags = new ArrayList<>();
             final String[] remarkText = { null };

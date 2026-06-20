@@ -67,7 +67,7 @@ public class FormController {
                 .formTemplateId(qr.getFormTemplateId())
                 .customerId(customerId).qrCodeId(qrCodeId)
                 .fieldData(fieldData).build();
-            submissionRepo.save(sub);
+            sub = submissionRepo.save(sub);
 
             Customer customer = customerRepo.findById(customerId).orElse(null);
             if (customer != null && customer.getCurrentAgent() != null) {
@@ -76,6 +76,7 @@ public class FormController {
                 tagEvent.put("external_userid", customer.getExternalUserid());
                 tagEvent.put("userid", customer.getCurrentAgent());
                 tagEvent.put("form_template_id", qr.getFormTemplateId().toString());
+                tagEvent.put("submission_id", sub.getId().toString());
                 tagEvent.put("field_data", fieldData);
                 redisTemplate.opsForStream().add(
                     RedisConfig.TAG_STREAM_KEY,

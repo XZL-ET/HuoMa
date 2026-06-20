@@ -234,6 +234,9 @@ public class QrCodeController {
 
         // 按 groupId 索引分组，用于 O(1) 查找分组名称
         Map<Long, QrCodeGroup> groupMap = new LinkedHashMap<>();
+        for (QrCodeGroup g : groups) {
+            groupMap.put(g.getId(), g);
+        }
         Set<Long> coveredGroupIds = new LinkedHashSet<>();
 
         // 中间结构：city → district → (groupId: "g:123" 或 "u:ungrouped") → [qrcode...]
@@ -1345,14 +1348,14 @@ public class QrCodeController {
                 return result;
             }
 
-            // 统计所有接待员今天添加的客户总数
-            LocalDateTime todayStart = LocalDateTime.now()
-                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+            // 统计所有接待员前一天添加的客户总数
+            LocalDateTime yesterdayStart = LocalDateTime.now()
+                .minusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
             long customerCount = 0;
             for (QrAgent a : agents) {
                 if (a.getRole() == QrAgent.AgentRole.receptionist) {
                     customerCount += customerRepo
-                        .countByAddedAgentAndAddTimeAfter(a.getAgentUserid(), todayStart);
+                        .countByAddedAgentAndAddTimeAfter(a.getAgentUserid(), yesterdayStart);
                 }
             }
             result.put("receptionistCount", recCount);
@@ -1409,14 +1412,14 @@ public class QrCodeController {
                 return result;
             }
 
-            // 当天 00:00:00 作为时间下限
-            LocalDateTime todayStart = LocalDateTime.now()
-                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+            // 前一天 00:00:00 作为时间下限
+            LocalDateTime yesterdayStart = LocalDateTime.now()
+                .minusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
 
             int totalTransfers = 0;
             for (QrAgent rec : receptionists) {
                 List<Customer> customers = customerRepo
-                    .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), todayStart);
+                    .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), yesterdayStart);
 
                 for (Customer c : customers) {
                     Map<String, Object> event = new LinkedHashMap<>();

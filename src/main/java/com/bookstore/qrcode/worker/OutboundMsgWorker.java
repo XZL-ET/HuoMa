@@ -72,6 +72,8 @@ public class OutboundMsgWorker {
     private volatile boolean running = true;
     @Value("${app.worker.outbound.threads:4}")
     private int consumerThreads;
+    @Value("${app.base-url:https://your-domain.com}")
+    private String baseUrl;
     private static final String CONSUMER_PREFIX = "outbound-worker";
 
     @PostConstruct
@@ -195,6 +197,7 @@ public class OutboundMsgWorker {
         String state = getField(event, "state");
         Long qrCodeId = event.has("qr_code_id") && !event.get("qr_code_id").isNull()
             ? event.get("qr_code_id").asLong() : null;
+        String customerId = getField(event, "customer_id");
 
         if (externalUserId == null || userid == null) return;
 
@@ -254,8 +257,7 @@ public class OutboundMsgWorker {
         if (formTemplateId != null) {
             Thread.sleep(300);
             String formUrl = "请点击链接填写孩子信息👇\n"
-                + "https://你的域名/form/" + qrCodeId + "?c=客户ID";
-            // TODO: replace with actual domain config + actual customer ID
+                + baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
             wecomApi.sendMessage(userid, externalUserId, formUrl);
             log.info("表单链接已发送: to={}", externalUserId);
         }

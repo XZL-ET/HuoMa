@@ -86,14 +86,14 @@ public class InheritanceJob {
                     continue;
                 }
 
-                // 当天 00:00:00 作为时间下限
-                LocalDateTime todayStart = LocalDateTime.now()
-                    .withHour(0).withMinute(0).withSecond(0).withNano(0);
+                // 前一天 00:00:00 作为时间下限（任务在凌晨 02:00 执行）
+                LocalDateTime yesterdayStart = LocalDateTime.now()
+                    .minusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
 
                 for (QrAgent rec : receptionists) {
-                    // 查找该接待员今天添加的客户
+                    // 查找该接待员前一天添加的客户
                     List<Customer> customers = customerRepo
-                        .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), todayStart);
+                        .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), yesterdayStart);
 
                     for (Customer c : customers) {
                         // 构建转移事件
