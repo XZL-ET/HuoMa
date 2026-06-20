@@ -404,3 +404,160 @@ SELECT DISTINCT school_id, school_name, region_city, region_district, 1
 FROM qr_code
 WHERE school_id IS NOT NULL AND school_name IS NOT NULL
   AND region_city IS NOT NULL AND region_district IS NOT NULL;
+
+-- ============================================
+-- 性能索引（2026-06-20 风险修复）
+-- 使用动态 SQL 兼容不支持 CREATE INDEX IF NOT EXISTS 的 MySQL 版本
+-- ============================================
+
+-- customer: data_needs_repair 列（DataFill 降级标记）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer' AND COLUMN_NAME = 'data_needs_repair') = 0,
+    'ALTER TABLE customer ADD COLUMN data_needs_repair TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''数据填充降级标记''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 全局池: 按状态+优先级排序（替代 filesort）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_agent_pool' AND INDEX_NAME = 'idx_pool_status_sort') = 0,
+    'CREATE INDEX idx_pool_status_sort ON global_agent_pool (status, sort_order)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_agent: 按活码+优先级排序
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_agent' AND INDEX_NAME = 'idx_qr_agent_sort') = 0,
+    'CREATE INDEX idx_qr_agent_sort ON qr_agent (qr_code_id, sort_order)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_agent: 按活码+状态筛选
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_agent' AND INDEX_NAME = 'idx_qr_agent_status') = 0,
+    'CREATE INDEX idx_qr_agent_status ON qr_agent (qr_code_id, status)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_agent: 按员工+状态筛选（员工管理页）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_agent' AND INDEX_NAME = 'idx_agent_qr_status') = 0,
+    'CREATE INDEX idx_agent_qr_status ON qr_agent (agent_userid, status)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- agent_alert: 按状态+创建时间（告警列表页）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND INDEX_NAME = 'idx_alert_status_created') = 0,
+    'CREATE INDEX idx_alert_status_created ON agent_alert (status, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- agent_alert: 复合索引（员工+类型+状态+时间，高频查询）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND INDEX_NAME = 'idx_alert_agent_type_status_created') = 0,
+    'CREATE INDEX idx_alert_agent_type_status_created ON agent_alert (agent_userid, alert_type, status, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- agent_alert: 按严重级别+时间（巡检用）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND INDEX_NAME = 'idx_alert_severity_created') = 0,
+    'CREATE INDEX idx_alert_severity_created ON agent_alert (severity, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- agent_alert: 按活码ID（活码详情页告警列表）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND INDEX_NAME = 'idx_alert_qr_code') = 0,
+    'CREATE INDEX idx_alert_qr_code ON agent_alert (qr_code_id)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_rotate_log: 按活码+时间（轮换记录查询）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_rotate_log' AND INDEX_NAME = 'idx_rotate_qrcode_created') = 0,
+    'CREATE INDEX idx_rotate_qrcode_created ON qr_rotate_log (qr_code_id, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_download_log: 按员工+下载时间（下载历史查询）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_download_log' AND INDEX_NAME = 'idx_log_userid_downloaded') = 0,
+    'CREATE INDEX idx_log_userid_downloaded ON qr_download_log (agent_userid, downloaded_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- employee: 在职员工按姓名排序（员工选择器）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee' AND INDEX_NAME = 'idx_employee_active_name') = 0,
+    'CREATE INDEX idx_employee_active_name ON employee (active, name)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- customer: 排行榜（按员工+添加时间）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer' AND INDEX_NAME = 'idx_customer_add_time_agent') = 0,
+    'CREATE INDEX idx_customer_add_time_agent ON customer (add_time, added_agent)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- customer: 排行榜（按活码+添加时间）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer' AND INDEX_NAME = 'idx_customer_add_time_qr') = 0,
+    'CREATE INDEX idx_customer_add_time_qr ON customer (add_time, source_qr_id)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- customer: 按添加时间+状态（日报统计）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer' AND INDEX_NAME = 'idx_customer_add_time_status') = 0,
+    'CREATE INDEX idx_customer_add_time_status ON customer (add_time, status)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- customer_tag: 按标签ID查询关联客户
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_tag' AND INDEX_NAME = 'idx_customer_tag_tag_id') = 0,
+    'CREATE INDEX idx_customer_tag_tag_id ON customer_tag (tag_id)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- operation_log: 按操作类型+时间（审计查询）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_log' AND INDEX_NAME = 'idx_operation_log_action_created') = 0,
+    'CREATE INDEX idx_operation_log_action_created ON operation_log (action, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- customer_transfer: 按状态+重试次数（继承监控）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND INDEX_NAME = 'idx_transfer_status_retry') = 0,
+    'CREATE INDEX idx_transfer_status_retry ON customer_transfer (status, retry_count)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_code: 按学校名称搜索（管理后台搜索）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND INDEX_NAME = 'idx_qr_code_school_name') = 0,
+    'CREATE INDEX idx_qr_code_school_name ON qr_code (school_name)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
