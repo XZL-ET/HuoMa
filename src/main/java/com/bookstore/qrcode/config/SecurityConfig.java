@@ -33,6 +33,9 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+                .csrf(csrf -> csrf
+                        // 企微回调 POST 无 CSRF token，必须跳过 CSRF 校验
+                        .ignoringRequestMatchers("/api/wecom/callback/**"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
