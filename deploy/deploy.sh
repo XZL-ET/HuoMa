@@ -29,15 +29,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # ── SSH 认证 ──
 # 如果设置了 SSHPASS 且有 sshpass，全程零交互；否则用 ControlMaster 复用连接
 USE_SSHPASS=false
+# 通用选项：新主机不卡 yes/no 确认
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
 if [ -n "${SSHPASS}" ] && command -v sshpass &>/dev/null; then
     USE_SSHPASS=true
-    SSH_CMD="sshpass -e ssh"
-    SCP_CMD="sshpass -e scp"
+    SSH_CMD="sshpass -e ssh ${SSH_OPTS}"
+    SCP_CMD="sshpass -e scp ${SSH_OPTS}"
     echo "🔑 使用 sshpass 自动认证"
 else
     # 连接复用：一条主连接后台常驻，后续命令共享（仅限 key 或已输密码）
     CONTROL_PATH="/tmp/huoma-deploy-$$"
-    SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
+    SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300 ${SSH_OPTS}"
     SSH_CMD="ssh ${SSH_CTL}"
     SCP_CMD="scp ${SSH_CTL}"
 
