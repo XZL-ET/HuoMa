@@ -25,6 +25,22 @@ APP_DIR="/opt/HuoMa"
 JAR_NAME="bookstore-qrcode-0.1.0.jar"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# ── SSH 连接复用 ──
+# 一条主连接常驻后台，所有 ssh/scp 共享，全程只需认证一次
+CONTROL_PATH="/tmp/huoma-deploy-$$"
+SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
+
+# 退出时拆除控制连接
+cleanup() {
+    ssh ${SSH_CTL} -O exit "${SERVER_USER}@${SERVER_IP}" 2>/dev/null || true
+    rm -f "${CONTROL_PATH}"
+}
+trap cleanup EXIT
+
+# 建立主连接（第一次认证）
+echo "🔑 建立 SSH 连接（认证一次，后续复用）..."
+ssh ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}"
+
 echo "========================================="
 echo " 火马平台 双机热备部署"
 echo " 环境: ${PROFILE} | ECS-1: ${SERVER_IP}"
@@ -47,15 +63,15 @@ echo ""
 echo "[2/6] 上传配置文件到 ECS-1..."
 
 # systemd service（每次都同步）
-scp "${SCRIPT_DIR}/bookstore-qrcode.service" \
+scp ${SSH_CTL} "${SCRIPT_DIR}/bookstore-qrcode.service" \
     "${SERVER_USER}@${SERVER_IP}:/etc/systemd/system/huoma.service"
 
 # nginx 配置（每次都同步）
-scp "${SCRIPT_DIR}/nginx.conf" \
+scp ${SSH_CTL} "${SCRIPT_DIR}/nginx.conf" \
     "${SERVER_USER}@${SERVER_IP}:/etc/nginx/conf.d/huoma.conf"
 
 # huoma.env — 仅首次创建，不覆盖已有配置
-ssh "${SERVER_USER}@${SERVER_IP}" "
+ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" "
     if [ ! -f /etc/systemd/system/huoma.env ]; then
         echo '>>> 首次部署：创建 huoma.env 模板，请编辑填入真实凭据'
         cp /dev/null /etc/systemd/system/huoma.env
@@ -74,7 +90,7 @@ ssh "${SERVER_USER}@${SERVER_IP}" "
 "
 
 # 重新加载 systemd（service 文件可能已更新）
-ssh "${SERVER_USER}@${SERVER_IP}" "systemctl daemon-reload"
+ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" "systemctl daemon-reload"
 echo "  ✅ 配置文件已同步"
 
 # =============================================
@@ -82,7 +98,7 @@ echo "  ✅ 配置文件已同步"
 # =============================================
 echo ""
 echo "[3/6] 停止 ECS-1 服务..."
-ssh "${SERVER_USER}@${SERVER_IP}" "systemctl stop huoma || true"
+ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" "systemctl stop huoma || true"
 echo "  ✅ ECS-1 已停止"
 
 # =============================================
@@ -90,8 +106,8 @@ echo "  ✅ ECS-1 已停止"
 # =============================================
 echo ""
 echo "[4/6] 上传 JAR 到 ECS-1..."
-ssh "${SERVER_USER}@${SERVER_IP}" "mkdir -p ${APP_DIR}"
-scp "target/${JAR_NAME}" "${SERVER_USER}@${SERVER_IP}:${APP_DIR}/app.jar"
+ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" "mkdir -p ${APP_DIR}"
+scp ${SSH_CTL} "target/${JAR_NAME}" "${SERVER_USER}@${SERVER_IP}:${APP_DIR}/app.jar"
 echo "  ✅ 上传完成"
 
 # =============================================
@@ -100,7 +116,7 @@ echo "  ✅ 上传完成"
 echo ""
 echo "[5/6] 重启 ECS-1 + 同步 ECS-2..."
 
-ssh "${SERVER_USER}@${SERVER_IP}" << ENDSSH
+ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" << ENDSSH
 set -e
 
 chown huoma:huoma ${APP_DIR}/app.jar
@@ -145,7 +161,7 @@ check_health() {
     local host=$1
     local label=$2
     local http_code
-    http_code=$(ssh "${SERVER_USER}@${host}" \
+    http_code=$(ssh ${SSH_CTL} "${SERVER_USER}@${host}" \
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/actuator/health" 2>/dev/null || echo "000")
     echo "$http_code"
 }
@@ -170,7 +186,7 @@ fi
 # ECS-2 健康检查
 if [ -n "${ECS2_IP}" ]; then
     for i in $(seq 1 30); do
-        STATUS2=$(ssh "${SERVER_USER}@${SERVER_IP}" \
+        STATUS2=$(ssh ${SSH_CTL} "${SERVER_USER}@${SERVER_IP}" \
             "ssh -o ConnectTimeout=5 root@${ECS2_IP} \"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/actuator/health\"" 2>/dev/null || echo "000")
         if [ "$STATUS2" = "200" ]; then
             echo "  ✅ ECS-2 健康 (${i}x2s)"

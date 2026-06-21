@@ -60,7 +60,7 @@ class WelcomeFormInheritanceIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("活码分组 增 → 删 全链路")
     void qrCodeGroupCrud() {
-        QrCodeGroup g = groupService.create("测试联盟", "兰州市", "城关区", "欢迎语", null);
+        QrCodeGroup g = groupService.create("测试联盟", "兰州市", "城关区", "欢迎语", null, null, null);
         assertThat(g.getId()).isNotNull();
         groupService.delete(g.getId());
     }
