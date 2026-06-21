@@ -52,9 +52,9 @@ TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 TEST_SCHOOL_NAME="__STRESS_TEST__"
 TEST_SCHOOL_ID="STRESS_TEST_000"
 
-MYSQL_PASS='<YOUR_DB_PASSWORD>'
-MYSQL_USER='bookstore'
-MYSQL_DB='bookstore_qrcode'
+MYSQL_PASS="${MYSQL_PASS:-}"
+MYSQL_USER="${MYSQL_USER:-bookstore}"
+MYSQL_DB="${MYSQL_DB:-bookstore_qrcode}"
 
 mkdir -p "$RESULT_DIR"
 

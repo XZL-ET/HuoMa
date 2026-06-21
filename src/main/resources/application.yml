@@ -63,7 +63,7 @@ app:
     rotation-lock-ttl-seconds: ${AGENT_ROTATION_LOCK_TTL:60}
   transfer:
     form-url: ${TRANSFER_FORM_URL:}
-  school-entry-url: ${SCHOOL_ENTRY_URL:http://<YOUR_SERVER_IP>/s}
+  school-entry-url: ${SCHOOL_ENTRY_URL:}
   school-rate-limit:
     max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:30}
     window-seconds: 60
