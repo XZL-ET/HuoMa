@@ -26,48 +26,44 @@ APP_DIR="/opt/HuoMa"
 JAR_NAME="bookstore-qrcode-0.1.0.jar"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ── SSH 连接复用 ──
-# sshpass 只用于建主连接；建好后所有 ssh/scp 走复用隧道
+# ── SSH 认证 ──
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o NumberOfPasswordPrompts=1"
 CONTROL_PATH="/tmp/huoma-deploy-$$"
-SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
-
-SSH_CMD="ssh ${SSH_OPTS} ${SSH_CTL}"
-SCP_CMD="scp ${SSH_OPTS} ${SSH_CTL}"
-
-cleanup() {
-    ssh ${SSH_OPTS} ${SSH_CTL} -O exit "${SERVER_USER}@${SERVER_IP}" 2>/dev/null || true
-    rm -f "${CONTROL_PATH}"
-}
-trap cleanup EXIT
 
 echo "🔑 建立 SSH 连接..."
 
-# 第一步：快速探活（用 ssh echo ok，比 /dev/tcp 兼容性好）
 if [ -n "${SSHPASS}" ] && command -v sshpass &>/dev/null; then
+    # sshpass 模式：每条命令独立认证，不依赖 ControlMaster
     USE_SSHPASS=true
+    SSH_CMD="sshpass -e ssh ${SSH_OPTS}"
+    SCP_CMD="sshpass -e scp ${SSH_OPTS}"
     if sshpass -e ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
-        echo "  ✅ 连通性正常，建立主连接..."
-        sshpass -e ssh ${SSH_OPTS} -MNf "${SERVER_USER}@${SERVER_IP}"
-        echo "  ✅ 主连接已建立 (sshpass)"
+        echo "  ✅ 连通性正常 (sshpass)"
     else
         echo "  ❌ 连通或认证失败"
-        echo "  手动测试: ssh ${SERVER_USER}@${SERVER_IP} echo ok"
         exit 1
     fi
-else
+elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
+    # 密钥免密模式
     USE_SSHPASS=false
-    # 先试密钥免密，不行就手动输
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
-        echo "  ✅ 密钥认证，建立主连接..."
-        ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}"
-        echo "  ✅ 主连接已建立"
-    else
-        echo "  ⚠️  需要输入密码..."
-        ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}" && \
-            echo "  ✅ 主连接已建立" || \
-            echo "  ⚠️  主连接建立失败，后续命令需各自认证"
-    fi
+    SSH_CMD="ssh ${SSH_OPTS}"
+    SCP_CMD="scp ${SSH_OPTS}"
+    echo "  ✅ 密钥认证"
+else
+    # 手动输密码 + ControlMaster 复用（只输一次）
+    USE_SSHPASS=false
+    SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
+    SSH_CMD="ssh ${SSH_OPTS} ${SSH_CTL}"
+    SCP_CMD="scp ${SSH_OPTS} ${SSH_CTL}"
+    cleanup() {
+        ssh ${SSH_OPTS} ${SSH_CTL} -O exit "${SERVER_USER}@${SERVER_IP}" 2>/dev/null || true
+        rm -f "${CONTROL_PATH}"
+    }
+    trap cleanup EXIT
+    echo "  ⚠️  需要输入密码..."
+    ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}" && \
+        echo "  ✅ 主连接已建立" || \
+        echo "  ⚠️  后续命令需各自认证"
 fi
 
 echo "========================================="
