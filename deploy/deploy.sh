@@ -33,10 +33,14 @@ CONTROL_PATH="/tmp/huoma-deploy-$$"
 echo "🔑 建立 SSH 连接..."
 
 if [ -n "${SSHPASS}" ] && command -v sshpass &>/dev/null; then
-    # sshpass 模式：每条命令独立认证，不依赖 ControlMaster
+    # sshpass 模式：每条命令独立认证，不用 scp（Git Bash 下会卡死）
     USE_SSHPASS=true
     SSH_CMD="sshpass -e ssh ${SSH_OPTS}"
-    SCP_CMD="sshpass -e scp ${SSH_OPTS}"
+    upload() {
+        local src=$1 dst=$2
+        echo "  📤 $(basename "${src}")"
+        ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "cat > ${dst}" < "${src}"
+    }
     if sshpass -e ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
         echo "  ✅ 连通性正常 (sshpass)"
     else
@@ -47,14 +51,20 @@ elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=ye
     # 密钥免密模式
     USE_SSHPASS=false
     SSH_CMD="ssh ${SSH_OPTS}"
-    SCP_CMD="scp ${SSH_OPTS}"
+    upload() {
+        local src=$1 dst=$2
+        scp ${SSH_OPTS} "${src}" "${SERVER_USER}@${SERVER_IP}:${dst}"
+    }
     echo "  ✅ 密钥认证"
 else
-    # 手动输密码 + ControlMaster 复用（只输一次）
+    # 手动输密码 + ControlMaster 复用
     USE_SSHPASS=false
     SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
     SSH_CMD="ssh ${SSH_OPTS} ${SSH_CTL}"
-    SCP_CMD="scp ${SSH_OPTS} ${SSH_CTL}"
+    upload() {
+        local src=$1 dst=$2
+        scp ${SSH_OPTS} ${SSH_CTL} "${src}" "${SERVER_USER}@${SERVER_IP}:${dst}"
+    }
     cleanup() {
         ssh ${SSH_OPTS} ${SSH_CTL} -O exit "${SERVER_USER}@${SERVER_IP}" 2>/dev/null || true
         rm -f "${CONTROL_PATH}"
@@ -87,11 +97,8 @@ echo "  ✅ 编译完成"
 echo ""
 echo "[2/6] 上传配置文件到 ECS-1..."
 
-${SCP_CMD} "${SCRIPT_DIR}/bookstore-qrcode.service" \
-    "${SERVER_USER}@${SERVER_IP}:/etc/systemd/system/huoma.service"
-
-${SCP_CMD} "${SCRIPT_DIR}/nginx.conf" \
-    "${SERVER_USER}@${SERVER_IP}:/etc/nginx/conf.d/huoma.conf"
+upload "${SCRIPT_DIR}/bookstore-qrcode.service" "/etc/systemd/system/huoma.service"
+upload "${SCRIPT_DIR}/nginx.conf" "/etc/nginx/conf.d/huoma.conf"
 
 # huoma.env — 仅首次创建，不覆盖已有配置
 ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "
@@ -129,7 +136,7 @@ echo "  ✅ ECS-1 已停止"
 echo ""
 echo "[4/6] 上传 JAR 到 ECS-1..."
 ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "mkdir -p ${APP_DIR}"
-${SCP_CMD} "target/${JAR_NAME}" "${SERVER_USER}@${SERVER_IP}:${APP_DIR}/app.jar"
+upload "target/${JAR_NAME}" "${APP_DIR}/app.jar"
 echo "  ✅ 上传完成"
 
 # =============================================
@@ -138,12 +145,10 @@ echo "  ✅ 上传完成"
 echo ""
 echo "[5/6] 重启 ECS-1 + 同步 ECS-2..."
 
-# ECS-2 的 ssh/scp 前缀（ECS-1 上执行，同样用主连接 + scp 走隧道）
+# ECS-2 连接前缀（ECS-1 上执行）
 ECS2_SSH_PREFIX=""
-ECS2_SCP_PREFIX=""
 if [ -n "${ECS2_IP}" ] && ${USE_SSHPASS}; then
     ECS2_SSH_PREFIX="SSHPASS='${SSHPASS}' sshpass -e"
-    ECS2_SCP_PREFIX="SSHPASS='${SSHPASS}' sshpass -e"
 fi
 
 ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" << ENDSSH
@@ -160,11 +165,11 @@ if [ -n "${ECS2_IP}" ]; then
 
     ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ECS2_IP} "systemctl stop huoma || true"
 
-    ${ECS2_SCP_PREFIX} scp -o StrictHostKeyChecking=no ${APP_DIR}/app.jar root@${ECS2_IP}:${APP_DIR}/
+    cat ${APP_DIR}/app.jar | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > ${APP_DIR}/app.jar"
 
-    ${ECS2_SCP_PREFIX} scp -o StrictHostKeyChecking=no /etc/systemd/system/huoma.service root@${ECS2_IP}:/etc/systemd/system/
-    ${ECS2_SCP_PREFIX} scp -o StrictHostKeyChecking=no /etc/systemd/system/huoma.env    root@${ECS2_IP}:/etc/systemd/system/
-    ${ECS2_SCP_PREFIX} scp -o StrictHostKeyChecking=no /etc/nginx/conf.d/huoma.conf     root@${ECS2_IP}:/etc/nginx/conf.d/
+    cat /etc/systemd/system/huoma.service | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > /etc/systemd/system/huoma.service"
+    cat /etc/systemd/system/huoma.env    | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > /etc/systemd/system/huoma.env"
+    cat /etc/nginx/conf.d/huoma.conf     | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > /etc/nginx/conf.d/huoma.conf"
 
     ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "
         chown huoma:huoma ${APP_DIR}/app.jar
