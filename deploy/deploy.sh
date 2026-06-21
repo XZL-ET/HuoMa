@@ -27,7 +27,7 @@ JAR_NAME="bookstore-qrcode-0.1.0.jar"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── SSH 连接复用 ──
-# sshpass 只用于建主连接；建好后所有 ssh/scp 走复用隧道，不依赖 sshpass
+# sshpass 只用于建主连接；建好后所有 ssh/scp 走复用隧道
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o NumberOfPasswordPrompts=1"
 CONTROL_PATH="/tmp/huoma-deploy-$$"
 SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
@@ -41,34 +41,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "🔑 检测服务器连通性..."
-# 快速 TCP 探活：5 秒超时
-if timeout 5 bash -c "echo >/dev/tcp/${SERVER_IP}/22" 2>/dev/null; then
-    echo "  ✅ ${SERVER_IP}:22 端口可达"
-else
-    echo "  ❌ 无法连接 ${SERVER_IP}:22"
-    echo "  请检查: NAT 网关 DNAT、安全组、ECS 状态"
-    exit 1
-fi
-
 echo "🔑 建立 SSH 连接..."
 
+# 第一步：快速探活（用 ssh echo ok，比 /dev/tcp 兼容性好）
 if [ -n "${SSHPASS}" ] && command -v sshpass &>/dev/null; then
     USE_SSHPASS=true
-    # 只打一次：建主连接，之后全复用
-    if sshpass -e ssh ${SSH_OPTS} -MNf "${SERVER_USER}@${SERVER_IP}" 2>&1; then
+    if sshpass -e ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
+        echo "  ✅ 连通性正常，建立主连接..."
+        sshpass -e ssh ${SSH_OPTS} -MNf "${SERVER_USER}@${SERVER_IP}"
         echo "  ✅ 主连接已建立 (sshpass)"
     else
-        echo "  ❌ SSH 认证失败，请检查 SSHPASS 是否匹配 ${SERVER_USER}@${SERVER_IP}"
+        echo "  ❌ 连通或认证失败"
+        echo "  手动测试: ssh ${SERVER_USER}@${SERVER_IP} echo ok"
         exit 1
     fi
 else
     USE_SSHPASS=false
-    # key 认证或手动输入密码
-    if ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}" 2>&1; then
+    # 先试密钥免密，不行就手动输
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
+        echo "  ✅ 密钥认证，建立主连接..."
+        ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}"
         echo "  ✅ 主连接已建立"
     else
-        echo "  ⚠️  主连接建立失败，后续命令需各自认证"
+        echo "  ⚠️  需要输入密码..."
+        ssh ${SSH_OPTS} ${SSH_CTL} -MNf "${SERVER_USER}@${SERVER_IP}" && \
+            echo "  ✅ 主连接已建立" || \
+            echo "  ⚠️  主连接建立失败，后续命令需各自认证"
     fi
 fi
 
