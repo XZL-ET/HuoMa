@@ -20,10 +20,8 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"
             integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
             crossorigin="anonymous"></script>
-    <!-- Chart.js — 数据看板图表 -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-            integrity="sha384-IMtUoGBJWWv8a1lP2cBkZ8YrJeMF4kSQUh7XC6Xu+kwNINLyVJkeGJk2Z0N8MeAF"
-            crossorigin="anonymous"></script>
+    <!-- Chart.js — 数据看板图表（BootCDN 国内节点） -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
     <style>
         body { background: #f5f7fa; }
         .navbar-brand { font-weight: 700; }
@@ -35,34 +33,76 @@
     <!-- 顶部导航栏 -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
         <div class="container-fluid">
-            <a class="navbar-brand" href="/">📚 火马平台</a>
+            <a class="navbar-brand" href="/">火马平台</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
-                <!-- 导航菜单项 -->
+                <!-- 导航菜单 — 按业务域分4组下拉 -->
                 <div class="navbar-nav">
-                    <a class="nav-link" href="/qrcodes"><i class="bi bi-qr-code"></i> 活码管理</a>
-                    <a class="nav-link" href="/customers"><i class="bi bi-people"></i> 客户管理</a>
-                    <a class="nav-link" href="/agents"><i class="bi bi-person-badge"></i> 员工管理</a>
-                    <a class="nav-link" href="/dashboard"><i class="bi bi-speedometer2"></i> 数据看板</a>
-                    <a class="nav-link" href="/alerts"><i class="bi bi-exclamation-triangle"></i> 异常告警</a>
-                    <a class="nav-link" href="/admin/download-stats"><i class="bi bi-download"></i> 下载统计</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/schools"><i class="bi bi-building"></i> 学校管理</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/district-managers"><i class="bi bi-person-gear"></i> 区县负责人</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/school-entry"><i class="bi bi-qr-code"></i> 入口二维码</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/system-config"><i class="bi bi-gear"></i> 系统配置</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/users"><i class="bi bi-gear"></i> 系统设置</a>
+                    <!-- 活码运营 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false"
+                           th:classappend="${#request.getServletPath().startsWith('/qrcodes')
+                               or #request.getServletPath().startsWith('/agents')
+                               or #request.getServletPath().startsWith('/admin/groups')
+                               or #request.getServletPath().startsWith('/admin/school-entry')} ? 'active' : ''">活码运营</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/qrcodes">活码管理</a>
+                            <a class="dropdown-item" href="/agents">员工管理</a>
+                            <a class="dropdown-item" href="/admin/groups">联盟管理</a>
+                            <a class="dropdown-item" href="/admin/school-entry">入口二维码</a>
+                        </div>
+                    </div>
+                    <!-- 客户运营 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false"
+                           th:classappend="${#request.getServletPath().startsWith('/customers')
+                               or #request.getServletPath().startsWith('/admin/form-templates')} ? 'active' : ''">客户运营</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/customers">客户管理</a>
+                            <a class="dropdown-item" href="/admin/form-templates">表单模板</a>
+                        </div>
+                    </div>
+                    <!-- 数据分析 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false"
+                           th:classappend="${#request.getServletPath().startsWith('/dashboard')
+                               or #request.getServletPath().startsWith('/alerts')
+                               or #request.getServletPath().startsWith('/admin/download-stats')} ? 'active' : ''">数据分析</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/dashboard">数据看板</a>
+                            <a class="dropdown-item" href="/alerts">异常告警</a>
+                            <a class="dropdown-item" href="/admin/download-stats">下载统计</a>
+                        </div>
+                    </div>
+                    <!-- 系统管理 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false"
+                           th:classappend="${#request.getServletPath().startsWith('/admin/schools')
+                               or #request.getServletPath().startsWith('/admin/district-managers')
+                               or #request.getServletPath().startsWith('/admin/system-config')
+                               or #request.getServletPath().startsWith('/users')} ? 'active' : ''">系统管理</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/admin/schools">学校管理</a>
+                            <a class="dropdown-item" href="/admin/district-managers">区县负责人</a>
+                            <a class="dropdown-item" href="/admin/system-config">系统配置</a>
+                            <a class="dropdown-item" href="/users">系统设置</a>
+                        </div>
+                    </div>
                 </div>
                 <!-- 右侧用户区域：显示当前登录用户和退出按钮 -->
                 <div class="navbar-nav ms-auto" th:if="${currentUser != null}">
                     <span class="navbar-text me-3">
-                        <i class="bi bi-person-circle"></i>
                         <span th:text="${currentUser}">管理员</span>
                     </span>
                     <form th:action="@{/logout}" method="post" class="d-flex align-items-center">
                         <button type="submit" class="btn btn-outline-light btn-sm">
-                            <i class="bi bi-box-arrow-right"></i> 退出
+                            退出
                         </button>
                     </form>
                 </div>
@@ -75,14 +115,14 @@
         <!-- 成功消息提示，model 中存在 message 时显示 -->
         <th:block th:if="${message}">
             <div class="alert alert-success alert-dismissible fade show" role="alert">
-                <i class="bi bi-check-circle"></i> <span th:text="${message}"></span>
+                ✅ <span th:text="${message}"></span>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         </th:block>
         <!-- 错误消息提示，model 中存在 error 时显示 -->
         <th:block th:if="${error}">
             <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <i class="bi bi-exclamation-circle"></i> <span th:text="${error}"></span>
+                ❌ <span th:text="${error}"></span>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         </th:block>
