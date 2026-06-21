@@ -4,25 +4,25 @@
 <body>
 <div id="content">
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 class="mb-0"><i class="bi bi-building"></i> 学校管理</h4>
+        <h4 class="mb-0">🏛️ 学校管理</h4>
         <div>
             <button type="button" class="btn btn-outline-success btn-sm me-1"
                     data-bs-toggle="modal" data-bs-target="#importModal">
-                <i class="bi bi-upload"></i> CSV导入
+                📤 CSV导入
             </button>
             <button type="button" class="btn btn-outline-secondary btn-sm"
                     data-bs-toggle="modal" data-bs-target="#addModal">
-                <i class="bi bi-plus-lg"></i> 新增学校
+                ➕ 新增学校
             </button>
         </div>
     </div>
 
     <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
-        <i class="bi bi-check-circle"></i> <span th:text="${message}"></span>
+        ✅ <span th:text="${message}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
     <div th:if="${error}" class="alert alert-danger alert-dismissible fade show" role="alert">
-        <i class="bi bi-exclamation-circle"></i> <span th:text="${error}"></span>
+        ❌ <span th:text="${error}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
@@ -45,22 +45,22 @@
                 </div>
                 <div class="col-auto align-self-end">
                     <button type="submit" class="btn btn-sm btn-primary">
-                        <i class="bi bi-funnel"></i> 筛选
+                        🔍 筛选
                     </button>
                     <a href="/admin/schools" class="btn btn-sm btn-outline-secondary">
-                        <i class="bi bi-arrow-counterclockwise"></i> 重置
+                        🔄 重置
                     </a>
                 </div>
             </form>
             <div class="col-auto align-self-end ms-auto">
                 <form th:action="@{/admin/schools/import-from-qrcode}" method="post" class="d-inline me-1">
                     <button type="submit" class="btn btn-sm btn-outline-success">
-                        <i class="bi bi-box-arrow-in-down"></i> 从活码导入学校
+                        📥 从活码导入学校
                     </button>
                 </form>
                 <form th:action="@{/admin/schools/sync-status}" method="post" class="d-inline">
                     <button type="submit" class="btn btn-sm btn-outline-info">
-                        <i class="bi bi-arrow-repeat"></i> 同步活码状态
+                        🔄 同步活码状态
                     </button>
                 </form>
             </div>
@@ -102,21 +102,17 @@
                         <td>
                             <button class="btn btn-sm btn-outline-secondary me-1"
                                     data-bs-toggle="modal" data-bs-target="#editModal"
-                                    th:attr="data-id=${s.id},data-school-id=${s.schoolId},data-name=${s.schoolName},data-city=${s.regionCity},data-district=${s.regionDistrict},data-has-qrcode=${s.hasQrcode}">
-                                <i class="bi bi-pencil"></i>
-                            </button>
+                                    th:attr="data-id=${s.id},data-school-id=${s.schoolId},data-name=${s.schoolName},data-city=${s.regionCity},data-district=${s.regionDistrict},data-has-qrcode=${s.hasQrcode}">✏️ 编辑</button>
                             <form th:action="@{/admin/schools/{id}/delete(id=${s.id})}"
                                   method="post" class="d-inline"
                                   onsubmit="return confirm('确定删除该学校？')">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    <i class="bi bi-trash"></i>
-                                </button>
+                                <button type="submit" class="btn btn-sm btn-outline-danger">🗑️ 删除</button>
                             </form>
                         </td>
                     </tr>
                     <tr th:if="${schools.content.isEmpty()}">
                         <td colspan="8" class="text-center text-muted py-4">
-                            <i class="bi bi-inbox"></i> 暂无学校数据
+                            📦 暂无学校数据
                         </td>
                     </tr>
                 </tbody>
@@ -148,7 +144,7 @@
             <div class="modal-content">
                 <form th:action="@{/admin/schools/save}" method="post">
                     <div class="modal-header">
-                        <h5 class="modal-title"><i class="bi bi-plus-lg"></i> 新增学校</h5>
+                        <h5 class="modal-title">➕ 新增学校</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
@@ -188,7 +184,7 @@
             <div class="modal-content">
                 <form id="editForm" th:action="@{/admin/schools/save}" method="post">
                     <div class="modal-header">
-                        <h5 class="modal-title"><i class="bi bi-pencil"></i> 编辑学校</h5>
+                        <h5 class="modal-title">✏️ 编辑学校</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
@@ -226,12 +222,12 @@
             <div class="modal-content">
                 <form th:action="@{/admin/schools/import}" method="post" enctype="multipart/form-data">
                     <div class="modal-header">
-                        <h5 class="modal-title"><i class="bi bi-upload"></i> CSV 批量导入学校</h5>
+                        <h5 class="modal-title">📤 CSV 批量导入学校</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                     <div class="modal-body">
                         <p class="text-muted small">
-                            <i class="bi bi-info-circle"></i>
+                            ℹ️
                             格式：<code>school_id,school_name,region_city,region_district</code>（含表头行）
                         </p>
                         <input type="file" name="file" accept=".csv,.txt" class="form-control" required>
@@ -239,7 +235,7 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                         <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-upload"></i> 导入
+                            📤 导入
                         </button>
                     </div>
                 </form>

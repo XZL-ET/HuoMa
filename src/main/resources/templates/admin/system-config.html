@@ -3,10 +3,10 @@
       th:replace="~{layout :: layout(title='系统配置', content=~{::#content})}">
 <body>
 <div id="content">
-    <h4 class="mb-3"><i class="bi bi-gear"></i> 系统配置</h4>
+    <h4 class="mb-3">⚙️ 系统配置</h4>
 
     <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
-        <i class="bi bi-check-circle"></i> <span th:text="${message}"></span>
+        ✅ <span th:text="${message}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
@@ -30,7 +30,7 @@
                                 <input type="text" name="configValue" th:value="${c.configValue}"
                                        class="form-control form-control-sm" style="max-width:400px">
                                 <button type="submit" class="btn btn-sm btn-primary">
-                                    <i class="bi bi-check-lg"></i> 保存
+                                    ✓ 保存
                                 </button>
                             </form>
                         </td>
@@ -39,7 +39,7 @@
                     </tr>
                     <tr th:if="${configs.isEmpty()}">
                         <td colspan="4" class="text-center text-muted py-4">
-                            <i class="bi bi-inbox"></i> 暂无配置项
+                            📦 暂无配置项
                         </td>
                     </tr>
                 </tbody>

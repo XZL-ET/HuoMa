@@ -132,6 +132,7 @@ public class QrCodeController {
                        @RequestParam(required = false) String city,
                        @RequestParam(required = false) String district,
                        @RequestParam(required = false) String status,
+                       @RequestParam(required = false) String scope,
                        @RequestParam(defaultValue = "0") int page,
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
@@ -143,58 +144,88 @@ public class QrCodeController {
             catch (IllegalArgumentException ignored) {}
         }
 
-        // ---- 2. 分页搜索活码（委托 QrCodeService 处理关键词、城市、区县、状态多条件组合） ----
-        Page<QrCode> qrCodes = qrCodeService.search(keyword, city, district,
-            qrStatus, PageRequest.of(page, size));
+        // ---- 2. 预先计算联盟活码 ID 集合（scope 筛选需要） ----
+        java.util.Set<Long> allianceQrCodeIds = new java.util.HashSet<>();
+        for (com.bookstore.qrcode.entity.QrCodeGroup g : groupRepo.findAllByOrderByName()) {
+            if (g.getQrCodeId() != null) {
+                allianceQrCodeIds.add(g.getQrCodeId());
+            }
+        }
 
-        // ---- 3. 构建城市/区县动态筛选下拉列表（从 DB 去重获取，仅展示有活码数据的城市/区县） ----
+        // ---- 3. 搜索活码（scope 筛选时用 unpaged 拿到全量再手动分页） ----
+        Page<QrCode> qrCodes;
+        if ("alliance".equals(scope) || "school".equals(scope)) {
+            // 先取全量（应用关键词/城市/区县/状态筛选）
+            Page<QrCode> allResults = qrCodeService.search(keyword, city, district,
+                qrStatus, org.springframework.data.domain.Pageable.unpaged());
+            List<QrCode> filtered;
+            if ("alliance".equals(scope)) {
+                filtered = allResults.getContent().stream()
+                    .filter(qr -> allianceQrCodeIds.contains(qr.getId()))
+                    .collect(java.util.stream.Collectors.toList());
+            } else {
+                filtered = allResults.getContent().stream()
+                    .filter(qr -> !allianceQrCodeIds.contains(qr.getId()))
+                    .collect(java.util.stream.Collectors.toList());
+            }
+            // 手动分页
+            int start = page * size;
+            int end = Math.min(start + size, filtered.size());
+            List<QrCode> pageContent = start < filtered.size()
+                ? filtered.subList(start, end)
+                : java.util.Collections.emptyList();
+            qrCodes = new org.springframework.data.domain.PageImpl<>(
+                pageContent, org.springframework.data.domain.PageRequest.of(page, size), filtered.size());
+        } else {
+            qrCodes = qrCodeService.search(keyword, city, district,
+                qrStatus, org.springframework.data.domain.PageRequest.of(page, size));
+        }
+
+        // ---- 4. 构建城市/区县动态筛选下拉列表 ----
         List<String> cities = qrCodeRepo.findDistinctRegionCity();
         List<String> districts = qrCodeRepo.findDistinctRegionDistrict();
 
-        // ---- 4. 计算今日新增客户统计（当天 00:00:00 到当前时刻） ----
+        // ---- 5. 计算今日新增客户统计 ----
         LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
         LocalDateTime todayEnd = LocalDateTime.now();
 
-        // key=活码ID, value=今日新增客户数
         Map<Long, Long> todayCountMap = new HashMap<>();
-        // key=活码ID, value="值守人数/后备人数" 格式化字符串
         Map<Long, String> agentCountMap = new HashMap<>();
 
         for (QrCode qr : qrCodes.getContent()) {
-            // 4a. 值守数 = 该活码下状态为 active 的联系人数量
             long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(
                 qr.getId(), QrAgent.AgentStatus.active).size();
-            // 4b. 后备数 = 全局池中 standby 员工数量（所有活码共享）
             long backupCount = poolRepo.countByStatus(
                 GlobalAgentPool.PoolStatus.standby);
-            // 4c. 组装展示字符串："值守数/全局后备数"
             agentCountMap.put(qr.getId(), activeCount + "/" + backupCount);
 
-            // 4d. 查询该活码在今日时间窗口内新增的客户数
             long todayCount = customerRepo.countBySourceQrIdAndAddTimeBetween(
                 qr.getId(), todayStart, todayEnd);
             todayCountMap.put(qr.getId(), todayCount);
         }
 
-        // ---- 5. 填充 Model 并返回列表视图 ----
+        // ---- 6. 填充 Model 并返回列表视图 ----
         model.addAttribute("qrCodes", qrCodes);
         model.addAttribute("keyword", keyword);
         model.addAttribute("city", city);
         model.addAttribute("district", district);
         model.addAttribute("status", status);
+        model.addAttribute("scope", scope);
         model.addAttribute("cities", cities);
         model.addAttribute("districts", districts);
         model.addAttribute("agentCountMap", agentCountMap);
         model.addAttribute("todayCountMap", todayCountMap);
         model.addAttribute("groups", groupRepo.findAllByOrderByName());
         model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
+        model.addAttribute("allianceQrCodeIds", allianceQrCodeIds);
+
         return "qrcode/list";
     }
 
     /**
      * 活码分组树 JSON 接口 —— 返回 city → district → group → qrcode 层级结构。
      *
-     * <p>GET /api/qrcodes/tree —— 用于列表页左侧边栏树形导航，
+     * <p>GET /qrcodes/tree —— 用于列表页左侧边栏树形导航，
      * 聚合所有活码和分组，支持以下场景：
      * <ul>
      *   <li>已有分组的活码：正常嵌套在 city → district → group → qrcode 下</li>
@@ -226,7 +257,7 @@ public class QrCodeController {
      *
      * @return 树形结构列表，按城市→区县→分组→活码嵌套
      */
-    @GetMapping("/api/qrcodes/tree")
+    @GetMapping("/tree")
     @ResponseBody
     public List<Map<String, Object>> tree() {
         List<QrCode> qrs = qrCodeRepo.findAll();
@@ -1083,7 +1114,6 @@ public class QrCodeController {
     public String batchConfig(@RequestParam List<Long> ids,
                                @RequestParam(required = false) String welcomeText,
                                @RequestParam(required = false) Long formTemplateId,
-                               @RequestParam(required = false) Long groupId,
                                RedirectAttributes redirect) {
         int count = 0;
         for (Long id : ids) {
@@ -1091,7 +1121,6 @@ public class QrCodeController {
                 QrCode qr = qrCodeService.getById(id);
                 if (welcomeText != null && !welcomeText.isBlank()) qr.setWelcomeText(welcomeText);
                 if (formTemplateId != null) qr.setFormTemplateId(formTemplateId);
-                if (groupId != null) qr.setGroupId(groupId);
                 qrCodeRepo.save(qr);
                 count++;
             } catch (Exception e) {

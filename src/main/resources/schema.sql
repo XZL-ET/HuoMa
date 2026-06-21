@@ -605,6 +605,21 @@ CREATE TABLE IF NOT EXISTS qr_code_group (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码分组（教育联盟）';
 
+-- qr_code_group 新增字段（联盟活码 + 学校列表）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code_group' AND COLUMN_NAME = 'qr_code_id') = 0,
+    'ALTER TABLE qr_code_group ADD COLUMN qr_code_id BIGINT COMMENT ''联盟关联的单一活码ID''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code_group' AND COLUMN_NAME = 'school_list') = 0,
+    'ALTER TABLE qr_code_group ADD COLUMN school_list TEXT COMMENT ''联盟包含的学校列表，一行一个''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- qr_code 新增字段（欢迎语+表单+分组）
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS

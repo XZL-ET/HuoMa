@@ -5,12 +5,12 @@
 <div id="content">
     <div class="card border-0 shadow-sm">
         <div class="card-header bg-white border-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <h5 class="mb-0"><i class="bi bi-clock-history"></i> 我的下载记录</h5>
+            <h5 class="mb-0">🕐 我的下载记录</h5>
             <div class="d-flex align-items-center gap-2 flex-wrap">
                 <span class="badge bg-info" th:text="'共下载 ' + ${distinctSchools} + ' 所学校'"></span>
                 <span class="badge bg-secondary" th:text="'累计 ' + ${totalDownloads} + ' 次'"></span>
                 <a th:href="@{/download}" class="btn btn-sm btn-outline-primary">
-                    <i class="bi bi-arrow-left"></i> 返回下载中心
+                    ← 返回下载中心
                 </a>
             </div>
         </div>
@@ -62,7 +62,7 @@
             </div>
             <!-- 空状态（共用） -->
             <div class="text-center py-5" th:unless="${!history.isEmpty()}">
-                <i class="bi bi-inbox" style="font-size: 3rem; color: #ccc;"></i>
+                <span style="font-size: 3rem;">📦</span>
                 <p class="text-muted mt-2">还没有下载记录</p>
                 <a th:href="@{/download}" class="btn btn-primary btn-sm">去下载</a>
             </div>

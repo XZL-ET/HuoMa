@@ -725,6 +725,62 @@ public class WecomApiClient {
     }
 
     /**
+     * 向客户发送文本卡片消息（可点击跳转）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/message/send}
+     * <pre>
+     * 请求:
+     *   {
+     *     "sender": "zhangsan",
+     *     "external_userid": "wmxxx",
+     *     "msgtype": "textcard",
+     *     "textcard": {
+     *       "title": "领奖通知",
+     *       "description": "&lt;div class=\"normal\"&gt;恭喜中奖&lt;/div&gt;",
+     *       "url": "https://work.weixin.qq.com",
+     *       "btntxt": "更多"
+     *     }
+     *   }
+     * </pre>
+     * <b>注意：</b>description 支持简单 HTML 标签和 class（gray/normal/highlight），
+     * 用于控制文字颜色和大小。
+     *
+     * @param sender         发送消息的企业成员 userid
+     * @param externalUserid 接收消息的客户 external_userid
+     * @param title          卡片标题（不超过 128 字符）
+     * @param description    卡片描述（支持 HTML，不超过 512 字符）
+     * @param url            点击卡片跳转的 URL
+     * @param btnText        按钮文字（可选，如"去填写"）
+     * @throws WecomApiException 发送失败时抛出
+     */
+    public void sendTextCard(String sender, String externalUserid,
+                             String title, String description, String url, String btnText) {
+        String apiUrl = BASE_URL + "/externalcontact/message/send?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> card = new java.util.LinkedHashMap<>();
+            card.put("title", title);
+            card.put("description", description);
+            card.put("url", url);
+            if (btnText != null && !btnText.isEmpty()) {
+                card.put("btntxt", btnText);
+            }
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("sender", sender);
+            bodyMap.put("external_userid", externalUserid);
+            bodyMap.put("msgtype", "textcard");
+            bodyMap.put("textcard", card);
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(apiUrl, body);
+            parseAndCheck(resp, "发送卡片消息");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "发送卡片消息失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
      * 修改客户备注。
      * POST /cgi-bin/externalcontact/remark
      */

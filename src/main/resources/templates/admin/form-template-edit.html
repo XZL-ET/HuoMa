@@ -1,47 +1,299 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org"
-      th:replace="~{layout :: layout(title='编辑表单模板', content=~{::main})}">
+      th:replace="~{layout :: layout(title=(${template == null} ? '新建表单模板' : '编辑表单模板'), content=~{::main})}">
 <main>
-<div class="card p-4 mx-auto" style="max-width: 800px;">
-    <h5 th:text="${template == null ? '新建表单模板' : '编辑表单模板'}"></h5>
+<div class="card p-4 mx-auto" style="max-width: 900px;">
+    <h5 class="mb-4" th:text="${template == null ? '📋 新建表单模板' : '📋 编辑表单模板'}"></h5>
+
     <form method="post"
-          th:action="${template == null ? '/admin/form-templates/create' : '/admin/form-templates/' + template.id + '/update'}">
-        <div class="mb-3">
-            <label class="form-label">模板名称 <span class="text-danger">*</span></label>
-            <input type="text" name="name" class="form-control" required
-                   th:value="${template?.name}" placeholder="如：学校通用表单">
+          th:action="${template == null ? '/admin/form-templates/create' : '/admin/form-templates/' + template.id + '/update'}"
+          onsubmit="return prepareSubmit()">
+
+        <!-- ① 基本信息 -->
+        <div class="row mb-4">
+            <div class="col-md-6 mb-3">
+                <label class="form-label">模板名称 <span class="text-danger">*</span></label>
+                <input type="text" name="name" class="form-control" required
+                       th:value="${template?.name}" placeholder="如：学校通用表单">
+            </div>
+            <div class="col-md-6 mb-3">
+                <label class="form-label">说明</label>
+                <input type="text" name="description" class="form-control"
+                       th:value="${template?.description}" placeholder="表单用途说明">
+            </div>
         </div>
-        <div class="mb-3">
-            <label class="form-label">说明</label>
-            <input type="text" name="description" class="form-control"
-                   th:value="${template?.description}" placeholder="表单用途说明">
+
+        <!-- ② 字段列表 -->
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <label class="form-label mb-0">表单字段 <span class="text-danger">*</span></label>
+            <button type="button" class="btn btn-outline-primary btn-sm" onclick="addField()">+ 添加字段</button>
         </div>
-        <div class="mb-3">
-            <label class="form-label">字段定义 (JSON) <span class="text-danger">*</span></label>
-            <textarea name="fields" class="form-control" rows="12" required
-                      style="font-family:monospace;font-size:13px;"
-                      th:text="${template?.fields}">[{"name":"grade","label":"孩子年级","type":"select","required":true,"options":["一年级","二年级","三年级","四年级","五年级","六年级","初一","初二","初三","高一","高二","高三"]},{"name":"class","label":"孩子班级","type":"select","required":true,"options":["1班","2班",...,"20班"]},{"name":"child_name","label":"孩子姓名","type":"text","required":false}]</textarea>
-            <div class="form-text">type: text | select。select 需提供 options 数组。</div>
+        <div id="fieldList" class="mb-3"></div>
+        <div id="fieldListEmpty" class="text-muted text-center py-3 border rounded mb-3">
+            还没有字段，点击「添加字段」开始
         </div>
-        <div class="mb-3">
-            <label class="form-label">字段映射规则 (JSON) <span class="text-danger">*</span></label>
-            <textarea name="tagMapping" class="form-control" rows="4" required
-                      style="font-family:monospace;font-size:13px;"
-                      th:text="${template?.tagMapping}">{"grade":"tag","class":"tag","child_name":"remark"}</textarea>
-            <div class="form-text">tag=打企微标签, remark=写企微备注</div>
-        </div>
+
+        <!-- ③ 备注模板 -->
         <div class="mb-3">
             <label class="form-label">备注模板</label>
-            <input type="text" name="remarkTemplate" class="form-control"
+            <input type="text" id="remarkTemplateInput" name="remarkTemplate" class="form-control"
                    th:value="${template?.remarkTemplate}"
-                   placeholder="如：{{child_name}}-{{grade}}{{class}}">
-            <div class="form-text">支持 {{fieldName}} 占位符</div>
+                   placeholder="根据字段映射自动生成，可手动修改">
+            <div class="form-text">
+                映射方式选择「写备注」的字段会自动拼接为备注模板，保存时自动更新
+            </div>
         </div>
-        <div class="d-flex gap-2">
+
+        <!-- 隐藏字段：提交时 JS 填充 JSON -->
+        <input type="hidden" name="fields" id="fieldsHidden">
+        <input type="hidden" name="tagMapping" id="tagMappingHidden">
+
+        <!-- 操作按钮 -->
+        <div class="d-flex gap-2 mt-4">
             <button type="submit" class="btn btn-primary">保存</button>
             <a href="/admin/form-templates" class="btn btn-outline-secondary">取消</a>
         </div>
     </form>
 </div>
+
+<!-- 字段卡片模板（JS 用） -->
+<template id="fieldCardTemplate">
+    <div class="card card-body bg-light mb-2 p-3 field-card">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label small mb-0">字段 key</label>
+                <input type="text" class="form-control form-control-sm field-key"
+                       placeholder="如 grade" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-0">标签</label>
+                <input type="text" class="form-control form-control-sm field-label"
+                       placeholder="如 孩子年级" required>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-0">类型</label>
+                <select class="form-select form-select-sm field-type">
+                    <option value="text">文字输入</option>
+                    <option value="select">下拉选择</option>
+                </select>
+            </div>
+            <div class="col-md-1 d-flex align-items-center pt-3">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input field-required" checked>
+                    <label class="form-check-label small">必填</label>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-0">映射方式</label>
+                <select class="form-select form-select-sm field-mapping">
+                    <option value="none">不映射</option>
+                    <option value="tag">打标签</option>
+                    <option value="remark">写备注</option>
+                </select>
+            </div>
+            <div class="col-md-1 d-flex align-items-center pt-3">
+                <button type="button" class="btn btn-outline-danger btn-sm"
+                        onclick="removeField(this)" title="删除此字段">✕</button>
+            </div>
+            <div class="col-md-9"></div>
+            <div class="col-md-2 d-flex align-items-end pt-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm move-up"
+                        title="上移" style="display:none;">▲</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm move-down ms-1"
+                        title="下移" style="display:none;">▼</button>
+            </div>
+        </div>
+        <!-- 下拉选择选项（仅类型=select 时显示） -->
+        <div class="row mt-2 field-options-row" style="display:none;">
+            <div class="col-12">
+                <label class="form-label small mb-1">选项（每行一个）</label>
+                <textarea class="form-control form-control-sm field-options"
+                          rows="3" placeholder="一年级&#10;二年级&#10;三年级"></textarea>
+            </div>
+        </div>
+    </div>
+</template>
+
+<!-- 编辑模式时，Thymeleaf 将后端数据注入 JS 变量 -->
+<script th:inline="javascript">
+    var _existingFields = /*[[${template?.fields} ?: '[]']]*/ '[]';
+    var _existingTagMapping = /*[[${template?.tagMapping} ?: '{}']]*/ '{}';
+</script>
+<script>
+(function() {
+    'use strict';
+
+    var fields = [];  // { key, label, type, required, mapping, options }
+
+    // ── 编辑模式：解析已有数据 ──
+    var tagMappingObj = {};
+    try { tagMappingObj = JSON.parse(_existingTagMapping); } catch(e) {}
+    try {
+        var parsed = JSON.parse(_existingFields);
+        parsed.forEach(function(f) {
+            fields.push({
+                key: f.name || '',
+                label: f.label || '',
+                type: f.type || 'text',
+                required: f.required !== false,
+                mapping: tagMappingObj[f.name] || 'none',
+                options: (f.options || []).join('\n')
+            });
+        });
+    } catch(e) {}
+
+    // ── 渲染 ──
+    var fieldList = document.getElementById('fieldList');
+    var fieldListEmpty = document.getElementById('fieldListEmpty');
+    var template = document.getElementById('fieldCardTemplate');
+
+    function render() {
+        fieldList.innerHTML = '';
+        if (fields.length === 0) {
+            fieldListEmpty.style.display = 'block';
+            return;
+        }
+        fieldListEmpty.style.display = 'none';
+        fields.forEach(function(f, i) {
+            var card = template.content.cloneNode(true);
+            card.querySelector('.field-key').value = f.key;
+            card.querySelector('.field-label').value = f.label;
+            card.querySelector('.field-type').value = f.type;
+            card.querySelector('.field-required').checked = f.required;
+            card.querySelector('.field-mapping').value = f.mapping;
+            card.querySelector('.field-options').value = f.options || '';
+
+            // 选项行显示/隐藏
+            var optsRow = card.querySelector('.field-options-row');
+            if (f.type === 'select') optsRow.style.display = 'flex';
+
+            // 类型切换
+            card.querySelector('.field-type').addEventListener('change', function() {
+                f.type = this.value;
+                render();
+            });
+
+            // 输入绑定
+            card.querySelector('.field-key').addEventListener('input', function() {
+                f.key = this.value.trim();
+                updateRemarkTemplate();
+            });
+            card.querySelector('.field-label').addEventListener('input', function() {
+                f.label = this.value.trim();
+            });
+            card.querySelector('.field-required').addEventListener('change', function() {
+                f.required = this.checked;
+            });
+            card.querySelector('.field-mapping').addEventListener('change', function() {
+                f.mapping = this.value;
+                updateRemarkTemplate();
+            });
+            card.querySelector('.field-options').addEventListener('input', function() {
+                f.options = this.value;
+                updateRemarkTemplate();
+            });
+
+            // 索引属性用于删除/移动
+            card.querySelector('.field-card').setAttribute('data-index', i);
+
+            fieldList.appendChild(card);
+        });
+
+        updateRemarkTemplate();
+    }
+
+    // ── 添加字段 ──
+    window.addField = function() {
+        fields.push({
+            key: '',
+            label: '',
+            type: 'text',
+            required: true,
+            mapping: 'none',
+            options: ''
+        });
+        render();
+        // 聚焦到新字段的 key 输入框
+        var lastCard = fieldList.lastElementChild;
+        if (lastCard) {
+            var keyInput = lastCard.querySelector('.field-key');
+            if (keyInput) keyInput.focus();
+        }
+    };
+
+    // ── 删除字段 ──
+    window.removeField = function(btn) {
+        var card = btn.closest('.field-card');
+        var idx = parseInt(card.getAttribute('data-index'));
+        if (idx >= 0 && idx < fields.length) {
+            fields.splice(idx, 1);
+        }
+        render();
+    };
+
+    // ── 自动生成备注模板 ──
+    function updateRemarkTemplate() {
+        var remarkFields = fields.filter(function(f) { return f.mapping === 'remark' && f.key; });
+        var tpl = remarkFields.map(function(f) { return '{{' + f.key + '}}'; }).join('-');
+        document.getElementById('remarkTemplateInput').value = tpl;
+    }
+
+    // ── 提交流程 ──
+    window.prepareSubmit = function() {
+        // 从 DOM 重新同步字段数据
+        syncFromDOM();
+
+        var fieldsJson = [];
+        var tagMapping = {};
+
+        for (var i = 0; i < fields.length; i++) {
+            var f = fields[i];
+            if (!f.key || !f.label) {
+                alert('请填写第 ' + (i + 1) + ' 个字段的 key 和标签');
+                return false;
+            }
+            var fieldDef = { name: f.key, label: f.label, type: f.type, required: f.required };
+            if (f.type === 'select' && f.options) {
+                var opts = f.options.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+                if (opts.length === 0) {
+                    alert('下拉字段「' + f.label + '」至少需要一个选项');
+                    return false;
+                }
+                fieldDef.options = opts;
+            }
+            fieldsJson.push(fieldDef);
+            if (f.mapping !== 'none') {
+                tagMapping[f.key] = f.mapping;
+            }
+        }
+
+        if (fieldsJson.length === 0) {
+            alert('请至少添加一个字段');
+            return false;
+        }
+
+        document.getElementById('fieldsHidden').value = JSON.stringify(fieldsJson);
+        document.getElementById('tagMappingHidden').value = JSON.stringify(tagMapping);
+
+        return true;
+    };
+
+    function syncFromDOM() {
+        var cards = fieldList.querySelectorAll('.field-card');
+        cards.forEach(function(card, i) {
+            if (i >= fields.length) return;
+            fields[i].key = card.querySelector('.field-key').value.trim();
+            fields[i].label = card.querySelector('.field-label').value.trim();
+            fields[i].type = card.querySelector('.field-type').value;
+            fields[i].required = card.querySelector('.field-required').checked;
+            fields[i].mapping = card.querySelector('.field-mapping').value;
+            fields[i].options = card.querySelector('.field-options').value;
+        });
+    }
+
+    // ── 初始渲染 ──
+    render();
+})();
+</script>
 </main>
 </html>

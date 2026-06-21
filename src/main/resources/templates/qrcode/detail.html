@@ -115,7 +115,7 @@
                     📱 活码联系人
                     <small class="text-muted">（扫码后客户随机分配到这几位中的一位）</small>
                     <button class="btn btn-sm btn-outline-success float-end" data-bs-toggle="modal" data-bs-target="#addAgentModal">
-                        <i class="bi bi-plus-lg"></i> 新增联系人
+                        ➕ 新增联系人
                     </button>
                 </h6>
                 <table class="table table-sm mb-0">
@@ -144,7 +144,7 @@
                                 <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
                                         th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
                                         data-bs-toggle="modal" data-bs-target="#editAgentModal"
-                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                                        title="编辑">✏️</button>
                             </td>
                         </tr>
                         <!-- 已激活的接待员行 -->
@@ -167,12 +167,12 @@
                                 <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
                                         th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
                                         data-bs-toggle="modal" data-bs-target="#editAgentModal"
-                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                                        title="编辑">✏️</button>
                                 <!-- 移除联系人按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('确定要将该联系人从活码中移除吗？')">
-                                    <button class="btn btn-sm btn-outline-danger" title="移除"><i class="bi bi-trash"></i></button>
+                                    <button class="btn btn-sm btn-outline-danger" title="移除">🗑️ 移除</button>
                                 </form>
                             </td>
                         </tr>
@@ -206,7 +206,7 @@
                     <span class="badge bg-warning text-dark me-1" th:text="'已满 ' + ${poolFull}"></span>
                     <span th:if="${poolBlocked > 0}" class="badge bg-danger me-1" th:text="'暂停 ' + ${poolBlocked}"></span>
                     <button class="btn btn-sm btn-outline-primary float-end" data-bs-toggle="modal" data-bs-target="#addBackupModal">
-                        <i class="bi bi-plus-lg"></i> 新增
+                        ➕ 新增
                     </button>
                 </h6>
                 <small class="text-muted">以下员工供所有活码共享，按优先级分配。上移/下移调整全局优先级。</small>
@@ -237,21 +237,21 @@
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="up">
                                     <button class="btn btn-sm btn-outline-secondary" title="上移（全局优先级）"
-                                            th:disabled="${iter.first}"><i class="bi bi-chevron-up"></i></button>
+                                            th:disabled="${iter.first}">▲</button>
                                 </form>
                                 <!-- 下移按钮（调整全局优先级） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="down">
                                     <button class="btn btn-sm btn-outline-secondary" title="下移（全局优先级）"
-                                            th:disabled="${iter.last}"><i class="bi bi-chevron-down"></i></button>
+                                            th:disabled="${iter.last}">▼</button>
                                 </form>
                                 </th:block>
                                 <!-- 移除按钮（从全局池删除，影响所有活码） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/remove(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('⚠️ 将从全局员工池移除该员工，影响所有活码。确定吗？')">
-                                    <button class="btn btn-sm btn-outline-danger" title="从全局池移除"><i class="bi bi-trash"></i></button>
+                                    <button class="btn btn-sm btn-outline-danger" title="从全局池移除">🗑️ 移除</button>
                                 </form>
                             </td>
                         </tr>
@@ -323,7 +323,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addBackupModalLabel">
-                        <i class="bi bi-person-plus"></i> 添加员工到全局池（所有活码共享）
+                        👤 添加员工到全局池（所有活码共享）
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -357,7 +357,7 @@
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success"
                                                     th:disabled="${#lists.contains(allPoolUserids, u.userid)}">
-                                                <i class="bi bi-plus-circle"></i> 加入后备
+                                                ➕ 加入后备
                                             </button>
                                         </form>
                                     </td>
@@ -382,7 +382,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addAgentModalLabel">
-                        <i class="bi bi-person-plus"></i> 新增联系人到此活码
+                        👤 新增联系人到此活码
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -416,7 +416,7 @@
                                         <form th:action="@{/qrcodes/{id}/agents(id=${qr.id})}" method="post" class="d-inline">
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success">
-                                                <i class="bi bi-plus-circle"></i> 加入
+                                                ➕ 加入
                                             </button>
                                         </form>
                                     </td>
@@ -441,7 +441,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="editAgentModalLabel">
-                        <i class="bi bi-pencil"></i> 编辑联系人 — <span class="agent-name-display"></span>
+                        ✏️ 编辑联系人 — <span class="agent-name-display"></span>
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -543,7 +543,7 @@
 
     <!-- 返回列表按钮 -->
     <div class="mt-3">
-        <a href="/qrcodes" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
+        <a href="/qrcodes" class="btn btn-outline-secondary">← 返回列表</a>
     </div>
 
     <!-- 前端交互逻辑 -->

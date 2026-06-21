@@ -24,6 +24,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -382,10 +383,12 @@ public class CustomerController {
     @PostMapping("/create-test")
     public String createTest(@RequestParam String agentUserid,
                              @RequestParam(required = false) String qrCodeId,
-                             @RequestParam(defaultValue = "测试客户") String name) {
+                             @RequestParam(defaultValue = "测试客户") String name,
+                             RedirectAttributes redirect) {
         // 校验接待员是否存在
         if (!agentRepo.existsById(agentUserid)) {
             log.warn("创建测试客户失败: 接待员不存在 userid={}", agentUserid);
+            redirect.addFlashAttribute("error", "接待员不存在: " + agentUserid);
             return "redirect:/customers";
         }
 
@@ -406,7 +409,13 @@ public class CustomerController {
         }
 
         // 创建客户记录
-        customerService.createManual(name, externalId, agentUserid, schoolId, qrId);
+        try {
+            customerService.createManual(name, externalId, agentUserid, schoolId, qrId);
+        } catch (Exception e) {
+            log.error("创建测试客户失败: {}", e.getMessage());
+            redirect.addFlashAttribute("error", "创建失败: " + e.getMessage());
+            return "redirect:/customers";
+        }
 
         // 同步更新员工日接待计数，触发轮换检查（与真实客户分配后逻辑一致）
         if (schoolId != null) {
@@ -414,6 +423,7 @@ public class CustomerController {
         }
 
         log.info("创建测试客户: name={}, agentUserid={}, schoolId={}", name, agentUserid, schoolId);
+        redirect.addFlashAttribute("message", "测试客户「" + name + "」创建成功");
         return "redirect:/customers";
     }
 

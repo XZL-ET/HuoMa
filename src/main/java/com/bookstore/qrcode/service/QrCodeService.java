@@ -105,6 +105,10 @@ public class QrCodeService {
      */
     public Page<QrCode> search(String keyword, String city, String district,
                                 QrCode.QrCodeStatus status, Pageable pageable) {
+        // 前端下拉框「全部」选项提交的是空字符串，需转为 null 才能触发 JPQL 中的 IS NULL 跳过逻辑
+        if (keyword != null && keyword.isEmpty()) keyword = null;
+        if (city != null && city.isEmpty()) city = null;
+        if (district != null && district.isEmpty()) district = null;
         return qrCodeRepo.search(keyword, city, district, status, pageable);
     }
 

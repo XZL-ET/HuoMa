@@ -253,13 +253,14 @@ public class OutboundMsgWorker {
         wecomApi.sendMessage(userid, externalUserId, welcomeText);
         log.info("欢迎语已发送: to={}, sender={}", externalUserId, userid);
 
-        // 2. Send form link (300ms gap for API rate limit)
+        // 2. Send form link as a textcard (card-style message, separate from welcome text)
         if (formTemplateId != null) {
             Thread.sleep(300);
-            String formUrl = "请点击链接填写孩子信息👇\n"
-                + baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
-            wecomApi.sendMessage(userid, externalUserId, formUrl);
-            log.info("表单链接已发送: to={}", externalUserId);
+            String formUrl = baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
+            String cardTitle = "📋 请填写孩子信息";
+            String cardDesc = "<div class=\"normal\">为了更好地为您提供精准服务，请点击下方填写孩子信息</div>";
+            wecomApi.sendTextCard(userid, externalUserId, cardTitle, cardDesc, formUrl, "去填写");
+            log.info("表单卡片已发送: to={}", externalUserId);
         }
     }
 

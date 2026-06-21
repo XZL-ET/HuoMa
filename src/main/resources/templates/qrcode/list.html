@@ -9,9 +9,9 @@
     <div class="col-md-3">
         <div class="card p-2 mb-3">
             <div class="d-flex justify-content-between align-items-center mb-2 px-2">
-                <strong><i class="bi bi-diagram-3"></i> 分组导航</strong>
+                <strong>🌳 分组导航</strong>
                 <button class="btn btn-sm btn-outline-secondary" onclick="loadTree()" title="刷新">
-                    <i class="bi bi-arrow-clockwise"></i>
+                    🔄
                 </button>
             </div>
             <!-- 树根节点"全部" -->
@@ -19,7 +19,7 @@
                 <li>
                     <a href="#" class="tree-link active fw-bold"
                        onclick="filterByScope({});return false;">
-                        <i class="bi bi-house"></i> 全部活码
+                        🏠 全部活码
                     </a>
                 </li>
             </ul>
@@ -43,8 +43,8 @@
             <small class="text-muted fs-6 ms-2" th:text="'共 ' + ${qrCodes.totalElements} + ' 条'">共 0 条</small>
         </h4>
         <div class="btn-group">
-            <a href="/qrcodes/create" class="btn btn-primary"><i class="bi bi-plus-lg"></i> 手动创建</a>
-            <a href="/qrcodes/batch-import" class="btn btn-outline-primary"><i class="bi bi-upload"></i> 批量导入</a>
+            <a href="/qrcodes/create" class="btn btn-primary">➕ 手动创建</a>
+            <a href="/qrcodes/batch-import" class="btn btn-outline-primary">📤 批量导入</a>
         </div>
     </div>
 
@@ -79,7 +79,14 @@
                 </select>
             </div>
             <div class="col-md-1">
-                <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
+                <select name="scope" class="form-select" onchange="this.form.submit()">
+                    <option value="">全部</option>
+                    <option value="alliance" th:selected="${scope == 'alliance'}">🏫 联盟</option>
+                    <option value="school" th:selected="${scope == 'school'}">🏫 学校</option>
+                </select>
+            </div>
+            <div class="col-md-auto">
+                <button type="submit" class="btn btn-primary">🔍 搜索</button>
             </div>
         </form>
     </div>
@@ -108,13 +115,19 @@
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
+                            <span th:if="${allianceQrCodeIds.contains(qr.id)}"
+                                  class="badge bg-info ms-1">联盟</span>
                         </td>
                         <td>
-                            <span th:each="g : ${groups}"
-                                  th:if="${g.id == qr.groupId}"
-                                  th:text="${g.name}"
-                                  class="badge bg-secondary">分组名</span>
-                            <span th:if="${qr.groupId == null}" class="text-muted">—</span>
+                            <th:block th:if="${allianceQrCodeIds.contains(qr.id)}">
+                                <span th:each="g : ${groups}" th:if="${g.id == qr.groupId}"
+                                      th:text="${g.name}" class="badge bg-info"></span>
+                            </th:block>
+                            <th:block th:if="${!allianceQrCodeIds.contains(qr.id)}">
+                                <span th:each="g : ${groups}" th:if="${g.id == qr.groupId}"
+                                      th:text="${g.name}" class="badge bg-secondary"></span>
+                                <span th:if="${qr.groupId == null}" class="text-muted">—</span>
+                            </th:block>
                         </td>
                         <td th:text="${qr.regionCity}"></td>
                         <td th:text="${qr.regionDistrict}"></td>
@@ -189,14 +202,14 @@
         <ul class="pagination justify-content-center">
             <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
                 <a class="page-link"
-                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number - 1})}">上一页</a>
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},page=${qrCodes.number - 1})}">上一页</a>
             </li>
             <li class="page-item disabled">
                 <span class="page-link" th:text="'第 ' + ${qrCodes.number + 1} + ' / ' + ${qrCodes.totalPages} + ' 页'"></span>
             </li>
             <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
                 <a class="page-link"
-                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number + 1})}">下一页</a>
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},page=${qrCodes.number + 1})}">下一页</a>
             </li>
         </ul>
     </nav>
@@ -209,7 +222,7 @@
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title"><i class="bi bi-gear"></i> 批量配置</h5>
+                    <h5 class="modal-title">⚙️ 批量配置</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -228,20 +241,12 @@
                                         th:text="${ft.name}">模板名</option>
                             </select>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label">归属分组（留空则不改）</label>
-                            <select name="groupId" class="form-select">
-                                <option value="">不修改</option>
-                                <option th:each="g : ${groups}" th:value="${g.id}"
-                                        th:text="${g.name + ' (' + g.regionDistrict + ')'}">分组名</option>
-                            </select>
-                        </div>
                     </form>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary" onclick="submitBatchConfig()">
-                        <i class="bi bi-check-lg"></i> 确认配置
+                        ✓ 确认配置
                     </button>
                 </div>
             </div>
@@ -340,14 +345,33 @@
             const loading = document.getElementById('treeLoading');
             if (loading) loading.style.display = '';
 
-            fetch('/api/qrcodes/tree')
-                .then(r => r.json())
+            fetch('/qrcodes/tree')
+                .then(r => {
+                    if (!r.ok) {
+                        // 服务端返回错误（500/403 等），JSON 解析必定失败
+                        // 提前拒绝并附带上下文信息，避免 show 出不透明的"加载失败"
+                        return Promise.reject(
+                            new Error('Server returned ' + r.status + ' ' + r.statusText
+                                + ' for /qrcodes/tree'));
+                    }
+                    return r.json();
+                })
                 .then(data => {
+                    if (!Array.isArray(data)) {
+                        console.warn('Tree API returned non-array data, treating as empty', data);
+                        treeData = [];
+                        container.innerHTML = '<div class="text-muted text-center py-2">暂无数据</div>';
+                        return;
+                    }
                     treeData = data;
                     renderTree(data);
                 })
                 .catch(err => {
-                    container.innerHTML = '<div class="text-danger text-center py-2">加载失败</div>';
+                    container.innerHTML = '<div class="text-danger text-center py-2">'
+                        + '加载失败'
+                        + ' <small class="text-muted" style="font-size:0.7rem;">('
+                        + esc(err.message || '未知错误') + ')</small>'
+                        + '</div>';
                     console.error('Tree load error:', err);
                 });
         }
@@ -367,39 +391,45 @@
                 const cityId = 'city-' + sanitizeId(city.name);
                 html += '<li>';
                 html += '<details open>';
-                html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\'});return false;">';
-                html += '<i class="bi bi-building me-1"></i>' + esc(city.name);
+                html += '<summary class="tree-summary">';
+                html += '<span class="tree-label" onclick="event.stopPropagation();filterByScope({city:\'' + escJs(city.name) + '\'});return false;">';
+                html += '🏙️ ' + esc(city.name);
+                html += '</span>';
                 html += '</summary>';
                 html += '<ul class="list-unstyled ms-3">';
                 (city.children || []).forEach(district => {
                     const distId = 'dist-' + sanitizeId(district.name);
                     html += '<li>';
                     html += '<details>';
-                    html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\',district:\'' + esc(district.name) + '\'});return false;">';
-                    html += '<i class="bi bi-geo-alt me-1"></i>' + esc(district.name);
+                    html += '<summary class="tree-summary">';
+                    html += '<span class="tree-label" onclick="event.stopPropagation();filterByScope({city:\'' + escJs(city.name) + '\',district:\'' + escJs(district.name) + '\'});return false;">';
+                    html += '📍 ' + esc(district.name);
+                    html += '</span>';
                     html += '</summary>';
                     html += '<ul class="list-unstyled ms-3">';
                     (district.children || []).forEach(group => {
                         const isGroup = group.type === 'group';
-                        const icon = isGroup ? 'bi-people' : 'bi-folder';
+                        const icon = isGroup ? '👥 ' : '📁 ';
                         const label = isGroup ? esc(group.name) : esc(group.name);
                         html += '<li>';
                         if (isGroup && group.children && group.children.length > 0) {
                             html += '<details>';
-                            html += '<summary class="tree-summary tree-group" onclick="filterByScope({groupId:' + group.id + '});return false;">';
-                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
+                            html += '<summary class="tree-summary tree-group">';
+                            html += '<span class="tree-label" onclick="event.stopPropagation();filterByScope({groupId:' + group.id + '});return false;">';
+                            html += icon + label;
+                            html += '</span>';
                             html += ' <small class="text-muted">(' + group.children.length + ')</small>';
                             html += '</summary>';
                             html += '<ul class="list-unstyled ms-3">';
                             group.children.forEach(qr => {
                                 html += '<li><a href="#" class="tree-link tree-leaf" onclick="filterByScope({qrcodeId:' + qr.id + '});return false;">';
-                                html += '<i class="bi bi-qr-code me-1"></i>' + esc(qr.name);
+                                html += '📱 ' + esc(qr.name);
                                 html += '</a></li>';
                             });
                             html += '</ul></details>';
                         } else {
                             html += '<span class="tree-summary tree-group" style="cursor:pointer;" onclick="filterByScope({groupId:' + (group.id || 0) + '});return false;">';
-                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
+                            html += icon + label;
                             if (isGroup) html += ' <small class="text-muted">(0)</small>';
                             html += '</span>';
                         }
@@ -426,15 +456,26 @@
             return div.innerHTML;
         }
 
+        /* ── JavaScript 字符串转义（用于 onclick 等内联 JS） ── */
+        function escJs(str) {
+            if (!str) return '';
+            return str.replace(/\\/g, '\\\\')
+                      .replace(/'/g, "\\'")
+                      .replace(/"/g, '\\"')
+                      .replace(/\n/g, '\\n')
+                      .replace(/\r/g, '\\r');
+        }
+
         /* ── 通过树节点过滤表格 ── */
         function filterByScope(scope) {
             // 清除所有 active 样式
             document.querySelectorAll('.tree-link').forEach(a => a.classList.remove('active', 'fw-bold'));
             document.querySelectorAll('.tree-summary').forEach(s => s.classList.remove('tree-active'));
 
-            // 高亮当前点击的元素
+            // 高亮当前点击元素所属的 summary 节点
             if (event && event.target) {
-                event.target.classList.add('tree-active');
+                const summary = event.target.closest('.tree-summary');
+                if (summary) summary.classList.add('tree-active');
             }
 
             // 构建筛选参数
@@ -459,10 +500,29 @@
         }
 
         function filterTableByGroupId(groupId) {
-            // 从服务端渲染的 data-group-id 属性筛选（需要在 server 端添加）
-            // 备选方案：通过已知对应关系过滤
-            // 由于当前表格行没有 data-group-id，这里直接刷新带 group 参数的页面
-            // 或使用已有的城市/区县筛选 — 这里退化为重定向
+            // 新模型：1 联盟 = 1 活码，点击联盟直接跳转到该活码详情页
+            if (treeData) {
+                for (const city of treeData) {
+                    for (const district of (city.children || [])) {
+                        for (const group of (district.children || [])) {
+                            if (group.type === 'group' && group.id === groupId) {
+                                const qrCodes = group.children || [];
+                                if (qrCodes.length === 1) {
+                                    window.location.href = '/qrcodes/' + qrCodes[0].id;
+                                } else if (qrCodes.length > 1) {
+                                    // 多活码旧数据：跳转到列表页按区县筛选
+                                    window.location.href = '/qrcodes?district=' + encodeURIComponent(district.name);
+                                } else {
+                                    // 空联盟：跳转到列表页
+                                    window.location.href = '/qrcodes';
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            // 兜底
             window.location.href = '/qrcodes';
         }
 
@@ -504,6 +564,8 @@
         }
         .tree-summary:hover { background: #f0f4ff; color: #0d6efd; }
         .tree-summary.tree-active { background: #e7f1ff; color: #0d6efd; font-weight: 600; }
+        .tree-label { cursor: pointer; }
+        .tree-label:hover { color: #0d6efd; text-decoration: underline; }
         .tree-link {
             display: block;
             padding: 3px 6px 3px 20px;

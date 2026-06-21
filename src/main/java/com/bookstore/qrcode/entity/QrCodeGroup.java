@@ -31,6 +31,14 @@ public class QrCodeGroup {
     @Column(name = "default_form_template_id")
     private Long defaultFormTemplateId;
 
+    /** 联盟关联的唯一活码 ID（一个联盟只有一个活码） */
+    @Column(name = "qr_code_id")
+    private Long qrCodeId;
+
+    /** 联盟包含的学校列表，一行一个学校名称 */
+    @Column(name = "school_list", columnDefinition = "TEXT")
+    private String schoolList;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

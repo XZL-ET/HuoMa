@@ -108,6 +108,15 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     List<QrCode> findAll();
 
     /**
+     * 查找指定分组下的所有活码，按学校名称排序。
+     * 用于联盟删除时批量解除关联。
+     *
+     * @param groupId 分组 ID
+     * @return 该分组下的活码列表
+     */
+    List<QrCode> findByGroupIdOrderBySchoolName(Long groupId);
+
+    /**
      * 获取所有已使用的城市列表（去重、排序）。
      * <p>
      * JPQL 使用 {@code SELECT DISTINCT} 去重，并按城市名称字母序排列。
