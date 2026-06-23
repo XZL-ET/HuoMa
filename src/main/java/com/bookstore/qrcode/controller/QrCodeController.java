@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
+import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.CustomerTransfer;
 import com.bookstore.qrcode.entity.Employee;
@@ -33,6 +34,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -51,6 +53,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -132,62 +135,77 @@ public class QrCodeController {
                        @RequestParam(required = false) String city,
                        @RequestParam(required = false) String district,
                        @RequestParam(required = false) String status,
+                       @RequestParam(required = false) String scope,
+                       @RequestParam(required = false) Long groupId,
                        @RequestParam(defaultValue = "0") int page,
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
 
-        // ---- 1. 解析状态枚举参数，非法值忽略 ----
+        // ---- 1. 解析状态枚举参数 ----
         QrCode.QrCodeStatus qrStatus = null;
         if (status != null && !status.isEmpty()) {
             try { qrStatus = QrCode.QrCodeStatus.valueOf(status); }
             catch (IllegalArgumentException ignored) {}
         }
 
-        // ---- 2. 分页搜索活码（委托 QrCodeService 处理关键词、城市、区县、状态多条件组合） ----
-        Page<QrCode> qrCodes = qrCodeService.search(keyword, city, district,
-            qrStatus, PageRequest.of(page, size));
-
-        // ---- 3. 构建城市/区县动态筛选下拉列表（从 DB 去重获取，仅展示有活码数据的城市/区县） ----
-        List<String> cities = qrCodeRepo.findDistinctRegionCity();
-        List<String> districts = qrCodeRepo.findDistinctRegionDistrict();
-
-        // ---- 4. 计算今日新增客户统计（当天 00:00:00 到当前时刻） ----
-        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
-        LocalDateTime todayEnd = LocalDateTime.now();
-
-        // key=活码ID, value=今日新增客户数
-        Map<Long, Long> todayCountMap = new HashMap<>();
-        // key=活码ID, value="值守人数/后备人数" 格式化字符串
-        Map<Long, String> agentCountMap = new HashMap<>();
-
-        for (QrCode qr : qrCodes.getContent()) {
-            // 4a. 值守数 = 该活码下状态为 active 的联系人数量
-            long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(
-                qr.getId(), QrAgent.AgentStatus.active).size();
-            // 4b. 后备数 = 全局池中 standby 员工数量（所有活码共享）
-            long backupCount = poolRepo.countByStatus(
-                GlobalAgentPool.PoolStatus.standby);
-            // 4c. 组装展示字符串："值守数/全局后备数"
-            agentCountMap.put(qr.getId(), activeCount + "/" + backupCount);
-
-            // 4d. 查询该活码在今日时间窗口内新增的客户数
-            long todayCount = customerRepo.countBySourceQrIdAndAddTimeBetween(
-                qr.getId(), todayStart, todayEnd);
-            todayCountMap.put(qr.getId(), todayCount);
+        // ---- 2. 分页搜索（scope 筛选下推到 DB） ----
+        Page<QrCode> qrCodes;
+        Pageable pageable = PageRequest.of(page, size);
+        if ("alliance".equals(scope)) {
+            qrCodes = qrCodeRepo.searchAlliance(keyword, city, district, qrStatus, groupId, pageable);
+        } else if ("school".equals(scope)) {
+            qrCodes = qrCodeRepo.searchSchool(keyword, city, district, qrStatus, groupId, pageable);
+        } else {
+            qrCodes = qrCodeRepo.search(keyword, city, district, qrStatus, groupId, pageable);
         }
 
-        // ---- 5. 填充 Model 并返回列表视图 ----
+        // ---- 3. 城市/区县/分组下拉选项 ----
+        List<String> cities = qrCodeRepo.findDistinctRegionCity();
+        List<String> districts = qrCodeRepo.findDistinctRegionDistrict();
+        List<QrCodeGroup> groups = groupRepo.findAllByOrderByName();
+
+        // ---- 4. 聚合查询：客户数（今日 + 累计） ----
+        List<Long> pageIds = qrCodes.getContent().stream()
+            .map(QrCode::getId).collect(Collectors.toList());
+
+        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
+        Map<Long, Long> todayCountMap = new HashMap<>();
+        Map<Long, Long> totalCountMap = new HashMap<>();
+
+        if (!pageIds.isEmpty()) {
+            List<Object[]> custStats = customerRepo.countTotalAndTodayByQrIds(pageIds, todayStart);
+            for (Object[] row : custStats) {
+                Long qrId = (Long) row[0];
+                totalCountMap.put(qrId, (Long) row[1]);
+                todayCountMap.put(qrId, (Long) row[2]);
+            }
+        }
+
+        // ---- 5. 客服数统计 ----
+        Map<Long, String> agentCountMap = new HashMap<>();
+        for (QrCode qr : qrCodes.getContent()) {
+            long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(
+                qr.getId(), QrAgent.AgentStatus.active).size();
+            long poolStandby = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby);
+            agentCountMap.put(qr.getId(), activeCount + "/" + poolStandby);
+        }
+
+        // ---- 6. 填充 Model ----
         model.addAttribute("qrCodes", qrCodes);
         model.addAttribute("keyword", keyword);
         model.addAttribute("city", city);
         model.addAttribute("district", district);
         model.addAttribute("status", status);
+        model.addAttribute("scope", scope);
+        model.addAttribute("groupId", groupId);
         model.addAttribute("cities", cities);
         model.addAttribute("districts", districts);
         model.addAttribute("agentCountMap", agentCountMap);
         model.addAttribute("todayCountMap", todayCountMap);
-        model.addAttribute("groups", groupRepo.findAllByOrderByName());
+        model.addAttribute("totalCountMap", totalCountMap);
+        model.addAttribute("groups", groups);
         model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
+
         return "qrcode/list";
     }
 
@@ -229,7 +247,7 @@ public class QrCodeController {
     @GetMapping("/api/qrcodes/tree")
     @ResponseBody
     public List<Map<String, Object>> tree() {
-        List<QrCode> qrs = qrCodeRepo.findAll();
+        List<QrCodeTreeDto> qrs = qrCodeRepo.findAllTreeProjection();
         List<QrCodeGroup> groups = groupRepo.findAllByOrderByName();
 
         // 按 groupId 索引分组，用于 O(1) 查找分组名称
@@ -241,10 +259,10 @@ public class QrCodeController {
 
         // 中间结构：city → district → (groupId: "g:123" 或 "u:ungrouped") → [qrcode...]
         // 使用 LinkedHashMap 保持插入顺序
-        Map<String, Map<String, Map<String, List<QrCode>>>> mid = new LinkedHashMap<>();
+        Map<String, Map<String, Map<String, List<QrCodeTreeDto>>>> mid = new LinkedHashMap<>();
 
         // ── 1. 遍历所有活码，归入对应的 city → district → group ──
-        for (QrCode qr : qrs) {
+        for (QrCodeTreeDto qr : qrs) {
             String city = qr.getRegionCity() != null ? qr.getRegionCity() : "未分类";
             String district = qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "未分类";
 
@@ -292,7 +310,7 @@ public class QrCodeController {
                 List<Map<String, Object>> childNodes = new ArrayList<>();
                 for (var bucketEntry : districtEntry.getValue().entrySet()) {
                     String key = bucketEntry.getKey();
-                    List<QrCode> bucketQrs = bucketEntry.getValue();
+                    List<QrCodeTreeDto> bucketQrs = bucketEntry.getValue();
                     Map<String, Object> groupNode = new LinkedHashMap<>();
                     if (key.startsWith("g:")) {
                         String[] parts = key.substring(2).split("\\|", 2);
@@ -304,7 +322,7 @@ public class QrCodeController {
                         groupNode.put("name", "未分组");
                     }
                     List<Map<String, Object>> qrNodes = new ArrayList<>();
-                    for (QrCode qr : bucketQrs) {
+                    for (QrCodeTreeDto qr : bucketQrs) {
                         Map<String, Object> qrNode = new LinkedHashMap<>();
                         qrNode.put("type", "qrcode");
                         qrNode.put("id", qr.getId());
