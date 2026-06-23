@@ -1459,8 +1459,10 @@ public class QrCodeController {
         byte[] zipBytes = baos.toByteArray();
 
         response.setContentType("application/zip");
+        String zipFilename = "qrcodes_" + java.time.LocalDate.now() + ".zip";
+        String encoded = URLEncoder.encode(zipFilename, StandardCharsets.UTF_8).replace("+", "%20");
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.attachment().filename("qrcodes_原图.zip").build().toString());
+            "attachment; filename=\"" + encoded + "\"; filename*=UTF-8''" + encoded);
         response.setContentLength(zipBytes.length);
         response.getOutputStream().write(zipBytes);
         response.getOutputStream().flush();
