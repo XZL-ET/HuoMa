@@ -58,11 +58,37 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 
 列表页分页下拉增加 50/100 选项，Controller 已有 `size` 参数，改前端即可。
 
+### 1.5 筛选与排序增强
+
+**分组筛选**: 列表页筛选区增加分组下拉，Controller 已加载全部 group 到 Model，改为前端动态填充下拉选项，搜索时增加 `groupId` 参数，JPQL 追加 `AND (:groupId IS NULL OR q.groupId = :groupId)`。
+
+**排序**: 默认按创建时间倒序（最新在前），支持切换为创建时间正序。排序字段 `createdAt` 已存在于 `qr_code` 表，加在 JPQL `ORDER BY` 即可。
+
 ---
 
-## 二、批量操作台
+## 二、列表导出
 
-### 2.1 入口
+### 2.1 方案
+
+列表页新增"导出"按钮，按照当前筛选条件（关键词、城市、区县、状态、分组、scope）查询全量结果，生成 Excel 文件下载。
+
+**导出列**: 学校名称、学校ID、城市、区县、分组、状态、轮换模式、今日新增、累计客户、创建时间
+
+### 2.2 性能
+
+5000 条数据导出约 1-2 秒，POI `SXSSFWorkbook` 流式写入，内存控制在几十 MB。导出期间不阻塞其他请求。
+
+### 2.3 改动
+
+- `QrCodeController` 新增 `GET /qrcodes/export` 端点
+- `QrCodeRepository` 新增不分页 `List<QrCode>` 查询方法
+- 复用已有聚合查询获取客户数
+
+---
+
+## 三、批量操作台
+
+### 3.1 入口
 
 列表页增加"批量操作模式"切换按钮，进入后：
 - 行变大，checkbox 更显眼
@@ -70,7 +96,7 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 - 已选计数实时显示
 - 支持跨页全选（记住已选 ID 集合）
 
-### 2.2 批量操作能力
+### 3.2 批量操作能力
 
 | 操作 | 实现 |
 |------|------|
@@ -84,15 +110,15 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 
 所有操作走 Spring Data JPA `@Modifying` + `@Query`，一条 SQL 批量更新。
 
-### 2.3 确认弹窗
+### 3.3 确认弹窗
 
 执行前展示：影响 X 个活码、操作类型、参数预览。不做回滚快照。
 
 ---
 
-## 三、批量导入增强
+## 四、批量导入增强
 
-### 3.1 Excel 列扩展
+### 4.1 Excel 列扩展
 
 `parseExcel` 当前读取 5 列，扩展为 11 列：
 
@@ -110,11 +136,11 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 | 欢迎语 | welcomeText | 选填 |
 | 备注 | remark | 选填 |
 
-### 3.2 模板下载
+### 4.2 模板下载
 
 批量导入页面提供"下载模板"按钮，返回预置表头 + 示例数据行的 `.xlsx` 文件。模板文件放在 `src/main/resources/templates/qrcode/` 下或由 Controller 动态生成。
 
-### 3.3 改动范围
+### 4.3 改动范围
 
 | 文件 | 改动 |
 |------|------|
@@ -125,13 +151,13 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 
 ---
 
-## 四、全局池 DB 分页
+## 五、全局池 DB 分页
 
-### 4.1 现状
+### 5.1 现状
 
 `QrCodeService.getBackups()` 调用 `poolRepo.findAll()` 加载全局池全部员工到内存，然后 Java 排序 + `subList` 分页。详情页每打开一次就全量加载一次，池子膨胀到上千人后明显卡顿。
 
-### 4.2 方案
+### 5.2 方案
 
 改为真正的 DB 分页，同时保持现状排序规则不变。
 
@@ -154,17 +180,18 @@ long blocked = poolRepo.countByStatus(PoolStatus.blocked);
 
 **弹窗去重 userid** — 改为 `findAllAgentUserids()`（已有现成轻量投影，只查 userid 不加载整行）。
 
-### 4.3 风险
+### 5.3 风险
 
 低。排序用 JPQL `CASE` 与原 Java 排序完全等价。三条 countByStatus 多两次查询，但每条都是 SELECT COUNT 走索引，远快于全量加载。唯一需新增的代码是一条带 CASE 排序的 `@Query`。
 
 ---
 
-## 五、改动清单总览
+## 六、改动清单总览
 
 | 模块 | 后端改动 | 前端改动 | 风险 |
 |------|---------|---------|------|
-| 列表性能 | Repository + Controller | 分页下拉 | 低 |
+| 列表性能 | Repository + Controller | 分页下拉 + 筛选排序 | 低 |
+| 列表导出 | Controller + Repository | 导出按钮 | 低 |
 | 批量操作 | Repository `@Modifying` + Controller | 批量模式 UI | 低 |
 | 批量导入 | `parseExcel` + `executeBatchImport` | 模板下载 + 格式说明 | 低 |
 | 全局池分页 | Repository `@Query` + Service | 无 | 低 |
