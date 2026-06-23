@@ -1402,73 +1402,66 @@ public class QrCodeController {
     }
 
     /**
-     * 批量下载活码二维码，打包为 ZIP 文件。
+     * 批量下载活码二维码（企微原图），打包为 ZIP 文件。
      *
-     * <p>POST /qrcodes/batch-download —— 对指定的活码 ID 列表逐一调用
-     * {@link QrImageService#generateQrImage(Long, int)} 生成 PNG，
-     * 将所有 PNG 打包到内存中的 ZIP 文件，以附件形式写入 HTTP 响应。
+     * <p>POST /qrcodes/batch-download —— 对指定的活码 ID 列表逐一从企微服务器
+     * 代理下载原图（{@link QrCode#getQrUrl()}），将所有 PNG 打包到内存中的 ZIP 文件。
+     * 不重新生成二维码，直接使用企微创建活码时返回的原图 URL。</p>
      *
-     * <p>容错处理：单个活码生成失败时记录警告日志并跳过，不影响其余活码的打包。
-     *
-     * <p>响应头：
-     * <ul>
-     *   <li>{@code Content-Type}: {@code application/zip}</li>
-     *   <li>{@code Content-Disposition}: attachment，
-     *       文件名为 {@code qrcodes_dpi值dpi.zip}</li>
-     *   <li>{@code Content-Length}: ZIP 文件总字节数</li>
-     * </ul>
+     * <p>容错处理：单个活码下载失败时记录警告日志并跳过，不影响其余活码的打包。</p>
      *
      * <p>注意：ZIP 在内存中构建（{@link ByteArrayOutputStream}），
-     * 不落盘，适合中小批量下载。若批量过大需考虑内存占用。
+     * 不落盘，适合中小批量下载。若批量过大需考虑内存占用。</p>
      *
      * @param ids      活码 ID 列表
-     * @param dpi      图片分辨率，默认 72
      * @param response {@link HttpServletResponse}
      * @throws IOException 写入响应流时可能抛出
      */
     @PostMapping("/batch-download")
     public void downloadBatch(@RequestParam List<Long> ids,
-                              @RequestParam(defaultValue = "72") int dpi,
                               HttpServletResponse response) throws IOException {
-        // 使用 ByteArrayOutputStream 在内存中构建 ZIP，避免磁盘 I/O
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
 
-        // try-with-resources 确保 ZipOutputStream 正确关闭（写入 ZIP 结束标记）
         try (ZipOutputStream zos = new ZipOutputStream(baos)) {
             for (Long id : ids) {
                 try {
-                    // 获取活码信息并生成二维码图片
                     QrCode qr = qrCodeService.getById(id);
-                    byte[] imageBytes = qrImageService.generateQrImage(id, dpi);
+                    if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
+                        log.warn("批量下载跳过（无原图URL）: id={}", id);
+                        continue;
+                    }
 
-                    // 每个活码在 ZIP 中作为一个独立条目，文件名含学校名
-                    String entryName = qr.getSchoolName() + "_" + dpi + "dpi.png";
+                    // 从企微服务器代理下载原图（与 downloadSingle 一致）
+                    java.net.URL url = new java.net.URL(qr.getQrUrl());
+                    java.net.URLConnection conn = url.openConnection();
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(10000);
+                    conn.connect();
+
+                    // 文件名：区县-学校名-城市.png
+                    String entryName = (qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "")
+                        + "-" + (qr.getSchoolName() != null ? qr.getSchoolName() : qr.getId())
+                        + "-" + (qr.getRegionCity() != null ? qr.getRegionCity() : "")
+                        + ".png";
                     ZipEntry entry = new ZipEntry(entryName);
-
-                    // 写入 ZIP 条目：先 putNextEntry，再 write 数据，最后 closeEntry
                     zos.putNextEntry(entry);
-                    zos.write(imageBytes);
+
+                    try (InputStream in = conn.getInputStream()) {
+                        in.transferTo(zos);
+                    }
                     zos.closeEntry();
                 } catch (Exception e) {
-                    // 单个活码处理失败时记录警告并继续处理下一个
                     log.warn("批量下载跳过: id={}, error={}", id, e.getMessage());
                 }
             }
-            // ZipOutputStream.close() 由 try-with-resources 自动调用，
-            // 此时 ZIP 中央目录写入 BAOS
         }
 
-        // 从 BAOS 获取完整的 ZIP 字节数组
         byte[] zipBytes = baos.toByteArray();
 
-        // 设置响应头：ZIP 格式，附件下载
         response.setContentType("application/zip");
-        // Content-Disposition: attachment 触发浏览器下载，文件名为 qrcodes_分辨率dpi.zip
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-            ContentDisposition.attachment().filename("qrcodes_" + dpi + "dpi.zip").build().toString());
+            ContentDisposition.attachment().filename("qrcodes_原图.zip").build().toString());
         response.setContentLength(zipBytes.length);
-
-        // 写入响应流
         response.getOutputStream().write(zipBytes);
         response.getOutputStream().flush();
     }

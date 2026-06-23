@@ -200,20 +200,13 @@
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
-            <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload(300)"><i class="bi bi-download"></i> 下载 300dpi</button>
-            <button class="btn btn-sm btn-outline-success" onclick="batchDownload(72)"><i class="bi bi-download"></i> 下载 72dpi</button>
+            <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload()"><i class="bi bi-download"></i> 下载原图</button>
         </span>
     </div>
 
     <!-- 批量下载隐藏表单 -->
-    <form id="batchDownload300Form" method="post" th:action="@{/qrcodes/batch-download}" style="display:none;">
-        <input type="hidden" name="dpi" value="300">
-        <div id="batchDownload300Ids"></div>
-        <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
-    </form>
-    <form id="batchDownload72Form" method="post" th:action="@{/qrcodes/batch-download}" style="display:none;">
-        <input type="hidden" name="dpi" value="72">
-        <div id="batchDownload72Ids"></div>
+    <form id="batchDownloadForm" method="post" th:action="@{/qrcodes/batch-download}" style="display:none;">
+        <div id="batchDownloadIds"></div>
         <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
     </form>
 
@@ -320,15 +313,14 @@
             document.getElementById(formId).submit();
         }
 
-        /* ── 批量下载二维码 ── */
-        function batchDownload(dpi) {
+        /* ── 批量下载二维码（企微原图） ── */
+        function batchDownload() {
             const checked = document.querySelectorAll('.qr-checkbox:checked');
             if (checked.length === 0) {
                 alert('请先勾选要下载的活码');
                 return;
             }
-            const formId = dpi === 300 ? 'batchDownload300Form' : 'batchDownload72Form';
-            const idsDiv = document.getElementById(dpi === 300 ? 'batchDownload300Ids' : 'batchDownload72Ids');
+            const idsDiv = document.getElementById('batchDownloadIds');
             idsDiv.innerHTML = '';
             checked.forEach(cb => {
                 const input = document.createElement('input');
@@ -337,7 +329,7 @@
                 input.value = cb.value;
                 idsDiv.appendChild(input);
             });
-            document.getElementById(formId).submit();
+            document.getElementById('batchDownloadForm').submit();
         }
 
         /* ── 打开批量配置弹窗 ── */
