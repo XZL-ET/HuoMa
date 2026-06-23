@@ -706,30 +706,21 @@ public class QrCodeController {
         model.addAttribute("services",
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
 
-        // ---- 3. 获取全局员工池（全部状态），分页展示 ----
-        List<GlobalAgentPool> allBackups = qrCodeService.getBackups(id);
-        // 3a. 池状态统计（基于全量数据）
-        model.addAttribute("poolStandby",
-            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.standby).count());
-        model.addAttribute("poolFull",
-            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.full).count());
-        model.addAttribute("poolBlocked",
-            allBackups.stream().filter(p -> p.getStatus() == GlobalAgentPool.PoolStatus.blocked).count());
-        // 3b. 分页切片（每页 100 人）
+        // ---- 3. 获取全局员工池（DB 分页 + COUNT 统计） ----
         int pageSize = 100;
-        int totalItems = allBackups.size();
-        int totalPages = Math.max(1, (int) Math.ceil((double) totalItems / pageSize));
-        int clampedPage = Math.max(0, Math.min(page, totalPages - 1));
-        int fromIndex = clampedPage * pageSize;
-        int toIndex = Math.min(fromIndex + pageSize, totalItems);
-        model.addAttribute("backups", allBackups.subList(fromIndex, toIndex));
-        model.addAttribute("backupPage", clampedPage);
-        model.addAttribute("backupTotalPages", totalPages);
-        model.addAttribute("backupTotalItems", totalItems);
+        Page<GlobalAgentPool> backupPage = qrCodeService.getBackups(id, page, pageSize);
+        model.addAttribute("backups", backupPage.getContent());
+        model.addAttribute("backupPage", backupPage.getNumber());
+        model.addAttribute("backupTotalPages", backupPage.getTotalPages());
+        model.addAttribute("backupTotalItems", backupPage.getTotalElements());
         model.addAttribute("backupPageSize", pageSize);
-        // 3c. 全量 userid 集合供弹窗去重用
-        model.addAttribute("allPoolUserids",
-            allBackups.stream().map(GlobalAgentPool::getAgentUserid).toList());
+        // 3a. 池状态统计（三条 COUNT 查询）
+        Map<String, Long> poolStats = qrCodeService.getPoolStats();
+        model.addAttribute("poolStandby", poolStats.get("standby"));
+        model.addAttribute("poolFull", poolStats.get("full"));
+        model.addAttribute("poolBlocked", poolStats.get("blocked"));
+        // 3b. 全量 userid 集合供弹窗去重用
+        model.addAttribute("allPoolUserids", qrCodeService.getAllPoolUserids());
 
         // ---- 4. 加载企业微信全员列表（供前端"新增联系人"/"新增后备"弹窗使用） ----
         // agentNameMap: userid -> 姓名，用于详情页列表展示中文姓名
