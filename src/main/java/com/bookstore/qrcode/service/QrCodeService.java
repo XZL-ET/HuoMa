@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.data.domain.Page;
@@ -26,6 +27,8 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -83,6 +86,9 @@ public class QrCodeService {
     private final AlertService alertService;
     private final EmployeeRepository employeeRepo;
     private final WechatSyncHealingService healingService;
+
+    @Qualifier("taskExecutor")
+    private final Executor taskExecutor;
 
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:100}")
@@ -313,12 +319,13 @@ public class QrCodeService {
         init.put("total", String.valueOf(rawItems.size()));
         init.put("success", "0");
         init.put("fail", "0");
+        init.put("processed", "0");
         init.put("status", "processing");
         redisTemplate.opsForHash().putAll(progressKey, init);
         redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);  // 30 分钟自动过期，防止 Redis 内存泄漏
 
-        // 启动异步执行（通过 Spring @Async 注解的 taskExecutor 线程池）
-        executeBatchImport(taskId, rawItems);
+        // 通过 CompletableFuture + 线程池异步执行，避免 @Async 自调用失效问题
+        CompletableFuture.runAsync(() -> executeBatchImport(taskId, rawItems), taskExecutor);
 
         return taskId;
     }
@@ -333,7 +340,6 @@ public class QrCodeService {
      * @param taskId   任务标识
      * @param rawItems Excel 解析后的行数据列表
      */
-    @Async("taskExecutor")
     public void executeBatchImport(String taskId, List<Map<String, String>> rawItems) {
         String progressKey = "batch:import:" + taskId;
         int success = 0, fail = 0;
