@@ -80,7 +80,7 @@ class QrCodeRepositoryTest {
     @DisplayName("search — 全参数组合搜索")
     void searchWithAllParams() {
         Page<QrCode> page = qrCodeRepository.search(
-                "北京", null, null, null, PageRequest.of(0, 10));
+                "北京", null, null, null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(2);
         assertThat(page.getContent()).extracting("schoolName")
                 .contains("北京第一中学", "北京第三小学");
@@ -90,7 +90,7 @@ class QrCodeRepositoryTest {
     @DisplayName("search — 城市精确筛选")
     void searchByCity() {
         Page<QrCode> page = qrCodeRepository.search(
-                null, "上海", null, null, PageRequest.of(0, 10));
+                null, "上海", null, null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(1);
         assertThat(page.getContent().get(0).getSchoolName()).isEqualTo("上海第二中学");
     }
@@ -99,7 +99,7 @@ class QrCodeRepositoryTest {
     @DisplayName("search — 状态筛选")
     void searchByStatus() {
         Page<QrCode> page = qrCodeRepository.search(
-                null, null, null, QrCode.QrCodeStatus.paused, PageRequest.of(0, 10));
+                null, null, null, QrCode.QrCodeStatus.paused, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(1);
         assertThat(page.getContent().get(0).getSchoolId()).isEqualTo("BJ-003");
     }
@@ -108,7 +108,7 @@ class QrCodeRepositoryTest {
     @DisplayName("search — 区县+关键词组合")
     void searchByDistrictAndKeyword() {
         Page<QrCode> page = qrCodeRepository.search(
-                "小学", null, "朝阳区", null, PageRequest.of(0, 10));
+                "小学", null, "朝阳区", null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(1);
         assertThat(page.getContent().get(0).getSchoolName()).isEqualTo("北京第三小学");
     }
