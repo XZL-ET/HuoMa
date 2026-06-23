@@ -348,7 +348,7 @@
             const loading = document.getElementById('treeLoading');
             if (loading) loading.style.display = '';
 
-            fetch('/api/qrcodes/tree')
+            fetch('/qrcodes/api/tree')
                 .then(r => r.json())
                 .then(data => {
                     treeData = data;

@@ -249,7 +249,7 @@ public class QrCodeController {
      *
      * @return 树形结构列表，按城市→区县→分组→活码嵌套
      */
-    @GetMapping("/api/qrcodes/tree")
+    @GetMapping("/api/tree")
     @ResponseBody
     public List<Map<String, Object>> tree() {
         List<QrCodeTreeDto> qrs = qrCodeRepo.findAllTreeProjection();
