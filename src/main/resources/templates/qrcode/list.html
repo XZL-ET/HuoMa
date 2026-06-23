@@ -78,8 +78,26 @@
                     <option value="no_agent" th:selected="${status == 'no_agent'}">⚫ 无可用</option>
                 </select>
             </div>
+            <div class="col-md-2">
+                <select name="groupId" class="form-select">
+                    <option value="">全部分组</option>
+                    <option th:each="g : ${groups}" th:value="${g.id}"
+                            th:text="${g.name}" th:selected="${groupId != null && groupId == g.id}"></option>
+                </select>
+            </div>
             <div class="col-md-1">
-                <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
+                <select name="size" class="form-select" onchange="this.form.submit()">
+                    <option value="20" th:selected="${param.size == null || param.size[0] == '20'}">20</option>
+                    <option value="50" th:selected="${param.size != null && param.size[0] == '50'}">50</option>
+                    <option value="100" th:selected="${param.size != null && param.size[0] == '100'}">100</option>
+                </select>
+            </div>
+            <div class="col-md-1">
+                <button type="submit" class="btn btn-outline-secondary w-100 mb-1"><i class="bi bi-search"></i></button>
+            </div>
+            <div class="col-md-1">
+                <a th:href="@{/qrcodes/export(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId})}"
+                   class="btn btn-outline-success w-100"><i class="bi bi-download"></i></a>
             </div>
         </form>
     </div>
@@ -97,6 +115,7 @@
                         <th>区县</th>
                         <th>值守/后备</th>
                         <th>今日新增</th>
+                        <th>累计客户</th>
                         <th>轮换模式</th>
                         <th>状态</th>
                         <th>操作</th>
@@ -104,7 +123,7 @@
                 </thead>
                 <tbody>
                     <tr th:each="qr : ${qrCodes.content}">
-                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox" onchange="updateBatchBtn()"></td>
+                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox" onchange="onCheck([[${qr.id}]])"></td>
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
@@ -123,6 +142,9 @@
                         </td>
                         <td>
                             <span class="fw-semibold" th:text="${todayCountMap.getOrDefault(qr.id, 0)}">0</span>
+                        </td>
+                        <td>
+                            <span class="fw-semibold" th:text="${totalCountMap.getOrDefault(qr.id, 0)}">0</span>
                         </td>
                         <td>
                             <span class="badge"
@@ -145,7 +167,7 @@
                         </td>
                     </tr>
                     <tr th:if="${qrCodes.content.isEmpty()}">
-                        <td colspan="10" class="text-center text-muted py-4">
+                        <td colspan="11" class="text-center text-muted py-4">
                             暂无活码数据，点击"手动创建"或"批量导入"开始
                         </td>
                     </tr>
@@ -154,34 +176,16 @@
         </div>
     </div>
 
-    <!-- 批量操作按钮组 -->
+    <!-- 批量操作 -->
     <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
-        <button class="btn btn-sm btn-outline-primary" id="batchConfigBtn" style="display:none;"
-                onclick="openBatchConfigModal()">⚙ 批量配置</button>
-
-        <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchAutoForm">
-            <input type="hidden" name="mode" value="auto">
-            <div id="batchAutoIds"></div>
-        </form>
-        <button class="btn btn-sm btn-outline-success" onclick="batchSubmit('auto')">📋 批量切换为自动</button>
-
-        <form method="post" th:action="@{/qrcodes/batch-rotate-mode}" id="batchManualForm">
-            <input type="hidden" name="mode" value="manual">
-            <div id="batchManualIds"></div>
-        </form>
-        <button class="btn btn-sm btn-outline-warning" onclick="batchSubmit('manual')">📋 批量切换为人工</button>
-
-        <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload72Form">
-            <input type="hidden" name="dpi" value="72">
-            <div id="batchDownload72Ids"></div>
-        </form>
-        <button class="btn btn-sm btn-outline-primary" onclick="batchDownload(72)">📥 批量下载 72dpi</button>
-
-        <form method="post" th:action="@{/qrcodes/batch-download}" id="batchDownload300Form">
-            <input type="hidden" name="dpi" value="300">
-            <div id="batchDownload300Ids"></div>
-        </form>
-        <button class="btn btn-sm btn-outline-secondary" onclick="batchDownload(300)">🖨️ 批量下载 300dpi</button>
+        <button class="btn btn-sm btn-outline-warning" id="batchModeBtn" onclick="toggleBatchMode()">🔧 批量操作</button>
+        <span id="batchToolbar" style="display:none;">
+            已选 <strong id="selectedCount">0</strong> 个
+            <button class="btn btn-sm btn-outline-primary ms-1" onclick="batchAction('welcome')">改欢迎语</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
+        </span>
     </div>
 
     <!-- 分页导航 -->
@@ -189,14 +193,14 @@
         <ul class="pagination justify-content-center">
             <li class="page-item" th:classappend="${qrCodes.first ? 'disabled' : ''}">
                 <a class="page-link"
-                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number - 1})}">上一页</a>
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId},size=${param.size != null ? param.size[0] : '20'},page=${qrCodes.number - 1})}">上一页</a>
             </li>
             <li class="page-item disabled">
                 <span class="page-link" th:text="'第 ' + ${qrCodes.number + 1} + ' / ' + ${qrCodes.totalPages} + ' 页'"></span>
             </li>
             <li class="page-item" th:classappend="${qrCodes.last ? 'disabled' : ''}">
                 <a class="page-link"
-                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},page=${qrCodes.number + 1})}">下一页</a>
+                   th:href="@{/qrcodes(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId},size=${param.size != null ? param.size[0] : '20'},page=${qrCodes.number + 1})}">下一页</a>
             </li>
         </ul>
     </nav>
@@ -478,6 +482,62 @@
         document.addEventListener('DOMContentLoaded', function() {
             loadTree();
         });
+
+        /* ── 批量操作模式 ── */
+        let batchMode = false;
+        const selectedIds = new Set();
+
+        function toggleBatchMode() {
+            batchMode = !batchMode;
+            document.getElementById('batchToolbar').style.display = batchMode ? 'inline' : 'none';
+            document.getElementById('batchModeBtn').className = batchMode ? 'btn btn-sm btn-warning' : 'btn btn-sm btn-outline-warning';
+            document.getElementById('batchModeBtn').textContent = batchMode ? '🔧 退出批量' : '🔧 批量操作';
+            if (!batchMode) { selectedIds.clear(); updateSelectedCount(); }
+        }
+
+        function onCheck(id) {
+            if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+            updateSelectedCount();
+        }
+
+        function updateSelectedCount() {
+            document.getElementById('selectedCount').textContent = selectedIds.size;
+        }
+
+        function batchAction(type) {
+            if (selectedIds.size === 0) { alert('请先勾选活码'); return; }
+            const ids = Array.from(selectedIds);
+            let url, body = 'ids=' + ids.join('&ids=');
+
+            switch(type) {
+                case 'welcome':
+                    const text = prompt('请输入新欢迎语：');
+                    if (!text) return;
+                    body += '&welcomeText=' + encodeURIComponent(text);
+                    url = '/qrcodes/batch/welcome'; break;
+                case 'rotate-mode':
+                    const mode = prompt('请输入轮换模式（auto/manual）：');
+                    if (!mode) return;
+                    body += '&mode=' + mode;
+                    url = '/qrcodes/batch/rotate-mode'; break;
+                case 'group':
+                    const gid = prompt('请输入分组ID（留空取消分组）：');
+                    if (gid === null) return;
+                    if (gid) body += '&groupId=' + gid;
+                    url = '/qrcodes/batch/group'; break;
+                case 'status':
+                    const st = prompt('请输入状态（active/paused）：');
+                    if (!st) return;
+                    body += '&status=' + st;
+                    url = '/qrcodes/batch/status'; break;
+                default: return;
+            }
+            fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body})
+                .then(r => r.json()).then(d => {
+                    if (d.ok) { alert('成功更新 ' + d.count + ' 个活码'); location.reload(); }
+                    else alert('操作失败');
+                });
+        }
     </script>
 
     <style>

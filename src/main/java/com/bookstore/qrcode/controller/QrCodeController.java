@@ -676,6 +676,150 @@ public class QrCodeController {
         return qrCodeService.getBatchImportProgress(taskId);
     }
 
+    // ==================== 导出 ====================
+
+    /** 导出活码列表为 Excel（SXSSFWorkbook 流式写入）。 */
+    @GetMapping("/export")
+    public void export(@RequestParam(required = false) String keyword,
+                       @RequestParam(required = false) String city,
+                       @RequestParam(required = false) String district,
+                       @RequestParam(required = false) String status,
+                       @RequestParam(required = false) String scope,
+                       @RequestParam(required = false) Long groupId,
+                       HttpServletResponse response) throws Exception {
+
+        QrCode.QrCodeStatus qrStatus = null;
+        if (status != null && !status.isEmpty()) {
+            try { qrStatus = QrCode.QrCodeStatus.valueOf(status); }
+            catch (IllegalArgumentException ignored) {}
+        }
+
+        Boolean allianceOnly = null;
+        if ("alliance".equals(scope)) allianceOnly = true;
+        else if ("school".equals(scope)) allianceOnly = false;
+
+        List<QrCode> qrs = qrCodeRepo.findAllForExport(keyword, city, district, qrStatus, groupId, allianceOnly);
+
+        List<Long> allIds = qrs.stream().map(QrCode::getId).collect(Collectors.toList());
+        Map<Long, Long> totalMap = new HashMap<>();
+        Map<Long, Long> todayMap = new HashMap<>();
+        if (!allIds.isEmpty()) {
+            LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
+            for (Object[] row : customerRepo.countTotalAndTodayByQrIds(allIds, todayStart)) {
+                totalMap.put((Long) row[0], (Long) row[1]);
+                todayMap.put((Long) row[0], (Long) row[2]);
+            }
+        }
+
+        Map<Long, String> groupNameMap = new HashMap<>();
+        for (QrCodeGroup g : groupRepo.findAllByOrderByName()) groupNameMap.put(g.getId(), g.getName());
+
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition", "attachment; filename=qr_codes_" + java.time.LocalDate.now() + ".xlsx");
+
+        var wb = new org.apache.poi.xssf.streaming.SXSSFWorkbook(100);
+        var sheet = wb.createSheet("活码列表");
+        var header = sheet.createRow(0);
+        String[] headers = {"学校名称","学校ID","城市","区县","分组","状态","轮换模式","今日新增","累计客户","创建时间"};
+        for (int i = 0; i < headers.length; i++) header.createCell(i).setCellValue(headers[i]);
+
+        int rowIdx = 1;
+        for (QrCode qr : qrs) {
+            var row = sheet.createRow(rowIdx++);
+            Long qid = qr.getId();
+            row.createCell(0).setCellValue(qr.getSchoolName() != null ? qr.getSchoolName() : "");
+            row.createCell(1).setCellValue(qr.getSchoolId() != null ? qr.getSchoolId() : "");
+            row.createCell(2).setCellValue(qr.getRegionCity() != null ? qr.getRegionCity() : "");
+            row.createCell(3).setCellValue(qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "");
+            row.createCell(4).setCellValue(qr.getGroupId() != null ? groupNameMap.getOrDefault(qr.getGroupId(), "") : "");
+            row.createCell(5).setCellValue(qr.getStatus() != null ? qr.getStatus().name() : "");
+            row.createCell(6).setCellValue(qr.getRotateMode() != null ? qr.getRotateMode().name() : "");
+            row.createCell(7).setCellValue(todayMap.getOrDefault(qid, 0L));
+            row.createCell(8).setCellValue(totalMap.getOrDefault(qid, 0L));
+            row.createCell(9).setCellValue(qr.getCreatedAt() != null ? qr.getCreatedAt().toString() : "");
+        }
+        wb.write(response.getOutputStream());
+        wb.close();
+    }
+
+    // ==================== 批量操作 ====================
+
+    @PostMapping("/batch/welcome")
+    @ResponseBody
+    public Map<String, Object> batchUpdateWelcome(@RequestParam List<Long> ids, @RequestParam String welcomeText) {
+        int n = qrCodeService.batchUpdateWelcomeText(ids, welcomeText);
+        return Map.of("ok", true, "count", n);
+    }
+
+    @PostMapping("/batch/form-template")
+    @ResponseBody
+    public Map<String, Object> batchUpdateFormTemplate(@RequestParam List<Long> ids,
+                                                       @RequestParam(required = false) Long formTemplateId) {
+        int n = qrCodeService.batchUpdateFormTemplateId(ids, formTemplateId);
+        return Map.of("ok", true, "count", n);
+    }
+
+    @PostMapping("/batch/rotate-mode")
+    @ResponseBody
+    public Map<String, Object> batchUpdateRotateMode(@RequestParam List<Long> ids, @RequestParam String mode) {
+        int n = qrCodeService.batchUpdateRotateMode(ids, QrCode.RotateMode.valueOf(mode));
+        return Map.of("ok", true, "count", n);
+    }
+
+    @PostMapping("/batch/group")
+    @ResponseBody
+    public Map<String, Object> batchUpdateGroup(@RequestParam List<Long> ids,
+                                                 @RequestParam(required = false) Long groupId) {
+        int n = qrCodeService.batchUpdateGroupId(ids, groupId);
+        return Map.of("ok", true, "count", n);
+    }
+
+    @PostMapping("/batch/thresholds")
+    @ResponseBody
+    public Map<String, Object> batchUpdateThresholds(@RequestParam List<Long> ids,
+                                                      @RequestParam int warnRatio,
+                                                      @RequestParam int urgentRatio) {
+        int n = qrCodeService.batchUpdateThresholds(ids, warnRatio, urgentRatio);
+        return Map.of("ok", true, "count", n);
+    }
+
+    @PostMapping("/batch/status")
+    @ResponseBody
+    public Map<String, Object> batchUpdateStatus(@RequestParam List<Long> ids, @RequestParam String status) {
+        int n = qrCodeService.batchUpdateStatus(ids, QrCode.QrCodeStatus.valueOf(status));
+        return Map.of("ok", true, "count", n);
+    }
+
+    // ==================== 批量导入模板下载 ====================
+
+    @GetMapping("/batch-import/template")
+    public void downloadTemplate(HttpServletResponse response) throws Exception {
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition", "attachment; filename=qr_code_import_template.xlsx");
+
+        var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+        var sheet = wb.createSheet("活码导入");
+        var header = sheet.createRow(0);
+        String[] headers = {"学校名称","学校ID","市","区","服务老师(userid)","学校人数",
+                            "初始上码员工数","接待员(userid逗号分隔)","服务老师日上限","欢迎语","备注"};
+        for (int i = 0; i < headers.length; i++) header.createCell(i).setCellValue(headers[i]);
+        var example = sheet.createRow(1);
+        example.createCell(0).setCellValue("示例中学");
+        example.createCell(1).setCellValue("SCH001");
+        example.createCell(2).setCellValue("武汉");
+        example.createCell(3).setCellValue("武昌区");
+        example.createCell(4).setCellValue("zhangsan");
+        example.createCell(5).setCellValue("500");
+        example.createCell(6).setCellValue("1");
+        example.createCell(7).setCellValue("lisi,wangwu");
+        example.createCell(8).setCellValue("30");
+        example.createCell(9).setCellValue("欢迎来到示例中学！");
+        example.createCell(10).setCellValue("备注示例");
+        for (int i = 0; i < headers.length; i++) sheet.autoSizeColumn(i);
+        wb.write(response.getOutputStream());
+        wb.close();
+    }
+
     /**
      * 活码详情页 —— 加载活码的全部关联数据。
      *
