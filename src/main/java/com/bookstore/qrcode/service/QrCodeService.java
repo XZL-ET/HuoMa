@@ -105,7 +105,7 @@ public class QrCodeService {
      */
     public Page<QrCode> search(String keyword, String city, String district,
                                 QrCode.QrCodeStatus status, Pageable pageable) {
-        return qrCodeRepo.search(keyword, city, district, status, pageable);
+        return qrCodeRepo.search(keyword, city, district, status, null, pageable);
     }
 
     /**
