@@ -389,7 +389,7 @@ public class PatrolWorker {
 
         Map<String, Agent> agentMap = agentRepo.findAllById(allUserids).stream()
             .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
-        Map<String, Employee> empMap = employeeRepo.findAll().stream()
+        Map<String, Employee> empMap = employeeRepo.findByUseridIn(allUserids).stream()
             .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
 
         int anomalyCount = 0;
