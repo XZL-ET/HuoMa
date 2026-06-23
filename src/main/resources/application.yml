@@ -137,6 +137,21 @@ wecom:
 spring:
   config:
     activate:
+      on-profile: test
+  jpa:
+    hibernate:
+      ddl-auto: create-drop   # H2 测试环境从实体自动建表
+  sql:
+    init:
+      mode: never             # 不用 schema.sql（MySQL 语法不兼容 H2）
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+
+---
+spring:
+  config:
+    activate:
       on-profile: staging
   # ===== 数据源 =====
   datasource:

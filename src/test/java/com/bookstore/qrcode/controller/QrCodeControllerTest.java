@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -27,18 +28,20 @@ class QrCodeControllerTest {
     private MockMvc mockMvc;
     private QrCodeService qrCodeService;
     private QrImageService qrImageService;
+    private QrCodeRepository qrCodeRepo;
 
     @BeforeEach
     void setUp() {
         qrCodeService = mock(QrCodeService.class);
         qrImageService = mock(QrImageService.class);
+        qrCodeRepo = mock(QrCodeRepository.class);
         QrCodeController controller = new QrCodeController(
                 qrCodeService,
                 mock(WecomApiClient.class),
                 mock(QrAgentRepository.class),
                 mock(GlobalAgentPoolRepository.class),
                 mock(CustomerRepository.class),
-                mock(QrCodeRepository.class),
+                qrCodeRepo,
                 mock(QrRotateLogRepository.class),
                 mock(TagRepository.class),
                 qrImageService,
@@ -56,6 +59,8 @@ class QrCodeControllerTest {
     @Test
     @DisplayName("GET /qrcodes — 返回活码列表页")
     void shouldReturnQrCodeListPage() throws Exception {
+        when(qrCodeRepo.search(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
         when(qrCodeService.search(any(), any(), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of()));
 
@@ -74,6 +79,9 @@ class QrCodeControllerTest {
                 .createMode(QrCode.CreateMode.manual).build();
         when(qrCodeService.getById(1L)).thenReturn(qr);
         when(qrCodeService.getAgents(1L)).thenReturn(List.of());
+        when(qrCodeService.getBackups(1L, 0, 100)).thenReturn(new PageImpl<>(List.of()));
+        when(qrCodeService.getPoolStats()).thenReturn(java.util.Map.of("standby", 0L, "full", 0L, "blocked", 0L));
+        when(qrCodeService.getAllPoolUserids()).thenReturn(List.of());
 
         mockMvc.perform(get("/qrcodes/1"))
                 .andExpect(status().isOk())
@@ -81,7 +89,7 @@ class QrCodeControllerTest {
     }
 
     @Test
-    @Disabled("downloadSingle uses qrCodeRepo directly — needs @WebMvcTest with full mock setup")
+    @Disabled("downloadSingle reads qrCodeRepo directly, needs full mock setup")
     @DisplayName("GET /qrcodes/{id}/download — 下载活码图片")
     void shouldDownloadQrCodeImage() throws Exception {
         when(qrImageService.generateQrImage(1L, 300)).thenReturn(new byte[]{1, 2, 3});

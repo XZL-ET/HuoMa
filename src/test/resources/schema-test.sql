@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS qr_code (
     qr_config_id VARCHAR(100),
     qr_url VARCHAR(500),
     qr_image_path VARCHAR(500),
+    form_template_id BIGINT,
+    welcome_text VARCHAR(500),
+    group_id BIGINT,
     style_config JSON,
     welcome_config JSON,
     status VARCHAR(20) NOT NULL DEFAULT 'active'
@@ -361,3 +364,30 @@ MERGE INTO system_config (config_key, config_value) KEY(config_key)
 VALUES ('global_contact_name', '火马客服'),
        ('global_contact_qr_config_id', ''),
        ('global_contact_qr_url', '');
+
+-- form_template：表单模板
+CREATE TABLE IF NOT EXISTS form_template (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description VARCHAR(500),
+    fields JSON,
+    tag_mapping JSON,
+    remark_template VARCHAR(500),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- qr_code_group：活码分组（教育联盟）
+CREATE TABLE IF NOT EXISTS qr_code_group (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    region_city VARCHAR(50),
+    region_district VARCHAR(50) NOT NULL,
+    group_type VARCHAR(20) NOT NULL DEFAULT 'alliance',
+    default_welcome_text VARCHAR(500),
+    default_form_template_id BIGINT,
+    qr_code_id BIGINT,
+    school_list VARCHAR(2000),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -111,16 +111,14 @@ class QrCodeServiceTest {
     }
 
     @Test
-    @DisplayName("batchUpdateRotateMode — 部分失败不影响其他")
+    @DisplayName("batchUpdateRotateMode — 批量 JPQL 更新，repo 直接返回行数")
     void shouldBatchUpdateRotateModeWithPartialFailure() {
-        QrCode qr1 = QrCode.builder().id(1L).rotateMode(QrCode.RotateMode.auto).build();
-        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr1));
-        when(qrCodeRepo.findById(2L)).thenReturn(Optional.empty());
+        when(qrCodeRepo.batchUpdateRotateMode(eq(QrCode.RotateMode.manual), anyList()))
+                .thenReturn(1);
 
         int count = qrCodeService.batchUpdateRotateMode(List.of(1L, 2L), QrCode.RotateMode.manual);
 
         assertThat(count).isEqualTo(1);
-        assertThat(qr1.getRotateMode()).isEqualTo(QrCode.RotateMode.manual);
     }
 
     @Test
