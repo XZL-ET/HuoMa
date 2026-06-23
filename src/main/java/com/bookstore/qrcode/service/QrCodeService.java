@@ -378,7 +378,14 @@ public class QrCodeService {
                     // 将 Excel 行数据映射为创建请求 DTO
                     QrCodeCreateRequest req = new QrCodeCreateRequest();
                     req.setSchoolName(schoolName);
-                    req.setSchoolId(item.get("schoolId"));
+                    String schoolId = item.get("schoolId");
+                    // 学校ID为空时自动生成（与手动创建一致：SCH + 时间戳）
+                    if (schoolId == null || schoolId.isBlank()) {
+                        schoolId = "SCH" + java.time.LocalDateTime.now()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+                        log.debug("批量导入 [{}]: 第 {} 行学校ID为空，已自动生成: {}", taskId, i + 1, schoolId);
+                    }
+                    req.setSchoolId(schoolId);
                     req.setRegionCity(item.get("regionCity"));
                     req.setRegionDistrict(item.get("regionDistrict"));
                     req.setServiceTeacherUserid(item.get("serviceTeacherUserid"));
