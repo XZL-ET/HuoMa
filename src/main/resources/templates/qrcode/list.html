@@ -200,8 +200,22 @@
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
+            <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload(300)"><i class="bi bi-download"></i> 下载 300dpi</button>
+            <button class="btn btn-sm btn-outline-success" onclick="batchDownload(72)"><i class="bi bi-download"></i> 下载 72dpi</button>
         </span>
     </div>
+
+    <!-- 批量下载隐藏表单 -->
+    <form id="batchDownload300Form" method="post" th:action="@{/qrcodes/batch-download}" style="display:none;">
+        <input type="hidden" name="dpi" value="300">
+        <div id="batchDownload300Ids"></div>
+        <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
+    </form>
+    <form id="batchDownload72Form" method="post" th:action="@{/qrcodes/batch-download}" style="display:none;">
+        <input type="hidden" name="dpi" value="72">
+        <div id="batchDownload72Ids"></div>
+        <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
+    </form>
 
     <!-- 分页导航 -->
     <nav th:if="${qrCodes.totalPages > 1}" class="mt-3">
