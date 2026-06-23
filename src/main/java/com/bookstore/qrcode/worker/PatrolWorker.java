@@ -426,7 +426,7 @@ public class PatrolWorker {
      * <p>每天 03:07 执行一次。调用 {@link QrCodeService#replaceAnomalyAgents}
      * 逐个处理活跃活码，该方法内部有安全阈值保护（池空时跳过移除）。</p>
      */
-    @Scheduled(cron = "7 3 * * *")
+    @Scheduled(cron = "0 7 3 * * *")
     public void dailyAnomalyAutoHeal() {
         log.info("每日异常员工自愈开始");
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
