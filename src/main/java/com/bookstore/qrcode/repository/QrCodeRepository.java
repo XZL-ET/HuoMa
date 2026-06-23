@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.QrCode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -167,4 +168,80 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
            "WHERE qa.qr_code_id = :qrCodeId AND qa.role IN ('service', 'dual') " +
            "AND qa.status = 'active' LIMIT 1", nativeQuery = true)
     String findFirstServiceAgentName(@Param("qrCodeId") Long qrCodeId);
+
+    // ==================== 批量更新 ====================
+
+    /**
+     * 批量更新活码欢迎语文本。
+     *
+     * @param ids         活码 ID 列表
+     * @param welcomeText 新的欢迎语文本
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.welcomeText = :welcomeText WHERE q.id IN :ids")
+    int batchUpdateWelcomeText(@Param("ids") List<Long> ids,
+                               @Param("welcomeText") String welcomeText);
+
+    /**
+     * 批量更新活码表单模板 ID。
+     *
+     * @param ids             活码 ID 列表
+     * @param formTemplateId 新的表单模板 ID
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.formTemplateId = :formTemplateId WHERE q.id IN :ids")
+    int batchUpdateFormTemplateId(@Param("ids") List<Long> ids,
+                                  @Param("formTemplateId") Long formTemplateId);
+
+    /**
+     * 批量更新活码轮换模式。
+     *
+     * @param ids        活码 ID 列表
+     * @param rotateMode 新的轮换模式
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.rotateMode = :rotateMode WHERE q.id IN :ids")
+    int batchUpdateRotateMode(@Param("ids") List<Long> ids,
+                              @Param("rotateMode") QrCode.RotateMode rotateMode);
+
+    /**
+     * 批量更新活码分组 ID。
+     *
+     * @param ids     活码 ID 列表
+     * @param groupId 新的分组 ID
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.groupId = :groupId WHERE q.id IN :ids")
+    int batchUpdateGroupId(@Param("ids") List<Long> ids,
+                           @Param("groupId") Long groupId);
+
+    /**
+     * 批量更新活码预警/紧急阈值。
+     *
+     * @param ids         活码 ID 列表
+     * @param warnRatio   预警阈值百分比
+     * @param urgentRatio 紧急阈值百分比
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.warnRatio = :warnRatio, q.urgentRatio = :urgentRatio WHERE q.id IN :ids")
+    int batchUpdateThresholds(@Param("ids") List<Long> ids,
+                              @Param("warnRatio") int warnRatio,
+                              @Param("urgentRatio") int urgentRatio);
+
+    /**
+     * 批量更新活码状态。
+     *
+     * @param ids    活码 ID 列表
+     * @param status 新的活码状态
+     * @return 影响的记录行数
+     */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.status = :status WHERE q.id IN :ids")
+    int batchUpdateStatus(@Param("ids") List<Long> ids,
+                          @Param("status") QrCode.QrCodeStatus status);
 }

@@ -17,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -446,6 +447,7 @@ public class QrCodeService {
      * @param qrCodeId 活码主键 ID
      * @throws RuntimeException 活码不存在、未关联企微 config_id、企微 API 调用失败时抛出
      */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void syncQrUsersToWechat(Long qrCodeId) {
         QrCode qr = getById(qrCodeId);
         if (qr.getQrConfigId() == null) {
@@ -761,30 +763,85 @@ public class QrCodeService {
     /**
      * 批量切换活码的轮换模式。
      *
-     * <p>遍历 ID 列表逐个更新，单条失败不中断整体操作（仅记录 warn 日志）。
-     * 返回成功更新的数量。</p>
+     * <p>使用 JPQL 批量 UPDATE，直接更新数据库记录，不触发 {@code @PreUpdate} 回调
+     * （由 Hibernate 直接生成 UPDATE 语句执行）。返回实际更新的记录数。</p>
      *
-     * @param ids  活码主键 ID 列表
+     * @param ids  活码主键 ID 列表（为空时直接返回 0）
      * @param mode 目标轮换模式
-     * @return 成功更新的活码数量
+     * @return 实际更新的活码数量
      */
     @Transactional
     public int batchUpdateRotateMode(List<Long> ids, QrCode.RotateMode mode) {
-        int count = 0;
-        for (Long id : ids) {
-            try {
-                QrCode qr = qrCodeRepo.findById(id).orElse(null);
-                if (qr != null) {
-                    qr.setRotateMode(mode);
-                    qrCodeRepo.save(qr);
-                    count++;
-                }
-            } catch (Exception e) {
-                // 单条失败不中断批量操作：记录日志后继续处理下一条
-                log.warn("批量切换轮换模式失败: id={}", id, e);
-            }
-        }
-        return count;
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateRotateMode(ids, mode);
+    }
+
+    /// ==================== 批量配置更新（JPQL 批量 UPDATE） ====================
+
+    /**
+     * 批量更新活码欢迎语文本。
+     *
+     * @param ids         活码 ID 列表（为空时直接返回 0）
+     * @param welcomeText 新的欢迎语文本
+     * @return 实际更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateWelcomeText(List<Long> ids, String welcomeText) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateWelcomeText(ids, welcomeText);
+    }
+
+    /**
+     * 批量更新活码表单模板 ID。
+     *
+     * @param ids             活码 ID 列表（为空时直接返回 0）
+     * @param formTemplateId 新的表单模板 ID
+     * @return 实际更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateFormTemplateId(List<Long> ids, Long formTemplateId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateFormTemplateId(ids, formTemplateId);
+    }
+
+    /**
+     * 批量更新活码分组 ID。
+     *
+     * @param ids     活码 ID 列表（为空时直接返回 0）
+     * @param groupId 新的分组 ID
+     * @return 实际更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateGroupId(List<Long> ids, Long groupId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateGroupId(ids, groupId);
+    }
+
+    /**
+     * 批量更新活码预警/紧急阈值。
+     *
+     * @param ids          活码 ID 列表（为空时直接返回 0）
+     * @param warnRatio    预警阈值百分比
+     * @param urgentRatio  紧急阈值百分比
+     * @return 实际更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateThresholds(List<Long> ids, int warnRatio, int urgentRatio) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateThresholds(ids, warnRatio, urgentRatio);
+    }
+
+    /**
+     * 批量更新活码状态。
+     *
+     * @param ids    活码 ID 列表（为空时直接返回 0）
+     * @param status 新的活码状态
+     * @return 实际更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateStatus(List<Long> ids, QrCode.QrCodeStatus status) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateStatus(ids, status);
     }
 
     /**

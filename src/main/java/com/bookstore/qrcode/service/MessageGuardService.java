@@ -237,11 +237,20 @@ public class MessageGuardService {
 
                 try {
                     // 先 XCLAIM 获取消息体，用内容哈希做重试 key（与 markRetryOrDead 一致）
-                    List<MapRecord<String, Object, Object>> claimed =
-                        redisTemplate.opsForStream().claim(
+                    List<MapRecord<String, Object, Object>> claimed;
+                    try {
+                        claimed = redisTemplate.opsForStream().claim(
                             streamKey, consumerGroup, recoveryConsumer,
                             Duration.ofMillis(idleMs),
                             RecordId.of(msgId));
+                    } catch (NullPointerException npe) {
+                        // 消息体已被 stream 清理（如 MAXLEN/MINID 裁剪），
+                        // 但 PEL 条目还在 — 直接 ACK 删除僵尸 pending
+                        log.warn("PEL 僵尸消息（body 已删除）: stream={}, msgId={}, idle={}ms — 自动 ACK",
+                            streamKey, msgId, idle);
+                        ackSafely(streamKey, consumerGroup, msgId);
+                        continue;
+                    }
 
                     if (claimed == null || claimed.isEmpty()) {
                         continue;

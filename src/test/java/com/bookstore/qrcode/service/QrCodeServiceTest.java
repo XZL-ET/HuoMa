@@ -11,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
@@ -129,7 +130,7 @@ class QrCodeServiceTest {
         when(poolRepo.findAllByOrderBySortOrder(any()))
                 .thenReturn(org.springframework.data.domain.Page.empty());
 
-        List<GlobalAgentPool> backups = qrCodeService.getBackups(1L);
+        Page<GlobalAgentPool> backups = qrCodeService.getBackups(1L, 0, 100);
 
         assertThat(backups).isEmpty();
     }
