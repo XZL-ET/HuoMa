@@ -796,21 +796,53 @@ public class QrCodeService {
      */
     @Transactional
     public int batchUpdateRotateMode(List<Long> ids, QrCode.RotateMode mode) {
-        int count = 0;
-        for (Long id : ids) {
-            try {
-                QrCode qr = qrCodeRepo.findById(id).orElse(null);
-                if (qr != null) {
-                    qr.setRotateMode(mode);
-                    qrCodeRepo.save(qr);
-                    count++;
-                }
-            } catch (Exception e) {
-                // 单条失败不中断批量操作：记录日志后继续处理下一条
-                log.warn("批量切换轮换模式失败: id={}", id, e);
-            }
-        }
-        return count;
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateRotateMode(mode, ids);
+    }
+
+    /**
+     * 批量更新活码欢迎语文本。
+     */
+    @Transactional
+    public int batchUpdateWelcomeText(List<Long> ids, String welcomeText) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateWelcomeText(welcomeText, ids);
+    }
+
+    /**
+     * 批量更新活码表单模板 ID（传 null 清空）。
+     */
+    @Transactional
+    public int batchUpdateFormTemplateId(List<Long> ids, Long formTemplateId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateFormTemplateId(formTemplateId, ids);
+    }
+
+    /**
+     * 批量更新活码分组 ID（传 null 取消分组）。
+     */
+    @Transactional
+    public int batchUpdateGroupId(List<Long> ids, Long groupId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateGroupId(groupId, ids);
+    }
+
+    /**
+     * 批量更新活码告警/紧急阈值。
+     */
+    @Transactional
+    public int batchUpdateThresholds(List<Long> ids, int warnRatio, int urgentRatio) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateThresholds(warnRatio, urgentRatio, ids);
+    }
+
+    /**
+     * 批量更新活码状态（暂停/启用）。
+     */
+    @Transactional
+    public int batchUpdateStatus(List<Long> ids, QrCode.QrCodeStatus status) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateStatus(status, ids);
     }
 
     /**
