@@ -256,8 +256,12 @@
     <script>
         /* ── 全选/取消全选 ── */
         function toggleAll(source) {
-            document.querySelectorAll('.qr-checkbox').forEach(cb => cb.checked = source.checked);
-            updateBatchBtn();
+            document.querySelectorAll('.qr-checkbox').forEach(cb => {
+                cb.checked = source.checked;
+                const id = parseInt(cb.value);
+                if (source.checked) selectedIds.add(id); else selectedIds.delete(id);
+            });
+            updateSelectedCount();
         }
 
         /* ── 勾选变化时更新批量配置按钮可见性 ── */
