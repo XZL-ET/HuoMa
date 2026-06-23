@@ -13,6 +13,7 @@ import org.apache.poi.ss.usermodel.*;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -89,6 +90,11 @@ public class QrCodeService {
 
     @Qualifier("taskExecutor")
     private final Executor taskExecutor;
+
+    // 自注入代理：解决 executeBatchImport → create() 的 @Transactional 自调用失效问题
+    @org.springframework.beans.factory.annotation.Autowired
+    @Lazy
+    private QrCodeService self;
 
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:100}")
@@ -325,7 +331,16 @@ public class QrCodeService {
         redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);  // 30 分钟自动过期，防止 Redis 内存泄漏
 
         // 通过 CompletableFuture + 线程池异步执行，避免 @Async 自调用失效问题
-        CompletableFuture.runAsync(() -> executeBatchImport(taskId, rawItems), taskExecutor);
+        // 使用 self（Spring 代理）确保 @Transactional 在 create() 上生效
+        CompletableFuture.runAsync(() -> self.executeBatchImport(taskId, rawItems), taskExecutor)
+            .exceptionally(ex -> {
+                log.error("批量导入异步任务异常终止: taskId={}", taskId, ex);
+                redisTemplate.opsForHash().put(progressKey, "status", "error");
+                String errMsg = ex.getMessage() != null ? ex.getMessage() : "未知错误";
+                redisTemplate.opsForHash().put(progressKey, "error",
+                    errMsg.substring(0, Math.min(errMsg.length(), 500)));
+                return null;
+            });
 
         return taskId;
     }
@@ -345,12 +360,16 @@ public class QrCodeService {
         int success = 0, fail = 0;
         int total = rawItems.size();
 
+        log.info("批量导入开始执行: taskId={}, total={}", taskId, total);
+
         for (int i = 0; i < rawItems.size(); i++) {
             Map<String, String> item = rawItems.get(i);
+            String schoolName = item.get("schoolName");
             try {
+                log.debug("批量导入 [{}]: 正在处理第 {}/{} 行 — {}", taskId, i + 1, total, schoolName);
                 // 将 Excel 行数据映射为创建请求 DTO
                 QrCodeCreateRequest req = new QrCodeCreateRequest();
-                req.setSchoolName(item.get("schoolName"));
+                req.setSchoolName(schoolName);
                 req.setSchoolId(item.get("schoolId"));
                 req.setRegionCity(item.get("regionCity"));
                 req.setRegionDistrict(item.get("regionDistrict"));
@@ -378,15 +397,17 @@ public class QrCodeService {
                 }
                 // 欢迎语
                 req.setWelcomeText(item.get("welcomeText"));
-                // 直接复用手动创建流程（含企微 API 调用）
-                create(req);
+                // 通过 self（Spring 代理）调用 create()，确保 @Transactional 生效
+                self.create(req);
                 success++;
+                log.debug("批量导入 [{}]: 第 {}/{} 行创建成功 — {}", taskId, i + 1, total, schoolName);
             } catch (Exception e) {
                 fail++;
+                log.warn("批量导入 [{}]: 第 {}/{} 行创建失败 — {}: {}", taskId, i + 1, total, schoolName, e.getMessage());
                 // 记录失败详情到独立 Redis Key，方便前端展示失败原因
                 String detailKey = progressKey + ":fail:" + fail;
                 redisTemplate.opsForValue().set(detailKey,
-                    item.get("row") + "|" + item.get("schoolName") + "|" + e.getMessage(),
+                    item.get("row") + "|" + schoolName + "|" + e.getMessage(),
                     30, TimeUnit.MINUTES);
             }
 

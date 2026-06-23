@@ -19,6 +19,7 @@
 
         <form method="post" th:action="@{/qrcodes/batch-import}" enctype="multipart/form-data"
               th:if="${taskId == null}">
+            <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
             <div class="mb-3">
                 <label class="form-label">选择 Excel 文件 (.xlsx)</label>
                 <input type="file" name="file" class="form-control" accept=".xlsx" required>
@@ -66,6 +67,20 @@
                     const fail = parseInt(data.fail) || 0;
                     const processed = parseInt(data.processed) || 0;
                     const status = data.status || 'processing';
+                    const error = data.error || '';
+
+                    /* 显示错误状态 */
+                    if (status === 'error') {
+                        clearInterval(pollTimer);
+                        const bar = document.getElementById('progressBar');
+                        bar.style.width = '100%';
+                        bar.textContent = '失败';
+                        bar.className = 'progress-bar bg-danger';
+                        document.getElementById('progressStats').innerHTML =
+                            '<span class="text-danger">错误：' + escHtml(error) + '</span>';
+                        document.getElementById('doneActions').style.display = 'block';
+                        return;
+                    }
 
                     /* 计算并更新进度条百分比 */
                     const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
@@ -88,6 +103,12 @@
                     }
                 })
                 .catch(() => clearInterval(pollTimer));
+        }
+
+        function escHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
         }
 
         /* 每 500ms 轮询一次进度 */
