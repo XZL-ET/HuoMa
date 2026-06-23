@@ -190,6 +190,7 @@ public class WecomCallbackController {
             String state = extractXmlTag(decryptedXml, "State");
             String failReason = extractXmlTag(decryptedXml, "FailReason");
             String source = extractXmlTag(decryptedXml, "Source");
+            String welcomeCode = extractXmlTag(decryptedXml, "WelcomeCode");
 
             // ================================================================
             // 步骤4: 构造事件 JSON（标准化结构，便于消费者统一处理）
@@ -201,6 +202,7 @@ public class WecomCallbackController {
             event.put("state", state);
             event.put("fail_reason", failReason);
             event.put("source", source);
+            event.put("welcome_code", welcomeCode);
             event.put("timestamp", Instant.now().toString());
             event.put("raw_xml", decryptedXml);       // 保留完整 XML，供消费者按需提取
 

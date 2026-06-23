@@ -781,6 +781,53 @@ public class WecomApiClient {
     }
 
     /**
+     * 发送欢迎语给新添加的客户。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/send_welcome_msg}
+     * <pre>
+     * 请求:
+     *   {
+     *     "welcome_code": "CODE_FROM_CALLBACK",
+     *     "text": {"content": "您好，欢迎添加"},
+     *     "attachments": [
+     *       {"msgtype": "link", "link": {"title": "表单", "url": "...", ...}}
+     *     ]
+     *   }
+     * </pre>
+     * <p><b>与 sendMessage 的区别：</b>
+     * <ul>
+     *   <li>send_welcome_msg 使用回调返回的 welcome_code，不受每日推送次数限制</li>
+     *   <li>welcome_code 仅在 add_external_contact 回调后约 20 秒内有效</li>
+     *   <li>一个 welcome_code 只能使用一次</li>
+     * </ul>
+     *
+     * @param welcomeCode 回调 XML 中的 WelcomeCode 字段值
+     * @param text        欢迎语文案
+     * @param attachments 可选附件（文本卡片等），可为 null
+     * @throws WecomApiException 发送失败时抛出（如 welcome_code 已过期、已使用等）
+     */
+    public void sendWelcomeMsg(String welcomeCode, String text,
+                               List<Map<String, Object>> attachments) {
+        String url = BASE_URL + "/externalcontact/send_welcome_msg?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("welcome_code", welcomeCode);
+            bodyMap.put("text", Map.of("content", text));
+            if (attachments != null && !attachments.isEmpty()) {
+                bodyMap.put("attachments", attachments);
+            }
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            parseAndCheck(resp, "发送欢迎语");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "发送欢迎语失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
      * 修改客户备注。
      * POST /cgi-bin/externalcontact/remark
      */

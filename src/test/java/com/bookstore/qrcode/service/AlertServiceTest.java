@@ -3,8 +3,10 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.AgentAlertRepository;
 import com.bookstore.qrcode.repository.AgentRepository;
+import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +33,7 @@ class AlertServiceTest {
     @Mock private AgentAlertRepository alertRepo;
     @Mock private AgentRepository agentRepo;
     @Mock private QrCodeRepository qrCodeRepo;
+    @Mock private GlobalAgentPoolRepository poolRepo;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -52,7 +55,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("meltAgent — 24h 内熔断 >= 3 次升级为 blocked")
+    @DisplayName("meltAgent — 24h 内熔断 >= 3 次升级为 blocked，并同步清理全局池")
     void shouldBlockOnThirdMelt() {
         Agent agent = new Agent();
         agent.setUserid("user1");
@@ -60,10 +63,17 @@ class AlertServiceTest {
         agent.setMeltedCount24h(2);
         when(agentRepo.findByIdForUpdate("user1")).thenReturn(Optional.of(agent));
 
+        GlobalAgentPool poolEntry = GlobalAgentPool.builder()
+            .agentUserid("user1").dailyMax(100)
+            .status(GlobalAgentPool.PoolStatus.standby).build();
+        when(poolRepo.findByAgentUserid("user1")).thenReturn(Optional.of(poolEntry));
+
         alertService.meltAgent("user1", 1L, "测试熔断");
 
         assertThat(agent.getOverallStatus()).isEqualTo(Agent.OverallStatus.blocked);
         assertThat(agent.getMeltedCount24h()).isEqualTo(3);
+        // 验证池清理
+        verify(poolRepo).delete(poolEntry);
     }
 
     @Test

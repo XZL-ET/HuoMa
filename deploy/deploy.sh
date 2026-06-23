@@ -48,22 +48,24 @@ if [ -n "${SSHPASS}" ] && command -v sshpass &>/dev/null; then
         exit 1
     fi
 elif ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${SERVER_USER}@${SERVER_IP}" "echo ok" >/dev/null 2>&1; then
-    # 密钥免密模式
+    # 密钥免密模式（不用 scp——Git Bash 下会卡死）
     USE_SSHPASS=false
     SSH_CMD="ssh ${SSH_OPTS}"
     upload() {
         local src=$1 dst=$2
-        scp ${SSH_OPTS} "${src}" "${SERVER_USER}@${SERVER_IP}:${dst}"
+        echo "  📤 $(basename "${src}")"
+        ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "cat > ${dst}" < "${src}"
     }
     echo "  ✅ 密钥认证"
 else
-    # 手动输密码 + ControlMaster 复用
+    # 手动输密码 + ControlMaster 复用（不用 scp——Git Bash 下会卡死）
     USE_SSHPASS=false
     SSH_CTL="-o ControlMaster=auto -o ControlPath=${CONTROL_PATH} -o ControlPersist=300"
     SSH_CMD="ssh ${SSH_OPTS} ${SSH_CTL}"
     upload() {
         local src=$1 dst=$2
-        scp ${SSH_OPTS} ${SSH_CTL} "${src}" "${SERVER_USER}@${SERVER_IP}:${dst}"
+        echo "  📤 $(basename "${src}")"
+        ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "cat > ${dst}" < "${src}"
     }
     cleanup() {
         ssh ${SSH_OPTS} ${SSH_CTL} -O exit "${SERVER_USER}@${SERVER_IP}" 2>/dev/null || true

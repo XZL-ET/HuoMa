@@ -7,8 +7,10 @@ import com.bookstore.qrcode.entity.CustomerTransfer;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.QrCodeGroup;
+import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
@@ -51,6 +53,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -92,6 +95,7 @@ public class QrCodeController {
     private final QrImageService qrImageService;
     private final TagService tagService;
     private final EmployeeRepository employeeRepo;
+    private final AgentRepository agentRepo;
     private final CustomerTransferRepository transferRepo;
     private final EmployeeSyncService employeeSyncService;
     private final FormTemplateRepository formTemplateRepo;
@@ -1516,6 +1520,320 @@ public class QrCodeController {
         model.addAttribute("nameMap", nameMap);
 
         return "qrcode/transfers";
+    }
+
+    // ========================================================================
+    // 活码员工校验：对比本地 DB vs 企微实际配置
+    // ========================================================================
+
+    /**
+     * 校验活码下员工是否真正同步到了企微侧。
+     *
+     * <p>GET /qrcodes/{id}/verify-agents —— 返回 JSON，对比：
+     * <ul>
+     *   <li>本地 DB 中 active 状态的员工列表</li>
+     *   <li>企微实际活码配置中的 user 列表</li>
+     *   <li>差异：本地有但企微缺失的、企微有但本地没有的</li>
+     * </ul>
+     *
+     * <p>这是纯诊断接口，不做任何修改操作，可以安全反复调用。</p>
+     *
+     * @param id 活码 ID
+     * @return Map 包含 local / wecom / missing / extra / matched 五个维度
+     */
+    @GetMapping("/{id}/verify-agents")
+    @ResponseBody
+    public Map<String, Object> verifyAgents(@PathVariable Long id) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        try {
+            // ── 1. 获取活码基本信息 ──
+            QrCode qr = qrCodeService.getById(id);
+            result.put("qrCodeId", qr.getId());
+            result.put("schoolName", qr.getSchoolName());
+            result.put("schoolId", qr.getSchoolId());
+
+            if (qr.getQrConfigId() == null || qr.getQrConfigId().isBlank()) {
+                result.put("error", "该活码未关联企微 config_id，无法校验");
+                return result;
+            }
+            result.put("configId", qr.getQrConfigId());
+
+            // ── 2. 本地 DB 中的 active 员工 ──
+            List<QrAgent> localAgents = qrAgentRepo.findByQrCodeIdAndStatus(id, QrAgent.AgentStatus.active);
+            List<Map<String, Object>> localList = new ArrayList<>();
+            for (QrAgent a : localAgents) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("userid", a.getAgentUserid());
+                m.put("role", a.getRole().name());
+                // 从 Employee 表查中文名
+                employeeRepo.findByUserid(a.getAgentUserid())
+                    .ifPresentOrElse(
+                        e -> m.put("name", e.getName()),
+                        () -> m.put("name", "未知"));
+                localList.add(m);
+            }
+            result.put("local", localList);
+            result.put("localCount", localList.size());
+
+            // ── 3. 企微侧实际配置 ──
+            JsonNode wecomResp = wecomApiClient.getContactWay(qr.getQrConfigId());
+            JsonNode contactWay = wecomResp.get("contact_way");
+            List<String> wecomUserids = new ArrayList<>();
+            if (contactWay != null && contactWay.has("user")) {
+                for (JsonNode u : contactWay.get("user")) {
+                    wecomUserids.add(u.asText());
+                }
+            }
+            List<Map<String, Object>> wecomList = new ArrayList<>();
+            for (String uid : wecomUserids) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("userid", uid);
+                employeeRepo.findByUserid(uid)
+                    .ifPresentOrElse(
+                        e -> m.put("name", e.getName()),
+                        () -> m.put("name", "未知"));
+                wecomList.add(m);
+            }
+            result.put("wecom", wecomList);
+            result.put("wecomCount", wecomList.size());
+
+            // ── 4. 差异分析 ──
+            Set<String> localUserids = localAgents.stream()
+                .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+            Set<String> wecomSet = new HashSet<>(wecomUserids);
+
+            // 本地有、企微没有 → 同步遗漏
+            Set<String> missing = new HashSet<>(localUserids);
+            missing.removeAll(wecomSet);
+            result.put("missing", missing);       // 需要补同步
+            result.put("missingCount", missing.size());
+
+            // 企微有、本地没有 → 可能是手动在企微后台加的
+            Set<String> extra = new HashSet<>(wecomSet);
+            extra.removeAll(localUserids);
+            result.put("extra", extra);           // 仅在企微侧存在
+            result.put("extraCount", extra.size());
+
+            // 两边一致的
+            Set<String> matched = new HashSet<>(localUserids);
+            matched.retainAll(wecomSet);
+            result.put("matchedCount", matched.size());
+
+            result.put("synced", missing.isEmpty());
+        } catch (Exception e) {
+            log.error("校验活码员工失败: qrCodeId={}", id, e);
+            result.put("error", e.getMessage());
+        }
+
+        return result;
+    }
+
+    // ========================================================================
+    // 活码员工状态诊断：扫描全量活码，检查每个接待员的状态
+    // ========================================================================
+
+    /**
+     * 扫描全部活跃活码，检查每个活码下接待员的异常状态。
+     *
+     * <p>GET /qrcodes/verify-all-agents —— 纯诊断接口，不做任何修改，可安全反复调用。
+     * 返回每个活码下存在异常状态员工（如已封禁、已熔断、预警、已离职等）的明细。</p>
+     *
+     * <p>异常判定复用 {@link com.bookstore.qrcode.controller.AgentController#getAnomalyLabel}
+     * 的统一逻辑。</p>
+     *
+     * @return Map 包含 scanTime / totalQrCodes / qrCodesWithAnomaly / anomalySummary / details
+     */
+    @GetMapping("/verify-all-agents")
+    @ResponseBody
+    public Map<String, Object> verifyAllAgents() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanTime", LocalDateTime.now().toString());
+
+        try {
+            // ── 1. 加载全部活跃活码 ──
+            List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+            result.put("totalQrCodes", activeQrs.size());
+
+            if (activeQrs.isEmpty()) {
+                result.put("checkedQrCodes", 0);
+                result.put("qrCodesWithAnomaly", 0);
+                result.put("totalAgents", 0);
+                result.put("anomalyAgents", 0);
+                result.put("anomalySummary", Collections.emptyMap());
+                result.put("details", Collections.emptyList());
+                return result;
+            }
+
+            // ── 2. 批量加载全部 active QrAgent，按 qrCodeId 分组 ──
+            List<QrAgent> allActiveAgents = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active);
+            Map<Long, List<QrAgent>> agentsByQr = allActiveAgents.stream()
+                .collect(Collectors.groupingBy(QrAgent::getQrCodeId));
+
+            // ── 3. 批量加载 Employee + Agent 快照（2 次 DB 查询，避免 N+1）──
+            Set<String> allUserids = allActiveAgents.stream()
+                .map(QrAgent::getAgentUserid)
+                .collect(Collectors.toSet());
+
+            Map<String, Employee> empMap = Collections.emptyMap();
+            if (!allUserids.isEmpty()) {
+                empMap = employeeRepo.findByUseridIn(allUserids).stream()
+                    .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+            }
+
+            Map<String, Agent> agentMap = Collections.emptyMap();
+            if (!allUserids.isEmpty()) {
+                agentMap = agentRepo.findAllById(allUserids).stream()
+                    .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+            }
+
+            // ── 4. 逐活码检查每个接待员的状态 ──
+            List<Map<String, Object>> details = new ArrayList<>();
+            Map<String, Integer> anomalySummary = new LinkedHashMap<>();
+            int qrCodesWithAnomaly = 0;
+            int totalAnomalyAgents = 0;
+
+            for (QrCode qr : activeQrs) {
+                List<QrAgent> agents = agentsByQr.getOrDefault(qr.getId(), Collections.emptyList());
+                List<Map<String, Object>> anomalyList = new ArrayList<>();
+
+                for (QrAgent qa : agents) {
+                    Agent agent = agentMap.get(qa.getAgentUserid());
+                    Employee emp = empMap.get(qa.getAgentUserid());
+                    String label = QrCodeService.getAnomalyLabel(agent, emp);
+
+                    if (label != null) {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("userid", qa.getAgentUserid());
+                        item.put("name", emp != null ? emp.getName()
+                            : (agent != null ? agent.getName() : qa.getAgentUserid()));
+                        item.put("role", qa.getRole().name());
+                        item.put("anomaly", label);
+                        anomalyList.add(item);
+
+                        anomalySummary.merge(label, 1, Integer::sum);
+                        totalAnomalyAgents++;
+                    }
+                }
+
+                if (!anomalyList.isEmpty()) {
+                    qrCodesWithAnomaly++;
+                    Map<String, Object> qrDetail = new LinkedHashMap<>();
+                    qrDetail.put("qrCodeId", qr.getId());
+                    qrDetail.put("schoolName", qr.getSchoolName());
+                    qrDetail.put("schoolId", qr.getSchoolId());
+                    qrDetail.put("totalAgents", agents.size());
+                    qrDetail.put("anomalyCount", anomalyList.size());
+                    qrDetail.put("anomalyAgents", anomalyList);
+                    details.add(qrDetail);
+                }
+            }
+
+            // 按异常人数降序排列，最严重的活码排前面
+            details.sort((a, b) -> Integer.compare(
+                (int) b.get("anomalyCount"), (int) a.get("anomalyCount")));
+
+            // ── 5. 组装响应 ──
+            result.put("checkedQrCodes", activeQrs.size());
+            result.put("qrCodesWithAnomaly", qrCodesWithAnomaly);
+            result.put("totalAgents", allActiveAgents.size());
+            result.put("anomalyAgents", totalAnomalyAgents);
+            result.put("anomalySummary", anomalySummary);
+            result.put("details", details);
+
+        } catch (Exception e) {
+            log.error("扫描活码员工异常状态失败", e);
+            result.put("error", e.getMessage());
+        }
+
+        return result;
+    }
+
+    // getAnomalyLabel 统一使用 QrCodeService.getAnomalyLabel(Agent, Employee)
+
+    // ========================================================================
+    // 异常员工替换 — 移除 → 补人（二次校验）→ 同步企微
+    // ========================================================================
+
+    /**
+     * 替换单个活码下所有异常状态的接待员。
+     *
+     * <p>POST /qrcodes/{id}/replace-anomaly-agents —— 扫描 → 移除 → 从全局池补人
+     * → 同步企微。替补员工会经过二次异常校验，确保换进去的都是正常状态。</p>
+     *
+     * @param id 活码 ID
+     * @return JSON：qrCodeId / schoolName / removed / replaced / shortfall / details
+     */
+    @PostMapping("/{id}/replace-anomaly-agents")
+    @ResponseBody
+    public Map<String, Object> replaceAnomalyAgents(@PathVariable Long id) {
+        try {
+            return qrCodeService.replaceAnomalyAgents(id);
+        } catch (Exception e) {
+            log.error("替换异常员工失败: qrCodeId={}", id, e);
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("qrCodeId", id);
+            err.put("error", e.getMessage());
+            return err;
+        }
+    }
+
+    /**
+     * 批量替换全部活跃活码下所有异常状态的接待员。
+     *
+     * <p>POST /qrcodes/replace-all-anomaly-agents —— 遍历全部 active 活码，
+     * 逐个调用 {@link #replaceAnomalyAgents(Long)}。返回汇总和每个活码的明细。</p>
+     *
+     * @return JSON：totalQrCodes / qrCodesProcessed / totalRemoved / totalReplaced / totalShortfall / details
+     */
+    @PostMapping("/replace-all-anomaly-agents")
+    @ResponseBody
+    public Map<String, Object> replaceAllAnomalyAgents() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanTime", LocalDateTime.now().toString());
+
+        try {
+            List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+            result.put("totalQrCodes", activeQrs.size());
+
+            int totalRemoved = 0, totalReplaced = 0, totalShortfall = 0, processed = 0;
+            List<Map<String, Object>> details = new ArrayList<>();
+
+            for (QrCode qr : activeQrs) {
+                try {
+                    Map<String, Object> r = qrCodeService.replaceAnomalyAgents(qr.getId());
+                    int removed = (int) r.get("removed");
+                    int replaced = (int) r.get("replaced");
+                    int shortfall = (int) r.get("shortfall");
+                    if (removed > 0) {
+                        details.add(r);
+                        totalRemoved += removed;
+                        totalReplaced += replaced;
+                        totalShortfall += shortfall;
+                    }
+                    processed++;
+                } catch (Exception e) {
+                    log.error("替换异常员工失败: qrCodeId={}", qr.getId(), e);
+                    Map<String, Object> errDetail = new LinkedHashMap<>();
+                    errDetail.put("qrCodeId", qr.getId());
+                    errDetail.put("schoolName", qr.getSchoolName());
+                    errDetail.put("error", e.getMessage());
+                    details.add(errDetail);
+                }
+            }
+
+            result.put("qrCodesProcessed", processed);
+            result.put("totalRemoved", totalRemoved);
+            result.put("totalReplaced", totalReplaced);
+            result.put("totalShortfall", totalShortfall);
+            result.put("details", details);
+
+        } catch (Exception e) {
+            log.error("批量替换异常员工失败", e);
+            result.put("error", e.getMessage());
+        }
+
+        return result;
     }
 
 }

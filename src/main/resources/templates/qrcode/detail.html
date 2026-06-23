@@ -137,7 +137,7 @@
                             <!-- 状态徽标：活跃=绿色，已满=黄色，其他=红色 -->
                             <td>
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : (a.status.name() == 'full' ? 'bg-warning' : 'bg-danger')}"
-                                      th:text="${a.status.name() == 'active' ? '接客中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
+                                      th:text="${a.status.name() == 'active' ? '接待中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
                             <td class="text-nowrap">
                                 <!-- 编辑按钮，将联系人数据存放在 data-* 属性中供弹窗使用 -->
@@ -161,7 +161,7 @@
                             </td>
                             <td>
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
-                                      th:text="${a.status.name() == 'active' ? '接客中' : a.status.name()}"></span>
+                                      th:text="${a.status.name() == 'active' ? '接待中' : a.status.name()}"></span>
                             </td>
                             <td class="text-nowrap">
                                 <button class="btn btn-sm btn-outline-secondary edit-agent-btn"

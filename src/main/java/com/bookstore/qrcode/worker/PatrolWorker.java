@@ -54,6 +54,7 @@ public class PatrolWorker {
     private final AgentRepository agentRepo;
     private final WecomApiClient wecomApi;
     private final OperationLogRepository operationLogRepo;
+    private final QrCodeService qrCodeService;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
@@ -62,6 +63,9 @@ public class PatrolWorker {
 
     /** 上次 DLQ 自动重放时间戳 — 限流：每 30 分钟最多重放一次 */
     private long lastDlqReplayTime = 0L;
+
+    /** 上次异常员工告警时间戳 — 限流：每小时最多告警一次 */
+    private long lastAnomalyAlertTime = 0L;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
@@ -85,6 +89,13 @@ public class PatrolWorker {
             self.reconcileOrphanQrCodes();
         } catch (Exception e) {
             log.error("企微对账扫描异常", e);
+        }
+
+        // 0.6 活码异常员工巡检（仅统计+告警，每小时最多告警一次）
+        try {
+            self.patrolQrAgentAnomalies();
+        } catch (Exception e) {
+            log.error("活码异常员工巡检异常", e);
         }
 
         // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
@@ -352,6 +363,100 @@ public class PatrolWorker {
             }
         } catch (Exception e) {
             log.error("PEL 崩溃回收异常", e);
+        }
+    }
+
+    // ========================================================================
+    // 活码异常员工巡检 + 每日自愈
+    // ========================================================================
+
+    /**
+     * 活码异常员工快速巡检 — 统计异常员工数，仅在超过阈值时发送告警。
+     *
+     * <p>由 {@link #patrol()} 每 5 分钟调用一次。为防告警风暴，
+     * 每小时最多发送一次异常告警。</p>
+     */
+    @Transactional
+    void patrolQrAgentAnomalies() {
+        List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+        if (activeQrs.isEmpty()) return;
+
+        // 批量加载快照
+        List<QrAgent> allActive = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active);
+        Set<String> allUserids = allActive.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+        if (allUserids.isEmpty()) return;
+
+        Map<String, Agent> agentMap = agentRepo.findAllById(allUserids).stream()
+            .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+        Map<String, Employee> empMap = employeeRepo.findAll().stream()
+            .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+
+        int anomalyCount = 0;
+        Set<Long> affectedQrIds = new java.util.HashSet<>();
+        for (QrAgent qa : allActive) {
+            Agent agent = agentMap.get(qa.getAgentUserid());
+            Employee emp = empMap.get(qa.getAgentUserid());
+            if (QrCodeService.getAnomalyLabel(agent, emp) != null) {
+                anomalyCount++;
+                affectedQrIds.add(qa.getQrCodeId());
+            }
+        }
+
+        if (anomalyCount > 0) {
+            log.info("异常员工巡检: {} 个异常员工分布在 {} 个活码上",
+                anomalyCount, affectedQrIds.size());
+
+            // 每小时最多告警一次
+            long now = System.currentTimeMillis();
+            if (now - lastAnomalyAlertTime > 3600_000L) {
+                lastAnomalyAlertTime = now;
+                alertService.createAlert("system", "qr_agent_anomaly",
+                    AgentAlert.AlertSeverity.medium,
+                    String.format("巡检发现 %d 个异常员工分布在 %d 个活码上，可调用 /qrcodes/verify-all-agents 查看详情或 /qrcodes/replace-all-anomaly-agents 批量替换",
+                        anomalyCount, affectedQrIds.size()),
+                    AgentAlert.AutoAction.none, null);
+            }
+        }
+    }
+
+    /**
+     * 每日凌晨自动扫描并替换异常员工（自愈）。
+     *
+     * <p>每天 03:07 执行一次。调用 {@link QrCodeService#replaceAnomalyAgents}
+     * 逐个处理活跃活码，该方法内部有安全阈值保护（池空时跳过移除）。</p>
+     */
+    @Scheduled(cron = "7 3 * * *")
+    public void dailyAnomalyAutoHeal() {
+        log.info("每日异常员工自愈开始");
+        List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+        if (activeQrs.isEmpty()) {
+            log.info("每日异常员工自愈: 无活跃活码，跳过");
+            return;
+        }
+
+        int totalRemoved = 0, totalReplaced = 0, totalShortfall = 0;
+        for (QrCode qr : activeQrs) {
+            try {
+                Map<String, Object> r = qrCodeService.replaceAnomalyAgents(qr.getId());
+                totalRemoved += (int) r.get("removed");
+                totalReplaced += (int) r.get("replaced");
+                totalShortfall += (int) r.get("shortfall");
+            } catch (Exception e) {
+                log.error("每日自愈处理失败: qrCodeId={}", qr.getId(), e);
+            }
+        }
+
+        if (totalRemoved > 0) {
+            log.warn("每日异常员工自愈完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人 (共 {} 个活码)",
+                totalRemoved, totalReplaced, totalShortfall, activeQrs.size());
+            alertService.createAlert("system", "daily_anomaly_heal",
+                totalShortfall > 0 ? AgentAlert.AlertSeverity.medium : AgentAlert.AlertSeverity.low,
+                String.format("每日自愈: 扫描 %d 个活码，移除 %d 个异常员工，补入 %d 人，缺口 %d 人",
+                    activeQrs.size(), totalRemoved, totalReplaced, totalShortfall),
+                AgentAlert.AutoAction.none, null);
+        } else {
+            log.info("每日异常员工自愈: 未发现异常员工");
         }
     }
 }

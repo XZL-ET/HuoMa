@@ -1,6 +1,8 @@
 [Unit]
 Description=Bookstore WeCom QR Code Platform
 After=network.target nginx.service
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 User=huoma
@@ -13,8 +15,6 @@ ExecStart=/bin/bash -c "exec /usr/bin/java -jar -Xms512m -Xmx2g -XX:+UseG1GC \
     -Dspring.profiles.active=prod /opt/HuoMa/app.jar"
 Restart=always
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 [Install]
 WantedBy=multi-user.target

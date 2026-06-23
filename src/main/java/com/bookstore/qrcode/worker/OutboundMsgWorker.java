@@ -249,9 +249,27 @@ public class OutboundMsgWorker {
             .replace("{{school_name}}", schoolName)
             .replace("{{teacher_name}}", teacherName);
 
+        // Extract welcome_code for send_welcome_msg API (more reliable than sendMessage)
+        String welcomeCode = event.has("welcome_code") && !event.get("welcome_code").isNull()
+            ? event.get("welcome_code").asText() : null;
+
         // 1. Send welcome text
-        wecomApi.sendMessage(userid, externalUserId, welcomeText);
-        log.info("欢迎语已发送: to={}, sender={}", externalUserId, userid);
+        // Prefer send_welcome_msg (uses WelcomeCode, no daily rate limit) over sendMessage
+        boolean sent = false;
+        if (welcomeCode != null) {
+            try {
+                wecomApi.sendWelcomeMsg(welcomeCode, welcomeText, null);
+                sent = true;
+                log.info("欢迎语已通过 send_welcome_msg 发送: to={}", externalUserId);
+            } catch (Exception e) {
+                // welcome_code expired (valid ~20s) or already used — fallback to sendMessage
+                log.warn("send_welcome_msg 失败，降级到 sendMessage: external={}", externalUserId, e);
+            }
+        }
+        if (!sent) {
+            wecomApi.sendMessage(userid, externalUserId, welcomeText);
+            log.info("欢迎语已通过 sendMessage 发送: to={}, sender={}", externalUserId, userid);
+        }
 
         // 2. Send form link as a textcard (card-style message, separate from welcome text)
         if (formTemplateId != null) {

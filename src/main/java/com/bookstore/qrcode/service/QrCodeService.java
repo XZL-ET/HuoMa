@@ -23,8 +23,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * <h2>活码核心服务</h2>
@@ -72,6 +74,7 @@ public class QrCodeService {
     private final QrAgentRepository qrAgentRepo;
     private final QrRotateLogRepository rotateLogRepo;
     private final AgentRepository agentRepo;
+    private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redisTemplate;
@@ -1027,10 +1030,25 @@ public class QrCodeService {
             }
 
             // 不够数，从全局池自动补（排除已绑定员工，避免重复）
+            // 二次校验：每个替补必须通过 getAnomalyLabel 检查，防止
+            // takeStandby 不滤 warning 导致新建活码带入预警员工
             Set<String> boundUserids = new HashSet<>(initialUserids);
-            while (needCount > 0) {
+            int poolAttempts = 0;
+            while (needCount > 0 && poolAttempts < 200) {
                 GlobalAgentPool next = poolService.takeStandby(boundUserids);
                 if (next == null) break;
+                poolAttempts++;
+
+                // 二次校验：替补必须是正常状态
+                Agent repAgent = agentRepo.findById(next.getAgentUserid()).orElse(null);
+                Employee repEmp = employeeRepo.findByUserid(next.getAgentUserid()).orElse(null);
+                if (getAnomalyLabel(repAgent, repEmp) != null) {
+                    boundUserids.add(next.getAgentUserid());
+                    log.warn("创建活码补人跳过异常员工: qrCodeId={}, userid={}, anomaly={}",
+                        qrCodeId, next.getAgentUserid(), getAnomalyLabel(repAgent, repEmp));
+                    continue;
+                }
+
                 boundUserids.add(next.getAgentUserid());
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(next.getAgentUserid())
@@ -1163,5 +1181,222 @@ public class QrCodeService {
         // 强制设为 STRING 类型：防止纯数字的学校 ID 被当作数值解析
         cell.setCellType(CellType.STRING);
         return cell.getStringCellValue().trim();
+    }
+
+    // ==================== 异常员工替换 ====================
+
+    /**
+     * 替换活码下所有异常状态的接待员 — 移除异常 → 从全局池补人（二次校验）→ 同步企微。
+     *
+     * <h3>执行步骤</h3>
+     * <ol>
+     *   <li>扫描活码下 {@code status=active} 的接待员</li>
+     *   <li>调用 {@link #getAnomalyLabel} 判定异常</li>
+     *   <li>异常员工 → {@code status=removed}</li>
+     *   <li>每移除一个，从全局池取替补，替补必须通过 {@link #getAnomalyLabel} 二次校验</li>
+     *   <li>事务提交后 → 异步同步企微</li>
+     * </ol>
+     *
+     * <p><b>防回灌：</b>替补员工取回来后用 {@code getAnomalyLabel} 再次判定，
+     * 不合格（如 warning/blocked/melted）则跳过，继续取下一个 standby，
+     * 最多尝试 20 次，确保替换进去的员工一定是正常状态。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @return 替换结果 Map：qrCodeId / schoolName / removed / replaced / shortfall / details
+     */
+    @Transactional
+    public Map<String, Object> replaceAnomalyAgents(Long qrCodeId) {
+        QrCode qr = getById(qrCodeId);
+
+        // 1. 获取活码下全部 active 接待员
+        List<QrAgent> activeAgents = qrAgentRepo
+            .findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
+
+        if (activeAgents.isEmpty()) {
+            return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+        }
+
+        // 2. 批量加载 Employee + Agent 快照
+        Set<String> userids = activeAgents.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        Map<String, Employee> empMap = employeeRepo.findByUseridIn(userids).stream()
+            .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+        Map<String, Agent> agentMap = agentRepo.findAllById(userids).stream()
+            .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+
+        // 3. 找出异常员工
+        List<QrAgent> anomalous = new ArrayList<>();
+        for (QrAgent qa : activeAgents) {
+            Agent agent = agentMap.get(qa.getAgentUserid());
+            Employee emp = empMap.get(qa.getAgentUserid());
+            if (getAnomalyLabel(agent, emp) != null) {
+                anomalous.add(qa);
+            }
+        }
+
+        if (anomalous.isEmpty()) {
+            return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+        }
+
+        // 3.5 安全阈值：全局池无 standby 时跳过移除，防止活码变空码
+        long poolStandby = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby);
+        if (poolStandby == 0) {
+            log.warn("活码 {} 有 {} 个异常员工但全局池无 standby，跳过移除以防活码变空",
+                qrCodeId, anomalous.size());
+            alertService.createAlert("system", "anomaly_replace_blocked",
+                AgentAlert.AlertSeverity.high,
+                String.format("活码「%s」(id=%d) 有 %d 个异常员工但全局池无 standby，跳过移除以防活码变空",
+                    qr.getSchoolName(), qrCodeId, anomalous.size()),
+                AgentAlert.AutoAction.none, qrCodeId);
+            List<Map<String, String>> blockedDetails = anomalous.stream()
+                .map(qa -> Map.of("userid", qa.getAgentUserid(),
+                    "anomaly", getAnomalyLabel(
+                        agentMap.get(qa.getAgentUserid()), empMap.get(qa.getAgentUserid())),
+                    "skipped", "全局池无 standby"))
+                .collect(Collectors.toList());
+            Map<String, Object> blockedResult = new LinkedHashMap<>();
+            blockedResult.put("qrCodeId", qrCodeId);
+            blockedResult.put("schoolName", qr.getSchoolName());
+            blockedResult.put("removed", 0);
+            blockedResult.put("replaced", 0);
+            blockedResult.put("shortfall", anomalous.size());
+            blockedResult.put("details", blockedDetails);
+            blockedResult.put("skipped", true);
+            blockedResult.put("reason", "全局池无 standby，跳过移除以防活码变空");
+            return blockedResult;
+        }
+
+        // 4. 构建排除集合（已在活码上的非 removed 员工）
+        Set<String> excludeUserids = activeAgents.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        // 5. 移除异常 + 补人（替补二次校验）
+        List<Map<String, String>> details = new ArrayList<>();
+        int replaced = 0;
+        int maxSortOrder = activeAgents.stream()
+            .mapToInt(QrAgent::getSortOrder).max().orElse(0);
+
+        for (QrAgent qa : anomalous) {
+            String label = getAnomalyLabel(
+                agentMap.get(qa.getAgentUserid()), empMap.get(qa.getAgentUserid()));
+
+            // 移除
+            qa.setStatus(QrAgent.AgentStatus.removed);
+            qa.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(qa);
+
+            // 从全局池找替补，最多尝试 20 次
+            String replacementUserid = null;
+            for (int attempt = 0; attempt < 20; attempt++) {
+                GlobalAgentPool next = poolService.takeStandby(excludeUserids);
+                if (next == null) break;
+
+                // 二次校验：替补也必须是正常状态
+                Agent repAgent = agentRepo.findById(next.getAgentUserid()).orElse(null);
+                Employee repEmp = employeeRepo.findByUserid(next.getAgentUserid()).orElse(null);
+                String repLabel = getAnomalyLabel(repAgent, repEmp);
+
+                if (repLabel == null) {
+                    // 合格
+                    replacementUserid = next.getAgentUserid();
+                    break;
+                }
+                // 不合格 — 加入排除列表，继续取下一个
+                excludeUserids.add(next.getAgentUserid());
+                log.warn("替换补人跳过异常员工: qrCodeId={}, userid={}, anomaly={}",
+                    qrCodeId, next.getAgentUserid(), repLabel);
+            }
+
+            if (replacementUserid != null) {
+                excludeUserids.add(replacementUserid);
+                maxSortOrder++;
+                qrAgentRepo.save(QrAgent.builder()
+                    .qrCodeId(qrCodeId).agentUserid(replacementUserid)
+                    .role(qa.getRole())
+                    .dailyMax(dailyMaxDefault)
+                    .sortOrder(maxSortOrder)
+                    .status(QrAgent.AgentStatus.active).build());
+                replaced++;
+                details.add(Map.of("removed", qa.getAgentUserid(),
+                    "anomaly", label, "replacedBy", replacementUserid));
+            } else {
+                details.add(Map.of("removed", qa.getAgentUserid(),
+                    "anomaly", label, "replacedBy", ""));
+            }
+        }
+
+        // 6. 异步同步企微
+        final Long fQrId = qrCodeId;
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncQrUsersToWechat(fQrId);
+                    } catch (Exception e) {
+                        log.error("替换异常员工后同步企微失败: qrCodeId={}", fQrId, e);
+                    }
+                }
+            });
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("qrCodeId", qrCodeId);
+        result.put("schoolName", qr.getSchoolName());
+        result.put("removed", anomalous.size());
+        result.put("replaced", replaced);
+        result.put("shortfall", anomalous.size() - replaced);
+        result.put("details", details);
+
+        int shortfall = anomalous.size() - replaced;
+        if (shortfall > 0) {
+            alertService.createAlert("system", "anomaly_replace_shortfall",
+                AgentAlert.AlertSeverity.medium,
+                String.format("活码「%s」(id=%d) 替换异常员工：移除 %d 人，仅补入 %d 人，缺口 %d 人",
+                    qr.getSchoolName(), qrCodeId, anomalous.size(), replaced, shortfall),
+                AgentAlert.AutoAction.none, qrCodeId);
+        }
+
+        log.info("活码 {} 异常员工替换完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人",
+            qrCodeId, anomalous.size(), replaced, anomalous.size() - replaced);
+
+        return result;
+    }
+
+    /**
+     * 判定员工的异常状态标签（统一工具方法，供全系统复用）。
+     *
+     * <p>判定优先级：Agent blocked → Agent melted → Agent warning
+     * → Employee wechatStatus 异常。blocked 状态会解析 statusReason 中的 errcode
+     * 来区分具体原因。正常员工返回 {@code null}。</p>
+     *
+     * @param agent Agent 记录（可为 {@code null}）
+     * @param emp   Employee 记录（可为 {@code null}）
+     * @return 异常标签，正常返回 {@code null}
+     */
+    public static String getAnomalyLabel(Agent agent, Employee emp) {
+        if (agent != null) {
+            if (agent.getOverallStatus() == Agent.OverallStatus.blocked) {
+                String reason = agent.getStatusReason();
+                if (reason != null && reason.contains("40098")) return "未实名";
+                if (reason != null && reason.contains("41054")) return "未加入组织";
+                return "已停用";
+            }
+            if (agent.getOverallStatus() == Agent.OverallStatus.melted) {
+                return "已熔断";
+            }
+            if (agent.getOverallStatus() == Agent.OverallStatus.warning) {
+                return "预警";
+            }
+        }
+        if (emp != null && emp.getWechatStatus() != null) {
+            int ws = emp.getWechatStatus();
+            if (ws == 5) return "已离职";
+            if (ws == 4) return "未激活";
+            if (ws == 2) return "已禁用";
+        }
+        return null; // 正常
     }
 }

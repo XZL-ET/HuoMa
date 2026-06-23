@@ -1,9 +1,13 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.AgentAlert;
+import com.bookstore.qrcode.entity.Agent;
+import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.repository.AgentRepository;
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -32,6 +36,8 @@ public class WechatSyncHealingService {
     private final WecomApiClient wecomApi;
     private final QrAgentRepository qrAgentRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final AgentRepository agentRepo;
+    private final EmployeeRepository employeeRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
     private static final int MAX_HEAL_ATTEMPTS = 5;
@@ -53,21 +59,23 @@ public class WechatSyncHealingService {
         List<String> current = new ArrayList<>(targetUserIds);
         int attempt = 0;
 
+        // 提前获取 configId，catch 块中自愈也需要
+        QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
+        String configId = qr != null ? qr.getQrConfigId() : null;
+        if (configId == null) {
+            result.success = false;
+            result.reason = "QR 码不存在或无 config_id";
+            return result;
+        }
+
         while (attempt < MAX_HEAL_ATTEMPTS) {
             try {
                 // 1. 同步到企微
-                QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
-                if (qr == null || qr.getQrConfigId() == null) {
-                    result.success = false;
-                    result.reason = "QR 码不存在或无 config_id";
-                    return result;
-                }
-
-                wecomApi.updateContactWay(qr.getQrConfigId(), current);
+                wecomApi.updateContactWay(configId, current);
                 result.apiCalls++;
 
                 // 2. 验证：企微侧实际生效的成员
-                JsonNode detail = wecomApi.getContactWay(qr.getQrConfigId());
+                JsonNode detail = wecomApi.getContactWay(configId);
                 List<String> actualUsers = extractUsers(detail);
 
                 if (new java.util.HashSet<>(actualUsers).containsAll(current)
@@ -83,7 +91,7 @@ public class WechatSyncHealingService {
                 List<String> missing = new ArrayList<>(current);
                 missing.removeAll(actualUsers);
                 if (!missing.isEmpty()) {
-                    String failing = findFailingUser(qr.getQrConfigId(), missing);
+                    String failing = findFailingUser(configId, missing);
                     if (failing == null) break; // 全部可用
 
                     log.warn("自愈: qrCodeId={}, 移除不可用成员 {} (第{}次)",
@@ -107,8 +115,8 @@ public class WechatSyncHealingService {
                             String.format("企微不可用员工已被自愈移除: userid=%s 活码=%d",
                                 failing, qrCodeId),
                             AgentAlert.AutoAction.removed, qrCodeId);
-                    } catch (Exception e) {
-                        log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e);
+                    } catch (Exception e2) {
+                        log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
                     }
 
                     // ④ 需要补充新成员
@@ -121,9 +129,42 @@ public class WechatSyncHealingService {
                 log.warn("企微瞬时故障，重试 {}/{}", attempt + 1, MAX_HEAL_ATTEMPTS);
                 attempt++;
             } catch (WecomApiException e) {
+                int errcode = e.getErrcode();
+                // 可自愈错误（40098=成员未实名, 41054=成员不可用）→ 二分排查后重试
+                if ((errcode == 40098 || errcode == 41054) && !current.isEmpty()) {
+                    log.warn("自愈: 初始同步失败 errcode={}，二分排查 {} 个成员", errcode, current.size());
+                    String failing = findFailingUser(configId, current);
+                    if (failing != null) {
+                        log.warn("自愈: qrCodeId={}, 移除不可用成员 {} (第{}次, errcode={})",
+                            qrCodeId, failing, attempt + 1, errcode);
+                        current.remove(failing);
+                        result.replacedUsers.add(failing);
+
+                        qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, failing).ifPresent(qa -> {
+                            qa.setStatus(QrAgent.AgentStatus.removed);
+                            qrAgentRepo.save(qa);
+                        });
+                        poolService.blockAgentForWechatIssue(failing, errcode);
+
+                        try {
+                            alertService.createAlert(failing, "wechat_unavailable",
+                                AgentAlert.AlertSeverity.medium,
+                                String.format("企微不可用员工已被自愈移除: userid=%s 活码=%d errcode=%d",
+                                    failing, qrCodeId, errcode),
+                                AgentAlert.AutoAction.removed, qrCodeId);
+                        } catch (Exception e2) {
+                            log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
+                        }
+                        result.needReplacement = true;
+                        attempt++;
+                        // 继续循环，用剩余成员重试同步
+                        continue;
+                    }
+                }
+                // 不可自愈的错误 → 直接失败
                 log.error("企微 API 错误: errcode={}, msg={}", e.getErrcode(), e.getErrmsg());
                 result.success = false;
-                result.reason = "企微 API 错误 [" + e.getErrcode() + "]: " + e.getErrmsg();
+                result.reason = "企微 API 错误 [" + errcode + "]: " + e.getErrmsg();
                 return result;
             } catch (Exception e) {
                 log.error("同步异常", e);
@@ -223,15 +264,37 @@ public class WechatSyncHealingService {
             .map(QrAgent::getAgentUserid)
             .forEach(excludeUserids::add);
 
-        GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
-        if (backup == null) {
-            log.warn("自愈补充失败：全局池无 standby, qrCodeId={}", qrCodeId);
+        // 从全局池取替补，最多尝试 20 次，跳过异常状态的员工
+        String backupUserid = null;
+        int dailyMax = 100;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            if (backup == null) break;
+
+            // 二次校验：替补必须是正常状态（防止 warning/blocked/melted 等异常员工被补入）
+            Agent repAgent = agentRepo.findById(backup.getAgentUserid()).orElse(null);
+            Employee repEmp = employeeRepo.findByUserid(backup.getAgentUserid()).orElse(null);
+            String repLabel = QrCodeService.getAnomalyLabel(repAgent, repEmp);
+
+            if (repLabel == null) {
+                // 合格
+                backupUserid = backup.getAgentUserid();
+                dailyMax = backup.getDailyMax();
+                break;
+            }
+            // 不合格 — 加入排除列表，继续取下一个
+            excludeUserids.add(backup.getAgentUserid());
+            log.warn("自愈补充跳过异常员工: qrCodeId={}, userid={}, anomaly={}",
+                qrCodeId, backup.getAgentUserid(), repLabel);
+        }
+
+        if (backupUserid == null) {
+            log.warn("自愈补充失败：全局池无健康 standby, qrCodeId={}", qrCodeId);
             QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
             String schoolName = qr != null ? qr.getSchoolName() : String.valueOf(qrCodeId);
             alertService.alertEmptyBackup(qrCodeId, schoolName);
             return;
         }
-        String backupUserid = backup.getAgentUserid();
 
         // 计算 sortOrder = 当前活码最大 sortOrder + 1
         int maxOrder = qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).stream()
@@ -242,7 +305,7 @@ public class WechatSyncHealingService {
             .qrCodeId(qrCodeId)
             .agentUserid(backupUserid)
             .role(QrAgent.AgentRole.receptionist)
-            .dailyMax(backup.getDailyMax())
+            .dailyMax(dailyMax)
             .sortOrder(maxOrder + 1)
             .status(QrAgent.AgentStatus.active)
             .build();
@@ -274,7 +337,7 @@ public class WechatSyncHealingService {
 
     private List<String> extractUsers(JsonNode detail) {
         List<String> users = new ArrayList<>();
-        JsonNode userList = detail.path("user");
+        JsonNode userList = detail.path("contact_way").path("user");
         if (userList.isArray()) {
             for (JsonNode u : userList) {
                 users.add(u.asText());

@@ -44,6 +44,7 @@ class QrCodeControllerTest {
                 qrImageService,
                 mock(TagService.class),
                 mock(EmployeeRepository.class),
+                mock(AgentRepository.class),
                 mock(CustomerTransferRepository.class),
                 mock(EmployeeSyncService.class),
                 mock(FormTemplateRepository.class),

@@ -29,6 +29,7 @@ class QrCodeServiceTest {
     @Mock private QrAgentRepository qrAgentRepo;
     @Mock private QrRotateLogRepository rotateLogRepo;
     @Mock private AgentRepository agentRepo;
+    @Mock private EmployeeRepository employeeRepo;
     @Mock private GlobalAgentPoolRepository poolRepo;
     @Mock private GlobalAgentPoolService poolService;
     @Mock private AlertService alertService;

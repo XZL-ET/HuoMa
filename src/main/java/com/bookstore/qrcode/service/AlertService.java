@@ -40,6 +40,7 @@ public class AlertService {
     private final AgentAlertRepository alertRepo;
     private final AgentRepository agentRepo;
     private final QrCodeRepository qrCodeRepo;
+    private final GlobalAgentPoolRepository poolRepo;
     private final ObjectMapper objectMapper;
 
     /**
@@ -164,7 +165,8 @@ public class AlertService {
             }
 
             int meltCount = agent.getMeltedCount24h() + 1;
-            agent.setOverallStatus(meltCount >= 3
+            boolean upgradedToBlocked = meltCount >= 3;
+            agent.setOverallStatus(upgradedToBlocked
                 ? Agent.OverallStatus.blocked
                 : Agent.OverallStatus.melted);
             agent.setMeltedCount24h(meltCount);
@@ -175,6 +177,14 @@ public class AlertService {
             reasonMap.put("melt_count_24h", meltCount);
             agent.setStatusReason(objectMapper.valueToTree(reasonMap).toString());
             agentRepo.save(agent);
+
+            // 升级为封禁时，同步清理全局池（参照 blockAgentForWechatIssue）
+            if (upgradedToBlocked) {
+                poolRepo.findByAgentUserid(userId).ifPresent(pool -> {
+                    poolRepo.delete(pool);
+                    log.warn("熔断升级为封禁，全局池已移除: userid={}", userId);
+                });
+            }
 
             createAlert(userId, "melt", AgentAlert.AlertSeverity.high,
                 Map.of("reason", reason, "melt_count_24h", meltCount),

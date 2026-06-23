@@ -88,9 +88,16 @@ public class WecomCallbackValidator {
                 log.error("回调URL验证失败: 签名不匹配");
                 throw new RuntimeException("签名验证失败");
             }
-            // 解密 echostr — 同 AES-256-CBC / PKCS#7 协议
-            String decrypted = decrypt(config.getCallbackEncodingAesKey(), echostr);
-            return decrypted;
+            // 解密 echostr 并提取明文 — 企微协议格式:
+            //   random(16字节) + msg_len(4字节网络序) + echostr明文 + corpid
+            byte[] decryptedBytes = decryptToBytes(config.getCallbackEncodingAesKey(), echostr);
+            // 读取 msg_len（网络字节序大端，偏移 16）
+            int msgLen = ((decryptedBytes[16] & 0xFF) << 24)
+                       | ((decryptedBytes[17] & 0xFF) << 16)
+                       | ((decryptedBytes[18] & 0xFF) << 8)
+                       |  (decryptedBytes[19] & 0xFF);
+            // 提取 echostr（跳过 20 字节头，取 msgLen 长度，丢弃尾部 corpid）
+            return new String(decryptedBytes, 20, msgLen, StandardCharsets.UTF_8);
         } catch (Exception e) {
             log.error("回调URL验证异常", e);
             throw new RuntimeException("回调验证失败: " + e.getMessage(), e);
@@ -215,30 +222,29 @@ public class WecomCallbackValidator {
      * @return UTF-8 编码的明文（含 protocol header，需调用方自行剥离前 20 字节）
      * @throws Exception 解密密钥无效、数据被篡改或 PKCS#7 填充不合法时抛出
      */
-    private String decrypt(String encodingAesKey, String encrypted) throws Exception {
+    /**
+     * AES-256-CBC 解密，返回原始字节数组（含协议头 random+msg_len+body+corpid）。
+     */
+    private byte[] decryptToBytes(String encodingAesKey, String encrypted) throws Exception {
         // 步骤1：Base64 解码 AES 密钥（补 = 以符合标准 Base64）
-        //   企微的 EncodingAESKey 是 43 字符的 Base64 变体（AES-256 需要 32 字节密钥）
-        //   Base64 解码 44 字符（含补位 =）得到 32 字节
         byte[] aesKey = Base64.getDecoder().decode(encodingAesKey + "=");
         // 步骤2：Base64 解码密文
         byte[] encryptedBytes = Base64.getDecoder().decode(encrypted);
 
-        // 步骤3：初始化 AES/CBC/NoPadding 解密器
+        // 步骤3：初始化 AES/CBC/NoPadding 解密器，IV = AESKey 前 16 字节
         Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
         SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
-        // A. 企微协议：IV = AESKey 前 16 字节
         IvParameterSpec iv = new IvParameterSpec(Arrays.copyOfRange(aesKey, 0, 16));
         cipher.init(Cipher.DECRYPT_MODE, keySpec, iv);
 
-        // 步骤4：执行 CBC 模式解密
+        // 步骤4：执行 CBC 模式解密 + PKCS#7 去填充
         byte[] decrypted = cipher.doFinal(encryptedBytes);
-
-        // 步骤5：PKCS#7 去除填充
-        //   最后一个字节的数值 = 填充字节数（范围 0x01~0x10）
-        //   如填充了 5 个字节，则末尾字节为 0x05
         int pad = decrypted[decrypted.length - 1] & 0xFF;
-        byte[] unpadded = Arrays.copyOfRange(decrypted, 0, decrypted.length - pad);
-        return new String(unpadded, StandardCharsets.UTF_8);
+        return Arrays.copyOfRange(decrypted, 0, decrypted.length - pad);
+    }
+
+    private String decrypt(String encodingAesKey, String encrypted) throws Exception {
+        return new String(decryptToBytes(encodingAesKey, encrypted), StandardCharsets.UTF_8);
     }
 
     /**

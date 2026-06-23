@@ -65,7 +65,7 @@ app:
     form-url: ${TRANSFER_FORM_URL:}
   school-entry-url: ${SCHOOL_ENTRY_URL:}
   school-rate-limit:
-    max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:30}
+    max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:500}
     window-seconds: 60
 
 ---

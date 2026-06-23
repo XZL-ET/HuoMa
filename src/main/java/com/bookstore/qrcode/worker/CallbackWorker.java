@@ -403,21 +403,34 @@ public class CallbackWorker {
 
         // ⑤ 发布欢迎语+表单事件 → OutboundMsgWorker 异步发送
         try {
+            String welcomeCode = getField(event, "welcome_code");
+            QrCode qr = null;
             if (state != null) {
-                QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
-                if (qr != null) {
-                    Map<String, Object> outEvent = new java.util.LinkedHashMap<>();
-                    outEvent.put("type", "welcome_and_form");
-                    outEvent.put("external_userid", externalUserId);
-                    outEvent.put("userid", userId);
-                    outEvent.put("state", state);
-                    outEvent.put("qr_code_id", qr.getId().toString());
-                    outEvent.put("customer_id", customerId.toString());
-                    redisTemplate.opsForStream().add(
-                        RedisConfig.OUTBOUND_STREAM_KEY,
-                        Map.of("event", objectMapper.writeValueAsString(outEvent)));
+                qr = qrCodeRepo.findBySchoolId(state).orElse(null);
+                if (qr == null) {
+                    log.warn("回调 state={} 未匹配到活码, 将使用系统默认欢迎语: external={}, userid={}",
+                        state, externalUserId, userId);
                 }
+            } else {
+                log.warn("回调缺少 state 字段, 将使用系统默认欢迎语: external={}, userid={}",
+                    externalUserId, userId);
             }
+            // 即使找不到活码或 state 为空，也发送系统默认欢迎语
+            Map<String, Object> outEvent = new java.util.LinkedHashMap<>();
+            outEvent.put("type", "welcome_and_form");
+            outEvent.put("external_userid", externalUserId);
+            outEvent.put("userid", userId);
+            outEvent.put("state", state);
+            if (qr != null) {
+                outEvent.put("qr_code_id", qr.getId().toString());
+            }
+            outEvent.put("customer_id", customerId.toString());
+            if (welcomeCode != null) {
+                outEvent.put("welcome_code", welcomeCode);
+            }
+            redisTemplate.opsForStream().add(
+                RedisConfig.OUTBOUND_STREAM_KEY,
+                Map.of("event", objectMapper.writeValueAsString(outEvent)));
         } catch (Exception e) {
             log.error("发布欢迎语事件失败: external={}", externalUserId, e);
             // 不抛异常，不影响主流程（客户已入库+日计数已完成）

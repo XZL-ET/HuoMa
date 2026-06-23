@@ -177,6 +177,28 @@ public class EmployeeSyncService {
             .filter(e -> e.getWechatStatus() == null || e.getWechatStatus() == 1)
             .toList();
 
+        // 额外排除 Agent 侧已封禁/已熔断的员工（防止刚被 blockAgentForWechatIssue
+        // 或 meltAgent 清理出池的员工又被 syncToGlobalPool 加回来）
+        if (!activeNotInPool.isEmpty()) {
+            List<String> candidateUserIds = activeNotInPool.stream()
+                .map(Employee::getUserid).toList();
+            Map<String, Agent> agentSnapshot = agentRepo.findAllById(candidateUserIds).stream()
+                .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+            int before = activeNotInPool.size();
+            activeNotInPool = activeNotInPool.stream()
+                .filter(e -> {
+                    Agent a = agentSnapshot.get(e.getUserid());
+                    return a == null
+                        || (a.getOverallStatus() != Agent.OverallStatus.blocked
+                            && a.getOverallStatus() != Agent.OverallStatus.melted);
+                })
+                .toList();
+            if (activeNotInPool.size() < before) {
+                log.info("全局池同步：排除 {} 个已封禁/熔断员工",
+                    before - activeNotInPool.size());
+            }
+        }
+
         if (activeNotInPool.isEmpty()) {
             log.info("全局池同步：所有在职员工已在池中，无需新增");
             return 0;
