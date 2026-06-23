@@ -125,12 +125,48 @@ Controller 根据 `scope` 参数路由到不同方法，不再走 unpaged + Java
 
 ---
 
-## 四、改动清单总览
+## 四、全局池 DB 分页
+
+### 4.1 现状
+
+`QrCodeService.getBackups()` 调用 `poolRepo.findAll()` 加载全局池全部员工到内存，然后 Java 排序 + `subList` 分页。详情页每打开一次就全量加载一次，池子膨胀到上千人后明显卡顿。
+
+### 4.2 方案
+
+改为真正的 DB 分页，同时保持现状排序规则不变。
+
+**排序逻辑** — 状态优先（standby → full → blocked），同状态按 sortOrder 升序。新增 Repository 方法：
+
+```java
+@Query("SELECT p FROM GlobalAgentPool p ORDER BY "
+     + "CASE p.status WHEN 'standby' THEN 0 WHEN 'full' THEN 1 ELSE 2 END, "
+     + "p.sortOrder ASC")
+Page<GlobalAgentPool> findAllWithStatusPriority(Pageable pageable);
+```
+
+**池状态统计** — 改为三条 `countByStatus()`（已有现成方法）：
+
+```java
+long standby = poolRepo.countByStatus(PoolStatus.standby);
+long full = poolRepo.countByStatus(PoolStatus.full);
+long blocked = poolRepo.countByStatus(PoolStatus.blocked);
+```
+
+**弹窗去重 userid** — 改为 `findAllAgentUserids()`（已有现成轻量投影，只查 userid 不加载整行）。
+
+### 4.3 风险
+
+低。排序用 JPQL `CASE` 与原 Java 排序完全等价。三条 countByStatus 多两次查询，但每条都是 SELECT COUNT 走索引，远快于全量加载。唯一需新增的代码是一条带 CASE 排序的 `@Query`。
+
+---
+
+## 五、改动清单总览
 
 | 模块 | 后端改动 | 前端改动 | 风险 |
 |------|---------|---------|------|
 | 列表性能 | Repository + Controller | 分页下拉 | 低 |
 | 批量操作 | Repository `@Modifying` + Controller | 批量模式 UI | 低 |
 | 批量导入 | `parseExcel` + `executeBatchImport` | 模板下载 + 格式说明 | 低 |
+| 全局池分页 | Repository `@Query` + Service | 无 | 低 |
 
 不涉及数据库结构变更，不新增表，纯优化 + 增强。
