@@ -5,6 +5,7 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomRateLimitException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -365,53 +366,71 @@ public class QrCodeService {
         for (int i = 0; i < rawItems.size(); i++) {
             Map<String, String> item = rawItems.get(i);
             String schoolName = item.get("schoolName");
-            try {
-                log.debug("批量导入 [{}]: 正在处理第 {}/{} 行 — {}", taskId, i + 1, total, schoolName);
-                // 将 Excel 行数据映射为创建请求 DTO
-                QrCodeCreateRequest req = new QrCodeCreateRequest();
-                req.setSchoolName(schoolName);
-                req.setSchoolId(item.get("schoolId"));
-                req.setRegionCity(item.get("regionCity"));
-                req.setRegionDistrict(item.get("regionDistrict"));
-                req.setServiceTeacherUserid(item.get("serviceTeacherUserid"));
-                req.setRemark(item.getOrDefault("remark", ""));
-                // 学校人数
-                String studentCountStr = item.get("studentCount");
-                if (studentCountStr != null && !studentCountStr.isEmpty()) {
-                    try { req.setStudentCount(Integer.valueOf(studentCountStr)); }
-                    catch (NumberFormatException ignored) {}
+            boolean rowDone = false;
+
+            // 最多尝试 2 次（首次 + 限频重试 1 次）
+            for (int attempt = 0; attempt < 2 && !rowDone; attempt++) {
+                try {
+                    if (attempt > 0) {
+                        log.info("批量导入 [{}]: 第 {}/{} 行重试 (attempt={})", taskId, i + 1, total, attempt);
+                    }
+                    log.debug("批量导入 [{}]: 正在处理第 {}/{} 行 — {}", taskId, i + 1, total, schoolName);
+                    // 将 Excel 行数据映射为创建请求 DTO
+                    QrCodeCreateRequest req = new QrCodeCreateRequest();
+                    req.setSchoolName(schoolName);
+                    req.setSchoolId(item.get("schoolId"));
+                    req.setRegionCity(item.get("regionCity"));
+                    req.setRegionDistrict(item.get("regionDistrict"));
+                    req.setServiceTeacherUserid(item.get("serviceTeacherUserid"));
+                    req.setRemark(item.getOrDefault("remark", ""));
+                    String studentCountStr = item.get("studentCount");
+                    if (studentCountStr != null && !studentCountStr.isEmpty()) {
+                        try { req.setStudentCount(Integer.valueOf(studentCountStr)); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                    String initialAgentStr = item.get("initialAgentCount");
+                    if (initialAgentStr != null && !initialAgentStr.isEmpty()) {
+                        try { req.setInitialAgentCount(Integer.valueOf(initialAgentStr)); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                    req.setReceptionistUserid(item.get("receptionistUserid"));
+                    String dailyMaxStr = item.get("serviceDailyMax");
+                    if (dailyMaxStr != null && !dailyMaxStr.isEmpty()) {
+                        try { req.setServiceDailyMax(Integer.valueOf(dailyMaxStr)); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                    req.setWelcomeText(item.get("welcomeText"));
+                    // 通过 self（Spring 代理）调用 create()，确保 @Transactional 生效
+                    self.create(req);
+                    success++;
+                    rowDone = true;
+                    log.debug("批量导入 [{}]: 第 {}/{} 行创建成功 — {}", taskId, i + 1, total, schoolName);
+
+                } catch (WecomRateLimitException e) {
+                    // 限频：等待企微要求的 retry-after 秒数后重试
+                    int waitSec = Math.max(e.getRetryAfterSeconds(), 60);
+                    log.warn("批量导入 [{}]: 第 {}/{} 行触发限频，等待 {}s 后重试", taskId, i + 1, total, waitSec);
+                    try { Thread.sleep(waitSec * 1000L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                    // 如果重试次数用完，记录失败
+                    if (attempt == 1) {
+                        fail++;
+                        log.warn("批量导入 [{}]: 第 {}/{} 行限频重试仍失败 — {}", taskId, i + 1, total, schoolName);
+                        String detailKey = progressKey + ":fail:" + fail;
+                        redisTemplate.opsForValue().set(detailKey,
+                            item.get("row") + "|" + schoolName + "|限频重试失败: " + e.getMessage(), 30, TimeUnit.MINUTES);
+                        rowDone = true;
+                    }
+                } catch (Exception e) {
+                    fail++;
+                    log.warn("批量导入 [{}]: 第 {}/{} 行创建失败 — {}: {}", taskId, i + 1, total, schoolName, e.getMessage());
+                    String detailKey = progressKey + ":fail:" + fail;
+                    redisTemplate.opsForValue().set(detailKey,
+                        item.get("row") + "|" + schoolName + "|" + e.getMessage(), 30, TimeUnit.MINUTES);
+                    rowDone = true;
                 }
-                // 初始上码员工数（默认 1）
-                String initialAgentStr = item.get("initialAgentCount");
-                if (initialAgentStr != null && !initialAgentStr.isEmpty()) {
-                    try { req.setInitialAgentCount(Integer.valueOf(initialAgentStr)); }
-                    catch (NumberFormatException ignored) {}
-                }
-                // 接待员（逗号分隔）
-                req.setReceptionistUserid(item.get("receptionistUserid"));
-                // 服务老师日上限
-                String dailyMaxStr = item.get("serviceDailyMax");
-                if (dailyMaxStr != null && !dailyMaxStr.isEmpty()) {
-                    try { req.setServiceDailyMax(Integer.valueOf(dailyMaxStr)); }
-                    catch (NumberFormatException ignored) {}
-                }
-                // 欢迎语
-                req.setWelcomeText(item.get("welcomeText"));
-                // 通过 self（Spring 代理）调用 create()，确保 @Transactional 生效
-                self.create(req);
-                success++;
-                log.debug("批量导入 [{}]: 第 {}/{} 行创建成功 — {}", taskId, i + 1, total, schoolName);
-            } catch (Exception e) {
-                fail++;
-                log.warn("批量导入 [{}]: 第 {}/{} 行创建失败 — {}: {}", taskId, i + 1, total, schoolName, e.getMessage());
-                // 记录失败详情到独立 Redis Key，方便前端展示失败原因
-                String detailKey = progressKey + ":fail:" + fail;
-                redisTemplate.opsForValue().set(detailKey,
-                    item.get("row") + "|" + schoolName + "|" + e.getMessage(),
-                    30, TimeUnit.MINUTES);
             }
 
-            // 每处理完一行就更新进度 Hash，实现实时进度展示
+            // 每处理完一行就更新进度 Hash
             Map<String, String> progress = new LinkedHashMap<>();
             progress.put("total", String.valueOf(total));
             progress.put("success", String.valueOf(success));
@@ -419,6 +438,11 @@ public class QrCodeService {
             progress.put("processed", String.valueOf(i + 1));
             progress.put("status", "processing");
             redisTemplate.opsForHash().putAll(progressKey, progress);
+
+            // 行间延迟 1 秒，避免触发企微限频
+            if (i < rawItems.size() - 1) {
+                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
         }
 
         // 全部处理完毕，标记状态为 done
