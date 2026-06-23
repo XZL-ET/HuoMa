@@ -51,6 +51,15 @@ public interface GlobalAgentPoolRepository
     /** 全量分页查询，按 sortOrder 升序 */
     Page<GlobalAgentPool> findAllByOrderBySortOrder(Pageable pageable);
 
+    /**
+     * 全量分页查询，按状态优先级排序（standby → full → blocked），
+     * 同状态按 sortOrder 升序，替代原内存排序。
+     */
+    @Query("SELECT p FROM GlobalAgentPool p ORDER BY "
+            + "CASE p.status WHEN 'standby' THEN 0 WHEN 'full' THEN 1 ELSE 2 END, "
+            + "p.sortOrder ASC")
+    Page<GlobalAgentPool> findAllWithStatusPriority(Pageable pageable);
+
     /** 按 userid 模糊匹配（不分页），用于收集匹配 userid 集合 */
     List<GlobalAgentPool> findByAgentUseridContaining(String agentUserid);
 
