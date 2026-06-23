@@ -5,6 +5,7 @@ import com.bookstore.qrcode.entity.QrCode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -188,7 +189,7 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
          + "AND (:district IS NULL OR q.regionDistrict = :district) "
          + "AND (:status IS NULL OR q.status = :status) "
          + "AND (:groupId IS NULL OR q.groupId = :groupId) "
-         + "AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g) "
+         + "AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL) "
          + "ORDER BY q.createdAt DESC")
     Page<QrCode> searchAlliance(@Param("keyword") String keyword,
                                  @Param("city") String city,
@@ -219,7 +220,7 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
          + "AND (:district IS NULL OR q.regionDistrict = :district) "
          + "AND (:status IS NULL OR q.status = :status) "
          + "AND (:groupId IS NULL OR q.groupId = :groupId) "
-         + "AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g) "
+         + "AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL) "
          + "ORDER BY q.createdAt DESC")
     Page<QrCode> searchSchool(@Param("keyword") String keyword,
                                @Param("city") String city,
@@ -252,8 +253,8 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
          + "AND (:status IS NULL OR q.status = :status) "
          + "AND (:groupId IS NULL OR q.groupId = :groupId) "
          + "AND (:allianceOnly IS NULL OR "
-         + "  (:allianceOnly = true AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g)) OR "
-         + "  (:allianceOnly = false AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g))) "
+         + "  (:allianceOnly = true AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL)) OR "
+         + "  (:allianceOnly = false AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL))) "
          + "ORDER BY q.createdAt DESC")
     List<QrCode> findAllForExport(@Param("keyword") String keyword,
                                    @Param("city") String city,
@@ -272,4 +273,44 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
            "q.id, q.schoolName, q.regionCity, q.regionDistrict, q.groupId) " +
            "FROM QrCode q")
     List<QrCodeTreeDto> findAllTreeProjection();
+
+    // ── 批量更新方法 ──
+
+    /** 批量更新欢迎语 */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.welcomeText = :welcomeText WHERE q.id IN :ids")
+    int batchUpdateWelcomeText(@Param("welcomeText") String welcomeText,
+                                @Param("ids") List<Long> ids);
+
+    /** 批量更新表单模板（null 表示清空） */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.formTemplateId = :formTemplateId WHERE q.id IN :ids")
+    int batchUpdateFormTemplateId(@Param("formTemplateId") Long formTemplateId,
+                                   @Param("ids") List<Long> ids);
+
+    /** 批量切换轮换模式 */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.rotateMode = :mode WHERE q.id IN :ids")
+    int batchUpdateRotateMode(@Param("mode") QrCode.RotateMode mode,
+                               @Param("ids") List<Long> ids);
+
+    /** 批量改分组（null 表示取消分组） */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.groupId = :groupId WHERE q.id IN :ids")
+    int batchUpdateGroupId(@Param("groupId") Long groupId,
+                            @Param("ids") List<Long> ids);
+
+    /** 批量更新告警/紧急阈值 */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.warnRatio = :warnRatio, q.urgentRatio = :urgentRatio "
+         + "WHERE q.id IN :ids")
+    int batchUpdateThresholds(@Param("warnRatio") int warnRatio,
+                               @Param("urgentRatio") int urgentRatio,
+                               @Param("ids") List<Long> ids);
+
+    /** 批量更新状态（暂停/启用） */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.status = :status WHERE q.id IN :ids")
+    int batchUpdateStatus(@Param("status") QrCode.QrCodeStatus status,
+                           @Param("ids") List<Long> ids);
 }
