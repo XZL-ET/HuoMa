@@ -50,53 +50,69 @@
 
     <!-- 搜索筛选栏 -->
     <div class="card p-3 mb-3">
-        <form class="row g-2" method="get" th:action="@{/qrcodes}">
-            <div class="col-md-2">
-                <input type="text" name="keyword" class="form-control" placeholder="搜索学校名/ID"
-                       th:value="${keyword}">
+        <form method="get" th:action="@{/qrcodes}">
+            <!-- 第一行：搜索主栏 -->
+            <div class="row g-2 mb-2">
+                <div class="col-md-8">
+                    <div class="input-group">
+                        <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+                        <input type="text" name="keyword" class="form-control"
+                               placeholder="搜索学校名称、ID、城市、区县..." th:value="${keyword}">
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> 搜索</button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="d-flex gap-2">
+                        <a th:href="@{/qrcodes/export(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId})}"
+                           class="btn btn-outline-success"><i class="bi bi-download"></i> 导出 Excel</a>
+                        <button type="button" class="btn btn-sm btn-outline-warning" id="batchModeBtn" onclick="toggleBatchMode()">🔧 批量操作</button>
+                    </div>
+                </div>
             </div>
-            <div class="col-md-2">
-                <select name="city" class="form-select">
-                    <option value="">全部城市</option>
-                    <option th:each="c : ${cities}" th:value="${c}"
-                            th:text="${c}" th:selected="${city == c}"></option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <select name="district" class="form-select">
-                    <option value="">全部区县</option>
-                    <option th:each="d : ${districts}" th:value="${d}"
-                            th:text="${d}" th:selected="${district == d}"></option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <select name="status" class="form-select">
-                    <option value="">全部状态</option>
-                    <option value="active" th:selected="${status == 'active'}">✅ 正常</option>
-                    <option value="paused" th:selected="${status == 'paused'}">⏸ 暂停</option>
-                    <option value="full" th:selected="${status == 'full'}">🔴 满员</option>
-                    <option value="no_agent" th:selected="${status == 'no_agent'}">⚫ 无可用</option>
-                </select>
-            </div>
-            <div class="col-md-1">
-                <select name="groupId" class="form-select">
-                    <option value="">全部分组</option>
-                    <option th:each="g : ${groups}" th:value="${g.id}"
-                            th:text="${g.name}" th:selected="${groupId != null && groupId == g.id}"></option>
-                </select>
-            </div>
-            <div class="col-md-1">
-                <select name="size" class="form-select" onchange="this.form.submit()">
-                    <option value="20" th:selected="${param.size == null || param.size[0] == '20'}">20</option>
-                    <option value="50" th:selected="${param.size != null && param.size[0] == '50'}">50</option>
-                    <option value="100" th:selected="${param.size != null && param.size[0] == '100'}">100</option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <div class="btn-group w-100">
-                    <button type="submit" class="btn btn-outline-secondary"><i class="bi bi-search"></i></button>
-                    <a th:href="@{/qrcodes/export(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId})}"
-                       class="btn btn-outline-success"><i class="bi bi-download"></i> 导出</a>
+            <!-- 第二行：筛选条件 -->
+            <div class="row g-2">
+                <div class="col-md-2">
+                    <select name="city" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">🏙️ 全部城市</option>
+                        <option th:each="c : ${cities}" th:value="${c}"
+                                th:text="${c}" th:selected="${city == c}"></option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select name="district" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">📍 全部区县</option>
+                        <option th:each="d : ${districts}" th:value="${d}"
+                                th:text="${d}" th:selected="${district == d}"></option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">📌 全部状态</option>
+                        <option value="active" th:selected="${status == 'active'}">✅ 正常</option>
+                        <option value="paused" th:selected="${status == 'paused'}">⏸ 暂停</option>
+                        <option value="full" th:selected="${status == 'full'}">🔴 满员</option>
+                        <option value="no_agent" th:selected="${status == 'no_agent'}">⚫ 无可用</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select name="groupId" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">📂 全部分组</option>
+                        <option th:each="g : ${groups}" th:value="${g.id}"
+                                th:text="${g.name}" th:selected="${groupId != null && groupId == g.id}"></option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select name="size" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="20" th:selected="${param.size == null || param.size[0] == '20'}">每页 20 条</option>
+                        <option value="50" th:selected="${param.size != null && param.size[0] == '50'}">每页 50 条</option>
+                        <option value="100" th:selected="${param.size != null && param.size[0] == '100'}">每页 100 条</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <a th:if="${keyword != null || city != null || district != null || status != null || groupId != null}"
+                       th:href="@{/qrcodes}" class="btn btn-sm btn-outline-danger w-100">
+                        <i class="bi bi-x-circle"></i> 清除筛选
+                    </a>
                 </div>
             </div>
         </form>
@@ -176,9 +192,8 @@
         </div>
     </div>
 
-    <!-- 批量操作 -->
+    <!-- 批量操作工具栏 -->
     <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
-        <button class="btn btn-sm btn-outline-warning" id="batchModeBtn" onclick="toggleBatchMode()">🔧 批量操作</button>
         <span id="batchToolbar" style="display:none;">
             已选 <strong id="selectedCount">0</strong> 个
             <button class="btn btn-sm btn-outline-primary ms-1" onclick="batchAction('welcome')">改欢迎语</button>
