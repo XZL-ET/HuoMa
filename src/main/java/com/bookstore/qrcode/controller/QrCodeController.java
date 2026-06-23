@@ -141,7 +141,12 @@ public class QrCodeController {
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
 
-        // ---- 1. 解析状态枚举参数 ----
+        // ---- 1. 空字符串 → null（前端表单空字段会传空串，破坏 IS NULL 判断） ----
+        if (keyword != null && keyword.isEmpty()) keyword = null;
+        if (city != null && city.isEmpty()) city = null;
+        if (district != null && district.isEmpty()) district = null;
+
+        // ---- 2. 解析状态枚举参数 ----
         QrCode.QrCodeStatus qrStatus = null;
         if (status != null && !status.isEmpty()) {
             try { qrStatus = QrCode.QrCodeStatus.valueOf(status); }
@@ -687,6 +692,11 @@ public class QrCodeController {
                        @RequestParam(required = false) String scope,
                        @RequestParam(required = false) Long groupId,
                        HttpServletResponse response) throws Exception {
+
+        // 空字符串 → null（前端链接参数为空串，破坏 JPQL IS NULL 判断）
+        if (keyword != null && keyword.isEmpty()) keyword = null;
+        if (city != null && city.isEmpty()) city = null;
+        if (district != null && district.isEmpty()) district = null;
 
         QrCode.QrCodeStatus qrStatus = null;
         if (status != null && !status.isEmpty()) {
