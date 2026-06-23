@@ -7,12 +7,16 @@
         <h5 class="mb-3">批量导入活码</h5>
         <!-- Excel 格式说明 -->
         <div class="alert alert-info">
-            <strong>Excel 格式要求：</strong><br>
-            第1行：表头（学校名称 / 学校ID / 市 / 区 / 备注）<br>
-            第2行起：数据行，每行一个学校
+            <strong>Excel 格式要求（11列）：</strong><br>
+            第1行表头：学校名称* | 学校ID* | 市* | 区* | 服务老师* | 学校人数* | 初始上码数 | 接待员 | 日上限 | 欢迎语 | 备注<br>
+            第2行起数据行，*为必填列，初始上码数默认1，日上限默认30，接待员多个用逗号分隔
         </div>
 
-        <!-- 上传表单：th:if="${taskId == null}" 表示当前没有正在执行的任务时才显示 -->
+        <!-- 模板下载 + 上传表单 -->
+        <div class="mb-3" th:if="${taskId == null}">
+            <a href="/qrcodes/batch-import/template" class="btn btn-outline-info mb-2"><i class="bi bi-download"></i> 下载模板</a>
+        </div>
+
         <form method="post" th:action="@{/qrcodes/batch-import}" enctype="multipart/form-data"
               th:if="${taskId == null}">
             <div class="mb-3">

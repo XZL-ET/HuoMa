@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.repository;
 
+import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.QrCode;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -60,6 +61,8 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      *   <li><b>district</b>（可选）：精确匹配所在区/县（regionDistrict）</li>
      *   <li><b>status</b>（可选）：精确匹配活码状态（status），
      *       如 {@link QrCode.QrCodeStatus#ACTIVE} 或 {@link QrCode.QrCodeStatus#DISABLED}</li>
+     *   <li><b>groupId</b>（可选）：精确匹配所属群组 ID（groupId），
+     *       为 {@code null} 时忽略此筛选</li>
      * </ul>
      * </p>
      *
@@ -67,6 +70,7 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      * @param city     城市筛选，可为 {@code null}
      * @param district 区/县筛选，可为 {@code null}
      * @param status   活码状态筛选，可为 {@code null}
+     * @param groupId  群组 ID 筛选，可为 {@code null}
      * @param pageable 分页参数（页码、每页条数、排序等）
      * @return 满足条件的活码分页数据
      */
@@ -75,11 +79,14 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
          + " OR q.regionCity LIKE %:keyword% OR q.regionDistrict LIKE %:keyword%) "
          + "AND (:city IS NULL OR q.regionCity = :city) "
          + "AND (:district IS NULL OR q.regionDistrict = :district) "
-         + "AND (:status IS NULL OR q.status = :status)")
+         + "AND (:status IS NULL OR q.status = :status) "
+         + "AND (:groupId IS NULL OR q.groupId = :groupId) "
+         + "ORDER BY q.createdAt DESC")
     Page<QrCode> search(@Param("keyword") String keyword,
                         @Param("city") String city,
                         @Param("district") String district,
                         @Param("status") QrCode.QrCodeStatus status,
+                        @Param("groupId") Long groupId,
                         Pageable pageable);
 
     /**
@@ -109,11 +116,10 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     List<QrCode> findAll();
 
     /**
-     * 查找指定分组下的所有活码，按学校名称排序。
-     * 用于联盟删除时批量解除关联。
+     * 根据分组 ID 查询活码列表，按校名字母序排序。
      *
-     * @param groupId 分组 ID
-     * @return 该分组下的活码列表
+     * @param groupId 分组主键 ID
+     * @return 该分组下的活码列表，按校名字母序升序排列
      */
     List<QrCode> findByGroupIdOrderBySchoolName(Long groupId);
 
@@ -169,79 +175,150 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
            "AND qa.status = 'active' LIMIT 1", nativeQuery = true)
     String findFirstServiceAgentName(@Param("qrCodeId") Long qrCodeId);
 
-    // ==================== 批量更新 ====================
+    /**
+     * 分页搜索联盟活码 — id 在 QrCodeGroup 表中有记录。
+     * <p>
+     * 与 {@link #search(String, String, String, QrCode.QrCodeStatus, Long, Pageable)} 相同的
+     * {@code :param IS NULL OR ...} 筛选模式，额外增加子查询限制仅返回联盟范围内的活码。
+     * </p>
+     *
+     * @param keyword  搜索关键字，可为 {@code null}
+     * @param city     城市筛选，可为 {@code null}
+     * @param district 区/县筛选，可为 {@code null}
+     * @param status   活码状态筛选，可为 {@code null}
+     * @param groupId  群组 ID 筛选，可为 {@code null}
+     * @param pageable 分页参数
+     * @return 联盟范围内的活码分页数据
+     */
+    @Query("SELECT q FROM QrCode q WHERE "
+         + "(:keyword IS NULL OR q.schoolName LIKE %:keyword% OR q.schoolId LIKE %:keyword%"
+         + " OR q.regionCity LIKE %:keyword% OR q.regionDistrict LIKE %:keyword%) "
+         + "AND (:city IS NULL OR q.regionCity = :city) "
+         + "AND (:district IS NULL OR q.regionDistrict = :district) "
+         + "AND (:status IS NULL OR q.status = :status) "
+         + "AND (:groupId IS NULL OR q.groupId = :groupId) "
+         + "AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL) "
+         + "ORDER BY q.createdAt DESC")
+    Page<QrCode> searchAlliance(@Param("keyword") String keyword,
+                                 @Param("city") String city,
+                                 @Param("district") String district,
+                                 @Param("status") QrCode.QrCodeStatus status,
+                                 @Param("groupId") Long groupId,
+                                 Pageable pageable);
 
     /**
-     * 批量更新活码欢迎语文本。
+     * 分页搜索非联盟活码 — id 不在 QrCodeGroup 表中有记录。
+     * <p>
+     * 与 {@link #searchAlliance(String, String, String, QrCode.QrCodeStatus, Long, Pageable)}
+     * 互为补集，使用 {@code NOT IN} 子查询排除联盟活码。
+     * </p>
      *
-     * @param ids         活码 ID 列表
-     * @param welcomeText 新的欢迎语文本
-     * @return 影响的记录行数
+     * @param keyword  搜索关键字，可为 {@code null}
+     * @param city     城市筛选，可为 {@code null}
+     * @param district 区/县筛选，可为 {@code null}
+     * @param status   活码状态筛选，可为 {@code null}
+     * @param groupId  群组 ID 筛选，可为 {@code null}
+     * @param pageable 分页参数
+     * @return 非联盟范围内的活码分页数据
      */
+    @Query("SELECT q FROM QrCode q WHERE "
+         + "(:keyword IS NULL OR q.schoolName LIKE %:keyword% OR q.schoolId LIKE %:keyword%"
+         + " OR q.regionCity LIKE %:keyword% OR q.regionDistrict LIKE %:keyword%) "
+         + "AND (:city IS NULL OR q.regionCity = :city) "
+         + "AND (:district IS NULL OR q.regionDistrict = :district) "
+         + "AND (:status IS NULL OR q.status = :status) "
+         + "AND (:groupId IS NULL OR q.groupId = :groupId) "
+         + "AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL) "
+         + "ORDER BY q.createdAt DESC")
+    Page<QrCode> searchSchool(@Param("keyword") String keyword,
+                               @Param("city") String city,
+                               @Param("district") String district,
+                               @Param("status") QrCode.QrCodeStatus status,
+                               @Param("groupId") Long groupId,
+                               Pageable pageable);
+
+    /**
+     * 不分页查询活码列表（用于导出 Excel）。
+     * <p>
+     * 当 {@code allianceOnly} 为 {@code true} 时仅含联盟活码，
+     * 为 {@code false} 时仅含非联盟活码，
+     * 为 {@code null} 时返回全部活码。
+     * </p>
+     *
+     * @param keyword      搜索关键字，可为 {@code null}
+     * @param city         城市筛选，可为 {@code null}
+     * @param district     区/县筛选，可为 {@code null}
+     * @param status       活码状态筛选，可为 {@code null}
+     * @param groupId      群组 ID 筛选，可为 {@code null}
+     * @param allianceOnly 联盟范围控制：{@code true}=联盟，{@code false}=非联盟，{@code null}=全部
+     * @return 满足条件的活码列表（无分页）
+     */
+    @Query("SELECT q FROM QrCode q WHERE "
+         + "(:keyword IS NULL OR q.schoolName LIKE %:keyword% OR q.schoolId LIKE %:keyword%"
+         + " OR q.regionCity LIKE %:keyword% OR q.regionDistrict LIKE %:keyword%) "
+         + "AND (:city IS NULL OR q.regionCity = :city) "
+         + "AND (:district IS NULL OR q.regionDistrict = :district) "
+         + "AND (:status IS NULL OR q.status = :status) "
+         + "AND (:groupId IS NULL OR q.groupId = :groupId) "
+         + "AND (:allianceOnly IS NULL OR "
+         + "  (:allianceOnly = true AND q.id IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL)) OR "
+         + "  (:allianceOnly = false AND q.id NOT IN (SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL))) "
+         + "ORDER BY q.createdAt DESC")
+    List<QrCode> findAllForExport(@Param("keyword") String keyword,
+                                   @Param("city") String city,
+                                   @Param("district") String district,
+                                   @Param("status") QrCode.QrCodeStatus status,
+                                   @Param("groupId") Long groupId,
+                                   @Param("allianceOnly") Boolean allianceOnly);
+
+    /**
+     * 活码树节点投影查询 — 仅加载树渲染所需的 5 个字段，
+     * 替代 {@code findAll()} 加载全部 25 列的浪费。
+     *
+     * @return 活码树 DTO 列表（仅含 id、schoolName、regionCity、regionDistrict、groupId）
+     */
+    @Query("SELECT new com.bookstore.qrcode.dto.QrCodeTreeDto(" +
+           "q.id, q.schoolName, q.regionCity, q.regionDistrict, q.groupId) " +
+           "FROM QrCode q")
+    List<QrCodeTreeDto> findAllTreeProjection();
+
+    // ── 批量更新方法 ──
+
+    /** 批量更新欢迎语 */
     @Modifying
     @Query("UPDATE QrCode q SET q.welcomeText = :welcomeText WHERE q.id IN :ids")
-    int batchUpdateWelcomeText(@Param("ids") List<Long> ids,
-                               @Param("welcomeText") String welcomeText);
+    int batchUpdateWelcomeText(@Param("welcomeText") String welcomeText,
+                                @Param("ids") List<Long> ids);
 
-    /**
-     * 批量更新活码表单模板 ID。
-     *
-     * @param ids             活码 ID 列表
-     * @param formTemplateId 新的表单模板 ID
-     * @return 影响的记录行数
-     */
+    /** 批量更新表单模板（null 表示清空） */
     @Modifying
     @Query("UPDATE QrCode q SET q.formTemplateId = :formTemplateId WHERE q.id IN :ids")
-    int batchUpdateFormTemplateId(@Param("ids") List<Long> ids,
-                                  @Param("formTemplateId") Long formTemplateId);
+    int batchUpdateFormTemplateId(@Param("formTemplateId") Long formTemplateId,
+                                   @Param("ids") List<Long> ids);
 
-    /**
-     * 批量更新活码轮换模式。
-     *
-     * @param ids        活码 ID 列表
-     * @param rotateMode 新的轮换模式
-     * @return 影响的记录行数
-     */
+    /** 批量切换轮换模式 */
     @Modifying
-    @Query("UPDATE QrCode q SET q.rotateMode = :rotateMode WHERE q.id IN :ids")
-    int batchUpdateRotateMode(@Param("ids") List<Long> ids,
-                              @Param("rotateMode") QrCode.RotateMode rotateMode);
+    @Query("UPDATE QrCode q SET q.rotateMode = :mode WHERE q.id IN :ids")
+    int batchUpdateRotateMode(@Param("mode") QrCode.RotateMode mode,
+                               @Param("ids") List<Long> ids);
 
-    /**
-     * 批量更新活码分组 ID。
-     *
-     * @param ids     活码 ID 列表
-     * @param groupId 新的分组 ID
-     * @return 影响的记录行数
-     */
+    /** 批量改分组（null 表示取消分组） */
     @Modifying
     @Query("UPDATE QrCode q SET q.groupId = :groupId WHERE q.id IN :ids")
-    int batchUpdateGroupId(@Param("ids") List<Long> ids,
-                           @Param("groupId") Long groupId);
+    int batchUpdateGroupId(@Param("groupId") Long groupId,
+                            @Param("ids") List<Long> ids);
 
-    /**
-     * 批量更新活码预警/紧急阈值。
-     *
-     * @param ids         活码 ID 列表
-     * @param warnRatio   预警阈值百分比
-     * @param urgentRatio 紧急阈值百分比
-     * @return 影响的记录行数
-     */
+    /** 批量更新告警/紧急阈值 */
     @Modifying
-    @Query("UPDATE QrCode q SET q.warnRatio = :warnRatio, q.urgentRatio = :urgentRatio WHERE q.id IN :ids")
-    int batchUpdateThresholds(@Param("ids") List<Long> ids,
-                              @Param("warnRatio") int warnRatio,
-                              @Param("urgentRatio") int urgentRatio);
+    @Query("UPDATE QrCode q SET q.warnRatio = :warnRatio, q.urgentRatio = :urgentRatio "
+         + "WHERE q.id IN :ids")
+    int batchUpdateThresholds(@Param("warnRatio") int warnRatio,
+                               @Param("urgentRatio") int urgentRatio,
+                               @Param("ids") List<Long> ids);
 
-    /**
-     * 批量更新活码状态。
-     *
-     * @param ids    活码 ID 列表
-     * @param status 新的活码状态
-     * @return 影响的记录行数
-     */
+    /** 批量更新状态（暂停/启用） */
     @Modifying
     @Query("UPDATE QrCode q SET q.status = :status WHERE q.id IN :ids")
-    int batchUpdateStatus(@Param("ids") List<Long> ids,
-                          @Param("status") QrCode.QrCodeStatus status);
+    int batchUpdateStatus(@Param("status") QrCode.QrCodeStatus status,
+                           @Param("ids") List<Long> ids);
 }

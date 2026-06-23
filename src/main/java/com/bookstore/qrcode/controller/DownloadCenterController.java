@@ -137,7 +137,7 @@ public class DownloadCenterController {
         Page<QrCode> qrCodePage;
         if ("all".equals(mode)) {
             // 全部活码模式
-            qrCodePage = qrCodeRepo.search(keyword, null, null, QrCode.QrCodeStatus.active,
+            qrCodePage = qrCodeRepo.search(keyword, null, null, QrCode.QrCodeStatus.active, null,
                 PageRequest.of(page, size));
         } else {
             // 我的活码模式：只显示绑定的 — 一次性批量加载，避免 N+1

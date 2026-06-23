@@ -201,4 +201,21 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
            "AND c.sourceQrId IS NOT NULL")
     long countDistinctSourceQrByAddTimeBetween(@Param("start") LocalDateTime start,
                                                @Param("end") LocalDateTime end);
+
+    /**
+     * 批量统计活码的累计客户数和今日新增客户数。
+     * <p>
+     * 一次查询返回所有指定活码的统计结果，替代列表页的 N+1 循环查询。
+     * </p>
+     *
+     * @param qrIds      活码 ID 列表
+     * @param todayStart 今日起始时间（用于今日新增统计）
+     * @return 每行格式：[sourceQrId, totalCount, todayCount]
+     */
+    @Query("SELECT c.sourceQrId, COUNT(c), " +
+           "SUM(CASE WHEN c.addTime >= :todayStart THEN 1 ELSE 0 END) " +
+           "FROM Customer c WHERE c.sourceQrId IN :qrIds " +
+           "GROUP BY c.sourceQrId")
+    List<Object[]> countTotalAndTodayByQrIds(@Param("qrIds") List<Long> qrIds,
+                                              @Param("todayStart") LocalDateTime todayStart);
 }
