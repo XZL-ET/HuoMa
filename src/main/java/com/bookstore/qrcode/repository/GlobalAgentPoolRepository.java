@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,6 +45,21 @@ public interface GlobalAgentPoolRepository
 
     /** 统计指定状态的员工数 */
     long countByStatus(GlobalAgentPool.PoolStatus status);
+
+    /**
+     * 查询指定部门的 standby 员工（含子孙部门），按 sort_order 升序，加行锁防并发。
+     *
+     * @param departmentIds 部门 ID 集合（含子孙部门），为空时退化为全量查询
+     * @param status 池状态（standby）
+     * @return 同部门 standby 列表
+     */
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.status = :status "
+         + "AND (:deptIds IS NULL OR p.departmentId IN :deptIds) "
+         + "ORDER BY p.sortOrder ASC")
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<GlobalAgentPool> findStandbysByDeptForUpdate(
+        @Param("deptIds") Collection<Long> departmentIds,
+        @Param("status") GlobalAgentPool.PoolStatus status);
 
     /** 取 sortOrder 最大的记录（用于队尾追加），池空时返回空 */
     Optional<GlobalAgentPool> findFirstByOrderBySortOrderDesc();

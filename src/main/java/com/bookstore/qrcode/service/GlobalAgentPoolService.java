@@ -15,7 +15,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -117,6 +119,117 @@ public class GlobalAgentPoolService {
             excludeUserids != null ? excludeUserids.size() : 0,
             skippedInactive, skippedWechatUnavailable, skippedBlocked);
         return null;
+    }
+
+    /**
+     * 从全局池取 standby 员工，优先匹配指定部门。
+     *
+     * <h3>取人优先级</h3>
+     * <ol>
+     *   <li>同部门（含子孙部门）standby → 按 sort_order 取</li>
+     *   <li>同部门无可用 → 降级为全局取人（任意部门）</li>
+     *   <li>全局枯竭 → 返回 null</li>
+     * </ol>
+     *
+     * @param excludeUserids 排除的 userid 集合
+     * @param preferredDepartmentId 优先部门 ID，null 时直接全局取人
+     * @return 可用 standby，或无可用时返回 null
+     */
+    @Transactional
+    public GlobalAgentPool takeStandby(Set<String> excludeUserids, Long preferredDepartmentId) {
+        // ① 收集子孙部门 ID（用于 IN 查询）
+        Collection<Long> deptIds = null;
+        if (preferredDepartmentId != null) {
+            deptIds = collectDescendantDeptIds(preferredDepartmentId);
+        }
+
+        // ② 查询同部门 standby（带行锁）
+        if (deptIds != null && !deptIds.isEmpty()) {
+            List<GlobalAgentPool> standbys = poolRepo.findStandbysByDeptForUpdate(deptIds,
+                GlobalAgentPool.PoolStatus.standby);
+            if (!standbys.isEmpty()) {
+                GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids);
+                if (result != null) return result;
+                log.info("同部门无可用 standby，降级为全局取人: deptId={}", preferredDepartmentId);
+            }
+        }
+
+        // ③ 降级：全局取人（调用原方法）
+        return takeStandby(excludeUserids);
+    }
+
+    /**
+     * 从同部门候选列表中选取第一个可用员工（懒清理 + 公平轮转）。
+     *
+     * <p>逻辑与 {@link #takeStandby(Set)} 保持一致，
+     * 复用相同的懒清理规则（离职/企微不可用/封号熔断）。</p>
+     */
+    private GlobalAgentPool selectFromDeptCandidates(List<GlobalAgentPool> candidates,
+                                                      Set<String> excludeUserids) {
+        int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
+        for (GlobalAgentPool p : candidates) {
+            if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
+                continue;
+            }
+            // 过滤已离职员工 → 懒清理出池
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null && !emp.getActive()) {
+                skippedInactive++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 过滤企微侧不可用员工 → 懒清理出池
+            if (emp != null && emp.getWechatStatus() != null && emp.getWechatStatus() != 1) {
+                skippedWechatUnavailable++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 过滤封号/熔断员工 → 懒清理出池
+            Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
+            if (agent != null && (
+                agent.getOverallStatus() == Agent.OverallStatus.blocked
+                || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 取走 → 推到队尾（公平轮转）
+            int currentMax = poolRepo.findFirstByOrderBySortOrderDesc()
+                .map(GlobalAgentPool::getSortOrder).orElse(0);
+            p.setSortOrder(currentMax + 1);
+            poolRepo.save(p);
+            return p;
+        }
+        if (skippedInactive > 0 || skippedWechatUnavailable > 0 || skippedBlocked > 0) {
+            log.info("同部门懒清理: 跳过离职={}, 企微不可用={}, 封号/熔断={}",
+                skippedInactive, skippedWechatUnavailable, skippedBlocked);
+        }
+        return null;
+    }
+
+    /**
+     * 收集指定部门的所有子孙部门 ID。
+     *
+     * <p>调用企微 department/list 接口递归拉取，
+     * 结果缓存到本地避免同请求内重复调用。</p>
+     */
+    private Collection<Long> collectDescendantDeptIds(Long parentId) {
+        Set<Long> ids = new LinkedHashSet<>();
+        ids.add(parentId);
+        try {
+            JsonNode resp = wecomApi.listDepartments(parentId);
+            if (resp.has("department") && resp.get("department").isArray()) {
+                for (JsonNode dept : resp.get("department")) {
+                    long childId = dept.get("id").asLong();
+                    if (!ids.contains(childId)) {
+                        ids.addAll(collectDescendantDeptIds(childId));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("拉取子孙部门失败: parentId={}, 仅用直接部门ID", parentId, e);
+        }
+        return ids;
     }
 
     /**

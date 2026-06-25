@@ -171,7 +171,7 @@ public class AgentRotationService {
                 .map(QrAgent::getAgentUserid)
                 .forEach(excludeUserids::add);
 
-            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
             if (backup == null) {
                 log.error("全局池枯竭！活码 {} 无法扩容", qrCodeId);
                 alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
@@ -243,7 +243,7 @@ public class AgentRotationService {
                 .map(QrAgent::getAgentUserid)
                 .forEach(excludeUserids::add);
 
-            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
             if (backup == null) {
                 log.warn("全局池无 standby，活码 {} 无法预激活", qrCodeId);
                 alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
