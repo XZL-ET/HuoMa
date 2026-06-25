@@ -158,6 +158,52 @@
                 <div class="form-text" id="agentCountPreview" style="display:none;"></div>
             </div>
         </div>
+
+                <!-- 场景选择 -->
+                <div class="mb-3">
+                    <label class="form-label">场景</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="scene"
+                                   id="sceneDaily" value="daily_push" checked
+                                   onchange="onSceneChange()">
+                            <label class="form-check-label" for="sceneDaily">📱 日常推送</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="scene"
+                                   id="sceneParentMeeting" value="parent_meeting"
+                                   onchange="onSceneChange()">
+                            <label class="form-check-label" for="sceneParentMeeting">🏫 家长会</label>
+                        </div>
+                    </div>
+                    <div class="form-text">日常：按 10% 扫码率配人 | 家长会：按 60% 扫码率配人</div>
+                </div>
+
+                <!-- 预估接待员 -->
+                <div class="mb-3">
+                    <label for="initialAgentCount" class="form-label">初始接待员数</label>
+                    <div class="input-group" style="max-width:200px">
+                        <input type="number" class="form-control" id="initialAgentCount"
+                               name="initialAgentCount" min="1" max="100"
+                               placeholder="自动计算">
+                        <span class="input-group-text bg-light text-muted small" id="agentEstimate">—</span>
+                    </div>
+                    <div class="form-text text-muted small" id="agentEstimateFormula"></div>
+                </div>
+
+                <!-- 所属部门 -->
+                <div class="mb-3">
+                    <label for="departmentId" class="form-label">所属部门</label>
+                    <select class="form-select" id="departmentId" name="departmentId"
+                            style="max-width:300px">
+                        <option value="">不限部门（全局取人）</option>
+                        <option th:each="dept : ${departments}"
+                                th:value="${dept.id}"
+                                th:text="${dept.name}"></option>
+                    </select>
+                    <div class="form-text">扩容时优先从同部门取人</div>
+                </div>
+
         <!-- 加载员工数据时的错误提示 -->
         <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
 
@@ -577,6 +623,49 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+    // 场景配置（由后端 Thymeleaf 渲染）
+    const SCENE_CONFIG = {
+        daily_push: {
+            scanRatio: /*[[${sceneConfig.dailyPush.scanRatio}]]*/ 0.10,
+            urgentRatio: /*[[${sceneConfig.dailyPush.urgentRatio}]]*/ 95
+        },
+        parent_meeting: {
+            scanRatio: /*[[${sceneConfig.parentMeeting.scanRatio}]]*/ 0.60,
+            urgentRatio: /*[[${sceneConfig.parentMeeting.urgentRatio}]]*/ 70
+        }
+    };
+    const DAILY_MAX = /*[[${dailyMaxDefault} ?: 100]]*/ 100;
+
+    function onSceneChange() {
+        const checkedRadio = document.querySelector('input[name="scene"]:checked');
+        if (!checkedRadio) return;
+        const scene = checkedRadio.value;
+        const cfg = SCENE_CONFIG[scene];
+        if (!cfg) return;
+        const studentInput = document.getElementById('studentCountInput');
+        const studentCount = parseInt(studentInput?.value) || 0;
+        const countInput = document.getElementById('initialAgentCount');
+        const estimateSpan = document.getElementById('agentEstimate');
+        const formulaSpan = document.getElementById('agentEstimateFormula');
+
+        if (studentCount > 0) {
+            const expectedScans = Math.ceil(studentCount * cfg.scanRatio);
+            const need = Math.max(1, Math.min(100,
+                Math.ceil(expectedScans / DAILY_MAX)));
+            estimateSpan.textContent = '预估 ' + need + ' 人';
+            formulaSpan.textContent =
+                '公式: ceil(' + studentCount + ' × ' + Math.round(cfg.scanRatio * 100) + '% / ' + DAILY_MAX + ')'
+                + ' = ceil(' + expectedScans + ' / ' + DAILY_MAX + ') = ' + need + ' 人';
+            if (!countInput.value) countInput.placeholder = need;
+        } else {
+            estimateSpan.textContent = '—';
+            formulaSpan.textContent = '';
+        }
+    }
+
+    document.getElementById('studentCountInput')?.addEventListener('input', onSceneChange);
+    document.addEventListener('DOMContentLoaded', onSceneChange);
 </script>
 </main>
 </html>

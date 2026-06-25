@@ -448,6 +448,27 @@ public class QrCodeController {
             model.addAttribute("schoolOptions", List.of());
         }
 
+        model.addAttribute("sceneConfig", sceneConfig);
+        model.addAttribute("dailyMaxDefault", dailyMaxDefault);
+
+        // 加载企微部门列表
+        try {
+            JsonNode deptResp = wecomApiClient.listDepartments(null);
+            List<Map<String, Object>> departments = new ArrayList<>();
+            if (deptResp.has("department") && deptResp.get("department").isArray()) {
+                for (JsonNode d : deptResp.get("department")) {
+                    Map<String, Object> dept = new LinkedHashMap<>();
+                    dept.put("id", d.get("id").asLong());
+                    dept.put("name", d.get("name").asText());
+                    departments.add(dept);
+                }
+            }
+            model.addAttribute("departments", departments);
+        } catch (Exception e) {
+            log.warn("加载企微部门列表失败", e);
+            model.addAttribute("departments", List.of());
+        }
+
         return "qrcode/create";
     }
 
