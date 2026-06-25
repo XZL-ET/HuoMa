@@ -118,8 +118,20 @@
                         ➕ 新增联系人
                     </button>
                 </h6>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <small class="text-muted">
+                        可回收 <span class="text-primary fw-bold" id="recyclableCount">0</span> 人
+                    </small>
+                    <button type="button" class="btn btn-outline-warning btn-sm" id="recycleBtn"
+                            onclick="batchRecycle()" disabled>
+                        ♻️ 回收选中
+                    </button>
+                </div>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
+                    <thead><tr><th style="width:40px">
+                                        <input type="checkbox" id="receptionistSelectAll"
+                                               onchange="toggleAllReceptionists(this)">
+                                    </th><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
                     <tbody>
                         <!-- 服务老师行：th:each 遍历 services 列表 -->
                         <tr th:each="a : ${services}">
@@ -150,6 +162,12 @@
                         <!-- 已激活的接待员行 -->
                         <tr th:each="a : ${receptionists}">
                             <td>
+                                <input type="checkbox" class="receptionist-check"
+                                       th:value="${a.id}"
+                                       th:disabled="${a.role.name() == 'service'}"
+                                       th:title="${a.role.name() == 'service' ? '服务老师不可回收' : '勾选以回收'}">
+                            </td>
+                            <td>
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
                                 <span class="badge bg-info ms-1">接待员</span>
                             </td>
@@ -178,7 +196,7 @@
                         </tr>
                         <!-- 空数据提示 -->
                         <tr th:if="${services.isEmpty() and receptionists.isEmpty()}">
-                            <td colspan="6" class="text-muted text-center">暂未配置联系人</td>
+                            <td colspan="7" class="text-muted text-center">暂未配置联系人</td>
                         </tr>
                     </tbody>
                 </table>
@@ -606,6 +624,58 @@
         this.disabled = false;
         this.textContent = '执行在职继承';
     });
+
+    function toggleAllReceptionists(master) {
+        document.querySelectorAll('.receptionist-check:not([disabled])').forEach(cb => {
+            cb.checked = master.checked;
+        });
+        updateRecycleButton();
+    }
+
+    function updateRecycleButton() {
+        const selected = document.querySelectorAll('.receptionist-check:checked').length;
+        document.getElementById('recyclableCount').textContent = selected;
+        const btn = document.getElementById('recycleBtn');
+        btn.disabled = selected === 0;
+        btn.textContent = selected > 0 ? '♻️ 回收选中 (' + selected + ')' : '♻️ 回收选中';
+    }
+
+    document.querySelectorAll('.receptionist-check').forEach(cb => {
+        cb.addEventListener('change', updateRecycleButton);
+    });
+
+    async function batchRecycle() {
+        const checked = document.querySelectorAll('.receptionist-check:checked');
+        if (checked.length === 0) return;
+        if (!confirm('确定要回收选中的 ' + checked.length + ' 个接待员吗？\n\n回收后他们将返回全局池，可被其他活码使用。')) return;
+
+        const agentIds = Array.from(checked).map(cb => parseInt(cb.value));
+        const qrId = /*[[${qr.id}]]*/ 0;
+        try {
+            const resp = await fetch('/api/qrcodes/' + qrId + '/agents/batch-recycle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentIds: agentIds })
+            });
+            const result = await resp.json();
+            let msg = '回收完成：成功 ' + result.recycled + ' 人';
+            if (result.rejected > 0) {
+                msg += '，' + result.rejected + ' 人被拒绝';
+                const reasons = result.rejectReasons;
+                if (reasons) {
+                    for (const [id, reason] of Object.entries(reasons)) {
+                        msg += '\n• ' + reason;
+                    }
+                }
+            }
+            alert(msg);
+            if (result.recycled > 0) location.reload();
+        } catch (e) {
+            alert('回收失败: ' + e.message);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', updateRecycleButton);
     </script>
 </main>
 </html>
