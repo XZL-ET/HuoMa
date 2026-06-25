@@ -987,4 +987,24 @@ public class WecomApiClient {
             + "&state=" + state
             + "#wechat_redirect";
     }
+
+    /**
+     * 获取企微部门列表。
+     *
+     * <p><b>企微接口：</b>{@code GET /cgi-bin/department/list}
+     *
+     * @param parentId 父部门 ID，传 null 表示获取全部部门
+     * @return 企微 API 响应 JSON，包含 department 数组
+     * @throws WecomApiException API 调用失败时抛出
+     */
+    public JsonNode listDepartments(Long parentId) throws WecomApiException {
+        String accessToken = getAccessToken();
+        StringBuilder url = new StringBuilder(
+            "https://qyapi.weixin.qq.com/cgi-bin/department/list?access_token=" + accessToken);
+        if (parentId != null) {
+            url.append("&id=").append(parentId);
+        }
+        String resp = restTemplate.getForObject(url.toString(), String.class);
+        return parseAndCheck(resp, "获取部门列表");
+    }
 }

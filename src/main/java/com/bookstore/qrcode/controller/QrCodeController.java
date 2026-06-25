@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.config.SceneConfigProperties;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.Customer;
@@ -10,6 +11,7 @@ import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.QrCodeGroup;
+import com.bookstore.qrcode.entity.Scene;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
@@ -29,6 +31,7 @@ import com.bookstore.qrcode.repository.QrCodeGroupRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -101,6 +104,10 @@ public class QrCodeController {
     private final QrCodeGroupRepository groupRepo;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final SceneConfigProperties sceneConfig;
+
+    @Value("${app.agent.daily-max-default:100}")
+    private int dailyMaxDefault;
 
     // 企微标签缓存（避免每次打开创建页都调企微接口）
     private volatile java.time.LocalDateTime lastTagSyncTime = null;
@@ -1466,6 +1473,30 @@ public class QrCodeController {
         response.setContentLength(zipBytes.length);
         response.getOutputStream().write(zipBytes);
         response.getOutputStream().flush();
+    }
+
+    /**
+     * 获取场景预设配置，供前端创建活码时使用。
+     *
+     * <p>返回各场景的扫码率、预激活阈值以及全局默认日限，
+     * 前端据此实时计算预估接待员数。</p>
+     */
+    @GetMapping("/api/config/scene")
+    @ResponseBody
+    public Map<String, Object> getSceneConfig() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        Map<String, Object> scenes = new LinkedHashMap<>();
+
+        for (Scene s : Scene.values()) {
+            SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(s);
+            Map<String, Object> cfg = new LinkedHashMap<>();
+            cfg.put("scanRatio", preset.getScanRatio());
+            cfg.put("urgentRatio", preset.getUrgentRatio());
+            scenes.put(s.name(), cfg);
+        }
+        result.put("scenes", scenes);
+        result.put("dailyMax", dailyMaxDefault);
+        return result;
     }
 
     /**
