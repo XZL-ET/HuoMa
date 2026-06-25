@@ -8,6 +8,7 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -42,6 +43,7 @@ public class EmployeeSyncService {
     private final GlobalAgentPoolService poolService;
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
+    private final ObjectMapper objectMapper;
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
@@ -229,10 +231,13 @@ public class EmployeeSyncService {
             }
 
             maxOrder++;
+            // 取主部门：Employee.department 是 JSON 数组如 "[1,2,3]"
+            Long primaryDeptId = extractPrimaryDeptId(emp.getDepartment());
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
                 .dailyMax(100)
                 .sortOrder(maxOrder)
+                .departmentId(primaryDeptId)
                 .status(GlobalAgentPool.PoolStatus.standby)
                 .build());
         }
@@ -246,5 +251,24 @@ public class EmployeeSyncService {
         log.info("全局池同步完成：新增 {} 人入池，清理离职 {} 人，池总数 {} 人",
             batch.size(), cleaned, pooledUserIds.size() + batch.size());
         return batch.size();
+    }
+
+    /**
+     * 从 Employee.department JSON 数组字符串中提取主部门 ID。
+     *
+     * <p>企微返回的 department 是 JSON 数组如 [1,2,3]，
+     * 取第一个元素作为主部门。如果解析失败或为空，返回 null。</p>
+     */
+    private Long extractPrimaryDeptId(String departmentJson) {
+        if (departmentJson == null || departmentJson.isBlank()) return null;
+        try {
+            JsonNode arr = objectMapper.readTree(departmentJson);
+            if (arr.isArray() && arr.size() > 0) {
+                return arr.get(0).asLong();
+            }
+        } catch (Exception e) {
+            log.warn("解析部门 JSON 失败: {}", departmentJson, e);
+        }
+        return null;
     }
 }
