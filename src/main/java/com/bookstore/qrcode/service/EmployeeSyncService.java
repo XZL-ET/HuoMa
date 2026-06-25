@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +46,19 @@ public class EmployeeSyncService {
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 应用启动后回填存量池记录的 departmentId，确保部门匹配立即可用。
+     * 用 ApplicationReadyEvent 替代 PostConstruct，确保事务代理已就绪。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void initBackfillDepartmentIds() {
+        int backfilled = backfillPoolDepartmentIds();
+        if (backfilled > 0) {
+            log.info("启动时回填 departmentId 完成: {} 条记录", backfilled);
+        }
+    }
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
@@ -170,7 +185,13 @@ public class EmployeeSyncService {
             }
         }
 
-        // 2. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
+        // 2. 回填已有池记录的 departmentId（存量数据兼容：旧记录该字段为 NULL）
+        int backfilled = backfillPoolDepartmentIds();
+        if (backfilled > 0) {
+            log.info("全局池同步：回填 {} 条记录的 departmentId", backfilled);
+        }
+
+        // 3. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
         Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
         // 在职但不在池中的员工（排除企微侧明确不可用的：已禁用/未激活/已离职）
@@ -235,7 +256,7 @@ public class EmployeeSyncService {
             Long primaryDeptId = extractPrimaryDeptId(emp.getDepartment());
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
-                .dailyMax(100)
+                .dailyMax(150)
                 .sortOrder(maxOrder)
                 .departmentId(primaryDeptId)
                 .status(GlobalAgentPool.PoolStatus.standby)
@@ -251,6 +272,37 @@ public class EmployeeSyncService {
         log.info("全局池同步完成：新增 {} 人入池，清理离职 {} 人，池总数 {} 人",
             batch.size(), cleaned, pooledUserIds.size() + batch.size());
         return batch.size();
+    }
+
+    /**
+     * 回填已有池记录的 departmentId（存量数据兼容：旧记录该字段为 NULL）。
+     *
+     * <p>遍历所有 departmentId 为 NULL 的池记录，从本地 Employee 表查找对应部门。
+     * 每次 syncToGlobalPool 调用时执行，逐步修复存量数据。</p>
+     *
+     * @return 本次回填的记录数
+     */
+    private int backfillPoolDepartmentIds() {
+        // 先用 COUNT 判断是否需要回填，避免每次都加载全表
+        long nullCount = poolRepo.countWithNullDepartmentId();
+        if (nullCount == 0) return 0;
+
+        List<GlobalAgentPool> nullDeptRecords = poolRepo.findWithNullDepartmentId();
+        List<GlobalAgentPool> toUpdate = new ArrayList<>();
+        for (GlobalAgentPool p : nullDeptRecords) {
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null) {
+                Long deptId = extractPrimaryDeptId(emp.getDepartment());
+                if (deptId != null) {
+                    p.setDepartmentId(deptId);
+                    toUpdate.add(p);
+                }
+            }
+        }
+        if (!toUpdate.isEmpty()) {
+            poolRepo.saveAll(toUpdate);
+        }
+        return toUpdate.size();
     }
 
     /**

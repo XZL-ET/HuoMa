@@ -21,6 +21,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 全局员工池服务 — 替代每码独立后备池。
@@ -49,6 +50,9 @@ public class GlobalAgentPoolService {
     private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+
+    /** 部门树缓存：parentId → 所有子孙部门 ID。企微部门结构很少变动，实例级缓存即可。 */
+    private final Map<Long, Collection<Long>> deptTreeCache = new ConcurrentHashMap<>();
 
     /**
      * 从全局池取优先级最高（sortOrder 最小）的 standby 员工，排除指定 userid 集合。
@@ -151,6 +155,8 @@ public class GlobalAgentPoolService {
                 GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids);
                 if (result != null) return result;
                 log.info("同部门无可用 standby，降级为全局取人: deptId={}", preferredDepartmentId);
+            } else {
+                log.info("同部门({})无 standby 记录（池中无该部门员工），降级为全局取人", preferredDepartmentId);
             }
         }
 
@@ -208,12 +214,19 @@ public class GlobalAgentPoolService {
     }
 
     /**
-     * 收集指定部门的所有子孙部门 ID。
+     * 收集指定部门的所有子孙部门 ID（带实例级缓存，避免重复调用企微 API）。
      *
-     * <p>调用企微 department/list 接口递归拉取，
-     * 结果缓存到本地避免同请求内重复调用。</p>
+     * <p>优先从 {@link #deptTreeCache} 获取，未命中时调用企微 API 拉取并缓存。
+     * 企微部门结构很少变动，实例级缓存生命周期同应用进程。</p>
      */
     private Collection<Long> collectDescendantDeptIds(Long parentId) {
+        return deptTreeCache.computeIfAbsent(parentId, this::doCollectDescendantDeptIds);
+    }
+
+    /**
+     * 递归拉取子孙部门 ID（无缓存，实际调用企微 API）。
+     */
+    private Collection<Long> doCollectDescendantDeptIds(Long parentId) {
         Set<Long> ids = new LinkedHashSet<>();
         ids.add(parentId);
         try {
@@ -222,7 +235,7 @@ public class GlobalAgentPoolService {
                 for (JsonNode dept : resp.get("department")) {
                     long childId = dept.get("id").asLong();
                     if (!ids.contains(childId)) {
-                        ids.addAll(collectDescendantDeptIds(childId));
+                        ids.addAll(doCollectDescendantDeptIds(childId));
                     }
                 }
             }
@@ -272,14 +285,24 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void ensureInPool(String userid, int dailyMax) {
-        if (poolRepo.findByAgentUserid(userid).isPresent()) return;
+        GlobalAgentPool existing = poolRepo.findByAgentUserid(userid).orElse(null);
+
+        // 优先从本地 Employee 表取部门（每 30 分钟从企微同步，命中率极高）
+        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
+        Long deptId = emp != null ? extractPrimaryDeptId(emp.getDepartment()) : null;
+
+        // 已有记录但 departmentId 为空 → 回填
+        if (existing != null && existing.getDepartmentId() == null && deptId != null) {
+            existing.setDepartmentId(deptId);
+            poolRepo.save(existing);
+            log.info("回填已有池记录的 departmentId: userid={}, deptId={}", userid, deptId);
+        }
+
+        if (existing != null) return;
 
         // 确保 Agent 全局表存在
+        String name = emp != null ? emp.getName() : null;
         if (!agentRepo.existsById(userid)) {
-            // 优先从本地 Employee 表取姓名（每 30 分钟从企微同步，命中率极高）
-            String name = employeeRepo.findByUserid(userid)
-                .map(Employee::getName)
-                .orElse(null);
             // 本地没有则回退到企微 API（仅新员工首次同步时可能走到此分支）
             if (name == null || name.isEmpty()) {
                 name = userid;
@@ -308,8 +331,25 @@ public class GlobalAgentPoolService {
         poolRepo.save(GlobalAgentPool.builder()
             .agentUserid(userid).dailyMax(dailyMax)
             .sortOrder(maxOrder + 1)
+            .departmentId(deptId)
             .status(GlobalAgentPool.PoolStatus.standby).build());
-        log.info("全局池新增员工: userid={}, dailyMax={}", userid, dailyMax);
+        log.info("全局池新增员工: userid={}, dailyMax={}, deptId={}", userid, dailyMax, deptId);
+    }
+
+    /**
+     * 从 Employee.department JSON 数组中提取主部门 ID（取第一个元素）。
+     */
+    private Long extractPrimaryDeptId(String departmentJson) {
+        if (departmentJson == null || departmentJson.isBlank()) return null;
+        try {
+            JsonNode arr = objectMapper.readTree(departmentJson);
+            if (arr.isArray() && arr.size() > 0) {
+                return arr.get(0).asLong();
+            }
+        } catch (Exception e) {
+            log.warn("解析部门 JSON 失败: {}", departmentJson, e);
+        }
+        return null;
     }
 
     /**

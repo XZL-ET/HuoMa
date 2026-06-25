@@ -33,6 +33,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.beans.factory.annotation.Value;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -107,7 +109,7 @@ public class QrCodeController {
     private final ObjectMapper objectMapper;
     private final SceneConfigProperties sceneConfig;
 
-    @Value("${app.agent.daily-max-default:100}")
+    @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
 
     // 企微标签缓存（避免每次打开创建页都调企微接口）
@@ -450,6 +452,7 @@ public class QrCodeController {
 
         model.addAttribute("sceneConfig", sceneConfig);
         model.addAttribute("dailyMaxDefault", dailyMaxDefault);
+        model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
 
         // 加载企微部门列表
         try {
@@ -464,9 +467,23 @@ public class QrCodeController {
                 }
             }
             model.addAttribute("departments", departments);
+
+            // 部门名称列表（供前端 AutocompleteInput 搜索用）
+            List<String> departmentNames = departments.stream()
+                .map(d -> (String) d.get("name"))
+                .collect(Collectors.toList());
+            model.addAttribute("departmentNames", departmentNames);
+
+            // 部门名称 → ID 映射（供前端选中时回填隐藏域）
+            Map<String, Long> departmentMap = departments.stream()
+                .collect(Collectors.toMap(d -> (String) d.get("name"),
+                    d -> (Long) d.get("id"), (a, b) -> a));
+            model.addAttribute("departmentMap", departmentMap);
         } catch (Exception e) {
             log.warn("加载企微部门列表失败", e);
             model.addAttribute("departments", List.of());
+            model.addAttribute("departmentNames", List.of());
+            model.addAttribute("departmentMap", Map.of());
         }
 
         return "qrcode/create";
@@ -619,8 +636,10 @@ public class QrCodeController {
      * @return 重定向到活码列表页 {@code "redirect:/qrcodes"}
      */
     @PostMapping("/create")
-    public String create(@ModelAttribute QrCodeCreateRequest req,
-                          RedirectAttributes redirect) {
+    public Object create(@ModelAttribute QrCodeCreateRequest req,
+                          RedirectAttributes redirect,
+                          HttpServletRequest request) {
+        boolean isAjax = "XMLHttpRequest".equals(request.getHeader("X-Requested-With"));
         try {
             // 如果学校ID为空（用户清掉了自动生成的值），自动补生成一个
             if (req.getSchoolId() == null || req.getSchoolId().isBlank()) {
@@ -630,11 +649,20 @@ public class QrCodeController {
                 log.info("学校ID为空，已自动生成: {}", autoId);
             }
             qrCodeService.create(req);
+            if (isAjax) {
+                return ResponseEntity.ok(Map.of("success", true, "message", "活码创建成功"));
+            }
             redirect.addFlashAttribute("message", "活码创建成功");
+            return "redirect:/qrcodes";
         } catch (Exception e) {
+            log.error("创建活码失败", e);
+            if (isAjax) {
+                return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "error", e.getMessage()));
+            }
             redirect.addFlashAttribute("error", e.getMessage());
+            return "redirect:/qrcodes";
         }
-        return "redirect:/qrcodes";
     }
 
     /**
@@ -829,6 +857,13 @@ public class QrCodeController {
         return Map.of("ok", true, "count", n);
     }
 
+    @PostMapping("/batch/scene")
+    @ResponseBody
+    public Map<String, Object> batchUpdateScene(@RequestParam List<Long> ids, @RequestParam String scene) {
+        int n = qrCodeService.batchUpdateScene(ids, Scene.valueOf(scene));
+        return Map.of("ok", true, "count", n);
+    }
+
     // ==================== 批量导入模板下载 ====================
 
     @GetMapping("/batch-import/template")
@@ -908,7 +943,7 @@ public class QrCodeController {
             agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
 
         // ---- 3. 获取全局员工池（DB 分页 + COUNT 统计） ----
-        int pageSize = 100;
+        int pageSize = 20;
         Page<GlobalAgentPool> backupPage = qrCodeService.getBackups(id, page, pageSize);
         model.addAttribute("backups", backupPage.getContent());
         model.addAttribute("backupPage", backupPage.getNumber());
@@ -1188,6 +1223,32 @@ public class QrCodeController {
         try {
             qrCodeService.updateRotateMode(id, QrCode.RotateMode.valueOf(mode));
             redirect.addFlashAttribute("message", "轮换模式已更新");
+        } catch (Exception e) {
+            redirect.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/qrcodes/" + id;
+    }
+
+    /**
+     * 切换单个活码的场景。
+     *
+     * <p>POST /qrcodes/{id}/scene —— 修改活码的场景类型（日常推送 / 家长会），
+     * 同时自动更新紧急阈值以匹配新场景的预设。
+     * 委托 {@link QrCodeService#updateScene(Long, Scene)} 处理。
+     *
+     * @param id       活码 ID
+     * @param scene    场景枚举名（daily_push / parent_meeting）
+     * @param redirect {@link RedirectAttributes}
+     * @return 重定向到活码详情页 {@code "redirect:/qrcodes/{id}"}
+     */
+    @PostMapping("/{id}/scene")
+    public String updateScene(@PathVariable Long id,
+                              @RequestParam String scene,
+                              RedirectAttributes redirect) {
+        try {
+            qrCodeService.updateScene(id, Scene.valueOf(scene));
+            String label = Scene.valueOf(scene) == Scene.parent_meeting ? "家长会" : "日常推送";
+            redirect.addFlashAttribute("message", "场景已切换为「" + label + "」");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
         }

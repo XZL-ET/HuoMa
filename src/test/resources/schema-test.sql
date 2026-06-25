@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     agent_userid VARCHAR(100) NOT NULL,
     role VARCHAR(20) NOT NULL DEFAULT 'receptionist'
         CHECK (role IN ('receptionist','service','dual')),
-    daily_max INT NOT NULL DEFAULT 100,
+    daily_max INT NOT NULL DEFAULT 150,
     daily_current INT NOT NULL DEFAULT 0,
     service_daily_max INT,
     sort_order INT NOT NULL DEFAULT 0,
@@ -109,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_qr_status ON qr_agent (agent_userid, status
 CREATE TABLE IF NOT EXISTS global_agent_pool (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_userid VARCHAR(100) NOT NULL UNIQUE,
-    daily_max INT NOT NULL DEFAULT 100,
+    daily_max INT NOT NULL DEFAULT 150,
     daily_current INT NOT NULL DEFAULT 0,
     sort_order INT NOT NULL DEFAULT 0,
     department_id BIGINT,
@@ -366,7 +366,8 @@ CREATE INDEX IF NOT EXISTS idx_qal_action ON qr_access_log (action);
 MERGE INTO system_config (config_key, config_value) KEY(config_key)
 VALUES ('global_contact_name', '火马客服'),
        ('global_contact_qr_config_id', ''),
-       ('global_contact_qr_url', '');
+       ('global_contact_qr_url', ''),
+       ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
 
 -- form_template：表单模板
 CREATE TABLE IF NOT EXISTS form_template (
@@ -379,6 +380,20 @@ CREATE TABLE IF NOT EXISTS form_template (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- form_submission：表单提交记录
+CREATE TABLE IF NOT EXISTS form_submission (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    form_template_id BIGINT NOT NULL,
+    customer_id BIGINT NOT NULL,
+    qr_code_id BIGINT,
+    field_data JSON NOT NULL,
+    tags_applied VARCHAR(500),
+    remark_updated VARCHAR(500),
+    submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fs_customer ON form_submission (customer_id);
+CREATE INDEX IF NOT EXISTS idx_fs_template ON form_submission (form_template_id);
 
 -- qr_code_group：活码分组（教育联盟）
 CREATE TABLE IF NOT EXISTS qr_code_group (

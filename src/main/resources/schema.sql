@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     qr_code_id BIGINT NOT NULL COMMENT '活码ID',
     agent_userid VARCHAR(100) NOT NULL COMMENT '员工企微UserID',
     role ENUM('receptionist','service','dual') NOT NULL DEFAULT 'receptionist',
-    daily_max INT NOT NULL DEFAULT 100 COMMENT '该活码下日添加上限',
+    daily_max INT NOT NULL DEFAULT 150 COMMENT '该活码下日添加上限',
     daily_current INT NOT NULL DEFAULT 0 COMMENT '今日已添加（Redis实时）',
     service_daily_max INT COMMENT '服务老师每日接手继承上限',
     sort_order INT NOT NULL DEFAULT 0 COMMENT '分配优先级',
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
 CREATE TABLE IF NOT EXISTS global_agent_pool (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微员工UserID',
-    daily_max INT NOT NULL DEFAULT 100 COMMENT '全局日接待上限',
+    daily_max INT NOT NULL DEFAULT 150 COMMENT '全局日接待上限',
     daily_current INT NOT NULL DEFAULT 0 COMMENT '今日已接待（所有活码合计）',
     sort_order INT NOT NULL DEFAULT 0 COMMENT '分配优先级，越小越先被分配',
     status VARCHAR(20) NOT NULL DEFAULT 'standby' COMMENT 'standby/full/blocked',

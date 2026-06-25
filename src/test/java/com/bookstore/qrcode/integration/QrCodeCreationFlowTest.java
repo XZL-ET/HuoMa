@@ -141,18 +141,18 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
 
         QrCode created = qrCodeService.create(req);
 
-        // bindAgents 使用 serviceDailyMax 作为默认日限（null→30）
+        // bindAgents 使用 serviceDailyMax 作为默认日限（null→150）
         List<QrAgent> agents = qrAgentRepo.findByQrCodeId(created.getId());
         assertThat(agents).hasSizeGreaterThanOrEqualTo(2);
 
         // 服务老师应被标记为 service 角色，dailyMax 使用全局默认值
         QrAgent a1 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent1").orElseThrow();
         assertThat(a1.getRole()).isEqualTo(QrAgent.AgentRole.service);
-        assertThat(a1.getDailyMax()).isEqualTo(30); // serviceDailyMax 未设置→默认30
+        assertThat(a1.getDailyMax()).isEqualTo(150); // serviceDailyMax 未设置→默认150
 
         QrAgent a2 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent2").orElseThrow();
         assertThat(a2.getRole()).isEqualTo(QrAgent.AgentRole.service);
-        assertThat(a2.getDailyMax()).isEqualTo(30);
+        assertThat(a2.getDailyMax()).isEqualTo(150);
     }
 
     @Test
@@ -167,7 +167,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
 
         GlobalAgentPool pool1 = poolRepo.findByAgentUserid("agent1").orElseThrow();
         assertThat(pool1.getStatus()).isEqualTo(GlobalAgentPool.PoolStatus.standby);
-        assertThat(pool1.getDailyMax()).isEqualTo(30); // bindAgents 默认值：serviceDailyMax null → 30
+        assertThat(pool1.getDailyMax()).isEqualTo(150); // bindAgents 默认值：serviceDailyMax null → 150
 
         GlobalAgentPool pool2 = poolRepo.findByAgentUserid("agent2").orElseThrow();
         assertThat(pool2.getStatus()).isEqualTo(GlobalAgentPool.PoolStatus.standby);

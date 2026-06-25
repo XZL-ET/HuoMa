@@ -100,7 +100,7 @@ public class QrCodeService {
     private QrCodeService self;
 
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
-    @Value("${app.agent.daily-max-default:100}")
+    @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
 
     /** 批量导入时日接待上限，可通过 app.agent.batch-import-daily-max 配置 */
@@ -275,6 +275,7 @@ public class QrCodeService {
             .customTags(req.getCustomTags())
             .scene(effectiveScene)
             .departmentId(req.getDepartmentId())
+            .formTemplateId(req.getFormTemplateId())
             .warnRatio(80)
             .urgentRatio(preset.getUrgentRatio())
             .build();
@@ -609,7 +610,7 @@ public class QrCodeService {
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
         getById(qrCodeId); // 校验活码存在
-        poolService.ensureInPool(agentUserid, 200);
+        poolService.ensureInPool(agentUserid, 150);
         log.info("全局池员工已添加: userid={}", agentUserid);
     }
 
@@ -939,6 +940,144 @@ public class QrCodeService {
     }
 
     /**
+     * 切换活码场景（单个）。
+     *
+     * <p>切换场景时会同步更新紧急阈值（urgentRatio）以匹配目标场景的预设值。
+     * 如果活码已设置学生人数，自动根据新场景的扫码率重算所需接待员数：</p>
+     *
+     * <h3>自动调整逻辑</h3>
+     * <ol>
+     *   <li>公式：need = ceil(studentCount × scanRatio / dailyMax)，最少 1 人</li>
+     *   <li>统计当前 active 状态的接待员数</li>
+     *   <li>need > current → 从全局池 takeStandby 补足差额（同部门优先）</li>
+     *   <li>need < current → 下掉多余接待员（优先接待员角色，按 sortOrder 倒序）</li>
+     *   <li>need = current → 不变</li>
+     * </ol>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param scene    目标场景枚举
+     * @throws RuntimeException 活码不存在时抛出
+     */
+    @Transactional
+    public void updateScene(Long qrCodeId, Scene scene) {
+        QrCode qr = getById(qrCodeId);
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+        Scene oldScene = qr.getScene();
+        qr.setScene(scene);
+        qr.setUrgentRatio(preset.getUrgentRatio());
+        qrCodeRepo.save(qr);
+
+        // 场景切换后重算所需接待员数
+        if (qr.getStudentCount() != null && qr.getStudentCount() > 0) {
+            int expectedScans = (int) Math.ceil(qr.getStudentCount() * preset.getScanRatio());
+            int need = Math.max(1, Math.min(100,
+                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
+
+            List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
+            int current = activeAgents.size();
+
+            if (need > current) {
+                // ── 不足：从全局池补人 ──
+                Set<String> boundUserids = activeAgents.stream()
+                    .map(QrAgent::getAgentUserid)
+                    .collect(Collectors.toSet());
+                int toAdd = need - current;
+                int added = 0;
+                int sortOrder = qrAgentRepo.findByQrCodeId(qrCodeId).size();
+
+                for (int i = 0; i < toAdd; i++) {
+                    GlobalAgentPool next = poolService.takeStandby(boundUserids, qr.getDepartmentId());
+                    if (next == null) break;
+                    boundUserids.add(next.getAgentUserid());
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(next.getAgentUserid())
+                        .role(QrAgent.AgentRole.receptionist)
+                        .dailyMax(next.getDailyMax())
+                        .sortOrder(sortOrder++)
+                        .status(QrAgent.AgentStatus.active).build());
+                    added++;
+                }
+
+                log.info("场景切换 {}→{}，学生{}人 扫码率{} 需{}人 现有{}人，从全局池补{}人",
+                    oldScene.name(), scene.name(), qr.getStudentCount(),
+                    preset.getScanRatio(), need, current, added);
+
+                if (added < toAdd) {
+                    log.warn("活码 {} 场景切换后全局池不足：需补 {} 人，实补 {} 人（缺 {} 人）",
+                        qrCodeId, toAdd, added, toAdd - added);
+                }
+            } else if (need < current) {
+                // ── 过剩：下掉多余接待员（优先接待员角色，后上先下） ──
+                int toRemove = current - need;
+
+                // 排定移除优先级：接待员在前，服务老师在后；同角色按 sortOrder 倒序
+                List<QrAgent> candidates = new ArrayList<>(activeAgents);
+                candidates.sort((a, b) -> {
+                    boolean aIsReceptionist = a.getRole() != QrAgent.AgentRole.service;
+                    boolean bIsReceptionist = b.getRole() != QrAgent.AgentRole.service;
+                    if (aIsReceptionist != bIsReceptionist) {
+                        return aIsReceptionist ? -1 : 1; // 接待员优先被移除
+                    }
+                    return Integer.compare(b.getSortOrder(), a.getSortOrder()); // sortOrder 大的（后加的）先下
+                });
+
+                int removed = 0;
+                for (QrAgent agent : candidates) {
+                    if (removed >= toRemove) break;
+                    if (agent.getRole() == QrAgent.AgentRole.service) {
+                        // 服务老师受保护，只在无可移除的接待员时才下
+                        // 此处 candidates 已排好序，走到这里的 service 说明接待员不够
+                    }
+                    agent.setStatus(QrAgent.AgentStatus.removed);
+                    qrAgentRepo.save(agent);
+                    removed++;
+                    log.info("场景切换 {}→{}，下掉联系人: userid={}, role={}",
+                        oldScene.name(), scene.name(), agent.getAgentUserid(), agent.getRole());
+                }
+
+                log.info("场景切换 {}→{}，学生{}人 扫码率{} 需{}人 现有{}人，下掉{}人",
+                    oldScene.name(), scene.name(), qr.getStudentCount(),
+                    preset.getScanRatio(), need, current, removed);
+
+                // 同步企微侧联系人列表
+                final Long syncQrId = qrCodeId;
+                TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try { syncQrUsersToWechat(syncQrId); }
+                            catch (Exception e) {
+                                log.error("场景切换后同步企微失败: qrCodeId={}", syncQrId, e);
+                            }
+                        }
+                    });
+            } else {
+                log.info("场景切换 {}→{}，需{}人 现有{}人（无需调整）",
+                    oldScene.name(), scene.name(), need, current);
+            }
+        }
+
+        log.info("活码 {} 场景切换为 {}, urgentRatio 同步更新为 {}", qrCodeId, scene.name(), preset.getUrgentRatio());
+    }
+
+    /**
+     * 批量切换活码场景。
+     *
+     * <p>同步更新紧急阈值（urgentRatio）以匹配目标场景预设。
+     * 通过 JPQL 批量更新，避免逐条查询。</p>
+     *
+     * @param ids   活码主键 ID 列表
+     * @param scene 目标场景枚举
+     * @return 成功更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateScene(List<Long> ids, Scene scene) {
+        if (ids == null || ids.isEmpty()) return 0;
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+        return qrCodeRepo.batchUpdateScene(scene, preset.getUrgentRatio(), ids);
+    }
+
+    /**
      * 更新活码的样式配置（主题色、引导文案、是否显示校名、Logo 路径）。
      *
      * <p>样式配置以 JSON 字符串形式存储在 {@link QrCode#styleConfig} 字段中。
@@ -1134,7 +1273,7 @@ public class QrCodeService {
 
             // ① 确保在职继承目标在全局池中
             if (req.getTransferTargetUserid() != null && !req.getTransferTargetUserid().isBlank()) {
-                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 100);
+                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 150);
             }
 
             // ② 初始上码员工：优先使用 initialAgentUserids 列表
@@ -1167,7 +1306,7 @@ public class QrCodeService {
 
             // 确保指定员工在全局池中，并写入 QrAgent
             int defaultDailyMax = req.getServiceDailyMax() != null
-                ? req.getServiceDailyMax() : 30;
+                ? req.getServiceDailyMax() : 150;
             // 手动指定的初始员工作为「服务老师」，其余从全局池补的作为「接待员」
             for (String uid : initialUserids) {
                 poolService.ensureInPool(uid, defaultDailyMax);
@@ -1183,7 +1322,7 @@ public class QrCodeService {
             // 不够数，从全局池自动补（排除已绑定员工，避免重复）
             Set<String> boundUserids = new HashSet<>(initialUserids);
             while (needCount > 0) {
-                GlobalAgentPool next = poolService.takeStandby(boundUserids);
+                GlobalAgentPool next = poolService.takeStandby(boundUserids, req.getDepartmentId());
                 if (next == null) break;
                 boundUserids.add(next.getAgentUserid());
                 qrAgentRepo.save(QrAgent.builder()
@@ -1432,7 +1571,7 @@ public class QrCodeService {
             // 从全局池找替补，最多尝试 20 次
             String replacementUserid = null;
             for (int attempt = 0; attempt < 20; attempt++) {
-                GlobalAgentPool next = poolService.takeStandby(excludeUserids);
+                GlobalAgentPool next = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
                 if (next == null) break;
 
                 // 二次校验：替补也必须是正常状态

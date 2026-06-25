@@ -73,7 +73,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
     @Test
     @DisplayName("达到日限 → 扩容：旧员工下码(full) + 新员工上码(active) + 轮换日志")
     void shouldExpandWhenDailyLimitReached() {
-        // agent1 的 dailyMax=100，直接调 expandQrCodeUsers 模拟日限到达
+        // agent1 的 dailyMax=150，直接调 expandQrCodeUsers 模拟日限到达
         GlobalAgentPool agent1Pool = poolRepo.findByAgentUserid("agent1").orElseThrow();
         QrAgent agent1Qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(testQr.getId(), "agent1").orElseThrow();
 
@@ -140,8 +140,8 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
     void shouldTriggerCheckAndRotateAtFullThreshold() {
         int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
 
-        // agent1 的 dailyMax 默认 100，传 globalCount=100 触发扩容
-        rotationService.checkAndRotate(testQr.getId(), "agent1", 100);
+        // agent1 的 dailyMax 默认 150，传 globalCount=150 触发扩容
+        rotationService.checkAndRotate(testQr.getId(), "agent1", 150);
 
         // flush/clear not needed — service methods manage their own transactions
 
@@ -155,7 +155,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
     void shouldNotChangeBelowThreshold() {
         int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
 
-        // agent1 的 dailyMax=30（bindAgents 默认值），warnRatio=80 → warnThreshold=24
+        // agent1 的 dailyMax=150（bindAgents 默认值），warnRatio=80 → warnThreshold=120
         // globalCount=10 低于 warn 阈值 → 应无变更
         rotationService.checkAndRotate(testQr.getId(), "agent1", 10);
 

@@ -129,13 +129,19 @@ public class QrCodeCreateRequest {
     private String welcomeText;
 
     /**
-     * 客户信息收集表单 JSON 配置。
+     * 关联的表单模板 ID（FK → form_template.id）。
      * <p>
-     * 定义需要客户扫码后填写的表单字段，
-     * 如姓名、手机号、年级等，格式为 JSON。
-     * 不提供则不开启表单收集。
+     * 客户扫码后发送该模板的收集表单链接；
+     * null 则不收集，或继承分组/系统默认。
      * </p>
      */
+    private Long formTemplateId;
+
+    /**
+     * 客户信息收集表单 JSON 配置（已废弃，改用 formTemplateId）。
+     * @deprecated 使用 {@link #formTemplateId} 替代
+     */
+    @Deprecated
     private String collectFormJson;
 
     /**

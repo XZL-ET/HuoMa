@@ -50,6 +50,10 @@ app:
       delay-ms: 0
     datafill:
       threads: 0                  # 阻止 DataFillWorker 启动
+    outbound:
+      threads: 0                  # 阻止 OutboundMsgWorker 启动
+    transfer:
+      threads: 0                  # 阻止 TransferWorker 启动
   redis-stream:
     callback-maxlen: 10000
     tag-maxlen: 10000
@@ -60,11 +64,12 @@ app:
     connect-timeout: 3
     read-timeout: 10
   agent:
-    daily-max-default: 100
-    batch-import-daily-max: 200
+    daily-max-default: 150
+    batch-import-daily-max: 150
     rotation-lock-ttl-seconds: 60
   transfer:
     form-url: http://localhost:8080/form
+  base-url: http://localhost:8080
   school-entry-url: http://localhost:8080/s
   school-rate-limit:
     max-per-minute: 30

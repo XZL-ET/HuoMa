@@ -266,7 +266,7 @@ public class WechatSyncHealingService {
 
         // 从全局池取替补，最多尝试 20 次，跳过异常状态的员工
         String backupUserid = null;
-        int dailyMax = 100;
+        int dailyMax = 150;
         for (int attempt = 0; attempt < 20; attempt++) {
             GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
             if (backup == null) break;

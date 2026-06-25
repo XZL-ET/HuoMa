@@ -133,6 +133,7 @@
                         <th>今日新增</th>
                         <th>累计客户</th>
                         <th>轮换模式</th>
+                        <th>场景</th>
                         <th>状态</th>
                         <th>操作</th>
                     </tr>
@@ -169,6 +170,11 @@
                         </td>
                         <td>
                             <span class="badge"
+                                  th:classappend="${qr.scene.name() == 'daily_push' ? 'bg-info' : 'bg-warning text-dark'}"
+                                  th:text="${qr.scene.name() == 'daily_push' ? '日常' : '家长会'}"></span>
+                        </td>
+                        <td>
+                            <span class="badge"
                                   th:classappend="${qr.status.name() == 'active' ? 'bg-success' : (qr.status.name() == 'full' ? 'bg-danger' : 'bg-secondary')}"
                                   th:switch="${qr.status.name()}">
                                 <span th:case="'active'">正常</span>
@@ -183,7 +189,7 @@
                         </td>
                     </tr>
                     <tr th:if="${qrCodes.content.isEmpty()}">
-                        <td colspan="11" class="text-center text-muted py-4">
+                        <td colspan="12" class="text-center text-muted py-4">
                             暂无活码数据，点击"手动创建"或"批量导入"开始
                         </td>
                     </tr>
@@ -200,6 +206,7 @@
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
             <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('scene')">切换场景</button>
             <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload()"><i class="bi bi-download"></i> 下载原图</button>
         </span>
     </div>
@@ -396,16 +403,20 @@
                 const cityId = 'city-' + sanitizeId(city.name);
                 html += '<li>';
                 html += '<details open>';
-                html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\'});return false;">';
+                html += '<summary class="tree-summary">';
+                html += '<span class="tree-label" onclick="filterByScope({city:\'' + esc(city.name) + '\'});return false;">';
                 html += '<i class="bi bi-building me-1"></i>' + esc(city.name);
+                html += '</span>';
                 html += '</summary>';
                 html += '<ul class="list-unstyled ms-3">';
                 (city.children || []).forEach(district => {
                     const distId = 'dist-' + sanitizeId(district.name);
                     html += '<li>';
                     html += '<details>';
-                    html += '<summary class="tree-summary" onclick="filterByScope({city:\'' + esc(city.name) + '\',district:\'' + esc(district.name) + '\'});return false;">';
+                    html += '<summary class="tree-summary">';
+                    html += '<span class="tree-label" onclick="filterByScope({city:\'' + esc(city.name) + '\',district:\'' + esc(district.name) + '\'});return false;">';
                     html += '<i class="bi bi-geo-alt me-1"></i>' + esc(district.name);
+                    html += '</span>';
                     html += '</summary>';
                     html += '<ul class="list-unstyled ms-3">';
                     (district.children || []).forEach(group => {
@@ -415,9 +426,11 @@
                         html += '<li>';
                         if (isGroup && group.children && group.children.length > 0) {
                             html += '<details>';
-                            html += '<summary class="tree-summary tree-group" onclick="filterByScope({groupId:' + group.id + '});return false;">';
+                            html += '<summary class="tree-summary tree-group">';
+                            html += '<span class="tree-label" onclick="filterByScope({groupId:' + group.id + '});return false;">';
                             html += '<i class="bi ' + icon + ' me-1"></i>' + label;
                             html += ' <small class="text-muted">(' + group.children.length + ')</small>';
+                            html += '</span>';
                             html += '</summary>';
                             html += '<ul class="list-unstyled ms-3">';
                             group.children.forEach(qr => {
@@ -461,9 +474,13 @@
             document.querySelectorAll('.tree-link').forEach(a => a.classList.remove('active', 'fw-bold'));
             document.querySelectorAll('.tree-summary').forEach(s => s.classList.remove('tree-active'));
 
-            // 高亮当前点击的元素
+            // 高亮当前点击的元素（若点击的是 tree-label，高亮其父级 summary）
             if (event && event.target) {
-                event.target.classList.add('tree-active');
+                let el = event.target;
+                if (el.classList.contains('tree-label')) {
+                    el = el.closest('summary');
+                }
+                if (el) el.classList.add('tree-active');
             }
 
             // 构建筛选参数
@@ -551,6 +568,11 @@
                     if (!st) return;
                     body += '&status=' + st;
                     url = '/qrcodes/batch/status'; break;
+                case 'scene':
+                    const sc = prompt('请输入场景（daily_push=日常 / parent_meeting=家长会）：');
+                    if (!sc) return;
+                    body += '&scene=' + sc;
+                    url = '/qrcodes/batch/scene'; break;
                 default: return;
             }
             fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body})

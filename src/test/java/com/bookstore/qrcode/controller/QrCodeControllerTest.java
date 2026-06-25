@@ -81,7 +81,7 @@ class QrCodeControllerTest {
                 .createMode(QrCode.CreateMode.manual).build();
         when(qrCodeService.getById(1L)).thenReturn(qr);
         when(qrCodeService.getAgents(1L)).thenReturn(List.of());
-        when(qrCodeService.getBackups(1L, 0, 100)).thenReturn(new PageImpl<>(List.of()));
+        when(qrCodeService.getBackups(1L, 0, 20)).thenReturn(new PageImpl<>(List.of()));
         when(qrCodeService.getPoolStats()).thenReturn(java.util.Map.of("standby", 0L, "full", 0L, "blocked", 0L));
         when(qrCodeService.getAllPoolUserids()).thenReturn(List.of());
 

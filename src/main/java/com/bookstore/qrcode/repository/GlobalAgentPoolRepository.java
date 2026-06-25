@@ -141,4 +141,12 @@ public interface GlobalAgentPoolRepository
             + "WHERE p.status = :status")
     int batchResetDailyCurrent(
             @Param("status") GlobalAgentPool.PoolStatus status);
+
+    /** 查询 departmentId 为 NULL 的池记录（存量数据回填用） */
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.departmentId IS NULL")
+    List<GlobalAgentPool> findWithNullDepartmentId();
+
+    /** 统计 departmentId 为 NULL 的池记录数 */
+    @Query("SELECT COUNT(p) FROM GlobalAgentPool p WHERE p.departmentId IS NULL")
+    long countWithNullDepartmentId();
 }

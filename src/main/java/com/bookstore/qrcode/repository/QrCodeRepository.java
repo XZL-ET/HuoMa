@@ -2,6 +2,7 @@ package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.Scene;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -321,4 +322,11 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     @Query("UPDATE QrCode q SET q.status = :status WHERE q.id IN :ids")
     int batchUpdateStatus(@Param("status") QrCode.QrCodeStatus status,
                            @Param("ids") List<Long> ids);
+
+    /** 批量切换场景，同时更新紧急阈值以匹配场景预设 */
+    @Modifying
+    @Query("UPDATE QrCode q SET q.scene = :scene, q.urgentRatio = :urgentRatio WHERE q.id IN :ids")
+    int batchUpdateScene(@Param("scene") Scene scene,
+                         @Param("urgentRatio") int urgentRatio,
+                         @Param("ids") List<Long> ids);
 }

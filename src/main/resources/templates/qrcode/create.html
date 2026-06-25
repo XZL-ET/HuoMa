@@ -84,128 +84,98 @@
 
 <div class="card p-4 mx-auto" style="max-width: 800px;">
     <h5 class="mb-4">手动创建活码</h5>
+
     <form method="post" th:action="@{/qrcodes/create}" id="createForm">
-        <!-- 基本信息区 -->
-        <div class="row g-3 mb-3">
-            <!-- 学校名称（必填）—— 输入时自动补全已有学校 -->
-            <div class="col-md-6">
-                <label class="form-label">学校 <span class="text-danger">*</span>
-                    <span class="badge bg-secondary ms-1" th:text="${schoolOptions.size()}">0</span>
-                </label>
-                <div class="autocomplete-wrapper" id="schoolAcWrapper">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" name="schoolName" class="form-control" required
-                           placeholder="输入学校名，下拉选择已有学校" autocomplete="off">
-                </div>
-            </div>
-            <!-- 学校 ID（自动生成，可手动修改），作为企微 state 参数中的唯一标识 -->
-            <div class="col-md-6">
-                <label class="form-label">学校ID <span class="text-danger">*</span>
-                    <small class="text-muted fw-normal">— 自动生成，可改</small>
-                </label>
-                <div class="input-group">
-                    <input type="text" name="schoolId" id="schoolIdInput" class="form-control"
-                           th:value="${suggestedSchoolId}"
-                           placeholder="自动生成唯一标识">
-                    <button type="button" class="btn btn-outline-secondary" id="regenerateSchoolIdBtn"
-                            title="重新生成">
-                        🔄
-                    </button>
-                </div>
-                <div class="form-text">作为企微 state 参数，用于回调时识别来源活码</div>
-            </div>
-            <!-- 所在城市（必填）—— 输入时自动补全已有城市 -->
-            <div class="col-md-6">
-                <label class="form-label">市州 <span class="text-danger">*</span>
-                    <span class="badge bg-secondary ms-1" th:text="${cityOptions.size()}">0</span>
-                </label>
-                <div class="autocomplete-wrapper" id="cityAcWrapper">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" name="regionCity" class="form-control" required
-                           placeholder="输入城市名，下拉选择已有城市" autocomplete="off">
-                </div>
-            </div>
-            <!-- 所在区县（必填）—— 输入时自动补全已有区县 -->
-            <div class="col-md-6">
-                <label class="form-label">县区 <span class="text-danger">*</span>
-                    <span class="badge bg-secondary ms-1" th:text="${districtOptions.size()}">0</span>
-                </label>
-                <div class="autocomplete-wrapper" id="districtAcWrapper">
-                    <span class="search-icon">🔍</span>
-                    <input type="text" name="regionDistrict" class="form-control" required
-                           placeholder="输入区县名，下拉选择已有区县" autocomplete="off">
-                </div>
-            </div>
-            <!-- 备注（选填） -->
-            <div class="col-12">
-                <label class="form-label">备注</label>
-                <input type="text" name="remark" class="form-control">
-            </div>
-        </div>
 
-        <!-- 员工配置区 -->
-        <h6 class="mb-3">员工配置</h6>
-
-        <!-- 学校人数 — 自动计算所需接待员数量 -->
-        <div class="row g-3 mb-3">
-            <div class="col-md-4">
-                <label class="form-label">学校人数
-                    <small class="text-muted fw-normal">— 每100学生配1接待员</small>
-                </label>
-                <input type="number" name="studentCount" id="studentCountInput"
-                       class="form-control" min="1" max="99999"
-                       placeholder="填入学生总人数">
-                <div class="form-text" id="agentCountPreview" style="display:none;"></div>
-            </div>
-        </div>
-
-                <!-- 场景选择 -->
-                <div class="mb-3">
-                    <label class="form-label">场景</label>
-                    <div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="radio" name="scene"
-                                   id="sceneDaily" value="daily_push" checked
-                                   onchange="onSceneChange()">
-                            <label class="form-check-label" for="sceneDaily">📱 日常推送</label>
-                        </div>
-                        <div class="form-check form-check-inline">
-                            <input class="form-check-input" type="radio" name="scene"
-                                   id="sceneParentMeeting" value="parent_meeting"
-                                   onchange="onSceneChange()">
-                            <label class="form-check-label" for="sceneParentMeeting">🏫 家长会</label>
-                        </div>
+        <!-- ═══════ 基本信息 ═══════ -->
+        <div class="bg-light rounded p-3 mb-3">
+            <h6 class="mb-3">📋 基本信息</h6>
+            <div class="row g-3">
+                <!-- 学校名称（必填）—— 输入时自动补全已有学校 -->
+                <div class="col-md-6">
+                    <label class="form-label">学校 <span class="text-danger">*</span>
+                        <span class="badge bg-secondary ms-1" th:text="${schoolOptions.size()}">0</span>
+                    </label>
+                    <div class="autocomplete-wrapper" id="schoolAcWrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" name="schoolName" class="form-control" required
+                               placeholder="输入学校名，下拉选择已有学校" autocomplete="off">
                     </div>
-                    <div class="form-text">日常：按 10% 扫码率配人 | 家长会：按 60% 扫码率配人</div>
                 </div>
-
-                <!-- 预估接待员 -->
-                <div class="mb-3">
-                    <label for="initialAgentCount" class="form-label">初始接待员数</label>
-                    <div class="input-group" style="max-width:200px">
-                        <input type="number" class="form-control" id="initialAgentCount"
-                               name="initialAgentCount" min="1" max="100"
-                               placeholder="自动计算">
-                        <span class="input-group-text bg-light text-muted small" id="agentEstimate">—</span>
+                <!-- 学校 ID（自动生成，可手动修改） -->
+                <div class="col-md-6">
+                    <label class="form-label">学校ID <span class="text-danger">*</span>
+                        <small class="text-muted fw-normal">— 自动生成，可改</small>
+                    </label>
+                    <div class="input-group">
+                        <input type="text" name="schoolId" id="schoolIdInput" class="form-control"
+                               th:value="${suggestedSchoolId}"
+                               placeholder="自动生成唯一标识">
+                        <button type="button" class="btn btn-outline-secondary" id="regenerateSchoolIdBtn"
+                                title="重新生成">
+                            🔄
+                        </button>
                     </div>
-                    <div class="form-text text-muted small" id="agentEstimateFormula"></div>
+                    <div class="form-text">作为企微 state 参数，用于回调时识别来源活码</div>
                 </div>
-
-                <!-- 所属部门 -->
-                <div class="mb-3">
-                    <label for="departmentId" class="form-label">所属部门</label>
-                    <select class="form-select" id="departmentId" name="departmentId"
-                            style="max-width:300px">
-                        <option value="">不限部门（全局取人）</option>
-                        <option th:each="dept : ${departments}"
-                                th:value="${dept.id}"
-                                th:text="${dept.name}"></option>
+                <!-- 所在城市（必填）—— 输入时自动补全已有城市 -->
+                <div class="col-md-6">
+                    <label class="form-label">市州 <span class="text-danger">*</span>
+                        <span class="badge bg-secondary ms-1" th:text="${cityOptions.size()}">0</span>
+                    </label>
+                    <div class="autocomplete-wrapper" id="cityAcWrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" name="regionCity" class="form-control" required
+                               placeholder="输入城市名，下拉选择已有城市" autocomplete="off">
+                    </div>
+                </div>
+                <!-- 所在区县（必填）—— 输入时自动补全已有区县 -->
+                <div class="col-md-6">
+                    <label class="form-label">县区 <span class="text-danger">*</span>
+                        <span class="badge bg-secondary ms-1" th:text="${districtOptions.size()}">0</span>
+                    </label>
+                    <div class="autocomplete-wrapper" id="districtAcWrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" name="regionDistrict" class="form-control" required
+                               placeholder="输入区县名，下拉选择已有区县" autocomplete="off">
+                    </div>
+                </div>
+                <!-- 所属部门（可搜索）—— 扩容时优先同部门取人 -->
+                <div class="col-md-6">
+                    <label for="deptAcInput" class="form-label">所属部门
+                        <small class="text-muted fw-normal">— 选填</small>
+                    </label>
+                    <div class="autocomplete-wrapper" id="deptAcWrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="deptAcInput" class="form-control"
+                               placeholder="搜索部门名称..." autocomplete="off">
+                    </div>
+                    <input type="hidden" name="departmentId" id="departmentId" value="">
+                    <div class="form-text">扩容时优先从同部门取人；清空则不限制</div>
+                </div>
+                <!-- 备注（选填） -->
+                <div class="col-md-6">
+                    <label class="form-label">备注</label>
+                    <input type="text" name="remark" class="form-control" placeholder="选填">
+                </div>
+                <!-- 收集表单模板（选填）—— 创建后也可在详情页修改 -->
+                <div class="col-md-6" th:if="${!formTemplates.isEmpty()}">
+                    <label class="form-label">收集表单模板
+                        <small class="text-muted fw-normal">— 选填，可后续修改</small>
+                    </label>
+                    <select name="formTemplateId" class="form-select">
+                        <option value="">不收集</option>
+                        <option th:each="t : ${formTemplates}"
+                                th:value="${t.id}"
+                                th:text="${t.name}"></option>
                     </select>
-                    <div class="form-text">扩容时优先从同部门取人</div>
+                    <div class="form-text">客户扫码后将收到该模板的收集表单链接</div>
                 </div>
+            </div>
+        </div>
 
         <!-- 加载员工数据时的错误提示 -->
-        <div th:if="${loadError}" class="alert alert-warning py-1 small mb-2" th:text="${loadError}"></div>
+        <div th:if="${loadError}" class="alert alert-warning py-1 small mb-3" th:text="${loadError}"></div>
 
         <!-- 将后端 userList 嵌入页面供 JS 使用 -->
         <script th:inline="javascript">
@@ -214,41 +184,82 @@
             window._schoolOptions = /*[[${schoolOptions}]]*/ [];
             window._cityOptions = /*[[${cityOptions}]]*/ [];
             window._districtOptions = /*[[${districtOptions}]]*/ [];
+            window._departmentNames = /*[[${departmentNames}]]*/ [];
+            window._departmentMap = /*[[${departmentMap}]]*/ {};
             /*]]>*/
         </script>
 
-        <div class="row g-3 mb-3">
-            <!-- 服务老师选择器 — 活码主联系人，客户扫码随机分配给其中一人 -->
-            <div class="col-12">
-                <label class="form-label">
-                    服务老师 <span class="text-danger">*</span>
-                    <small class="text-muted fw-normal">— 活码主联系人，客户扫码随机分配给其中一人</small>
-                </label>
-                <div id="svcPicker" class="employee-picker"></div>
-                <!-- 隐藏字段：提交时填入 JSON 格式的服务老师数据 -->
-                <input type="hidden" name="serviceTeacherJson" id="svcJson">
-                <!-- 隐藏字段：逗号分隔的 userid 列表（兼容旧版） -->
-                <input type="hidden" name="serviceTeacherUserid" id="svcFallback">
+        <!-- ═══════ 员工配置 ═══════ -->
+        <div class="bg-light rounded p-3 mb-3">
+            <h6 class="mb-3">👥 员工配置</h6>
+
+            <!-- 配置行：人数 / 场景 / 预估 —— 三列等宽 -->
+            <div class="row g-3 mb-3">
+                <!-- 学校人数 — 自动计算所需接待员数量 -->
+                <div class="col-md-4">
+                    <label class="form-label">学校人数
+                        <small class="text-muted fw-normal">— 每100学生配1人</small>
+                    </label>
+                    <input type="number" name="studentCount" id="studentCountInput"
+                           class="form-control" min="1" max="99999"
+                           placeholder="填入学生总人数">
+                    <div class="form-text" id="agentCountPreview" style="display:none;"></div>
+                </div>
+                <!-- 场景选择 — 按钮组，视觉对齐输入框 -->
+                <div class="col-md-4">
+                    <label class="form-label">场景</label>
+                    <div class="btn-group w-100" role="group">
+                        <input type="radio" class="btn-check" name="scene"
+                               id="sceneDaily" value="daily_push" checked
+                               onchange="onSceneChange()">
+                        <label class="btn btn-outline-primary btn-sm" for="sceneDaily">📱 日常</label>
+                        <input type="radio" class="btn-check" name="scene"
+                               id="sceneParentMeeting" value="parent_meeting"
+                               onchange="onSceneChange()">
+                        <label class="btn btn-outline-primary btn-sm" for="sceneParentMeeting">🏫 家长会</label>
+                    </div>
+                    <div class="form-text">日常 20% 扫码率 | 家长会 75%</div>
+                </div>
+                <!-- 预估接待员数 -->
+                <div class="col-md-4">
+                    <label for="initialAgentCount" class="form-label">预估接待员数</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control" id="initialAgentCount"
+                               name="initialAgentCount" min="1" max="100"
+                               placeholder="自动计算">
+                        <span class="input-group-text bg-light text-muted small" id="agentEstimate">—</span>
+                    </div>
+                    <div class="form-text text-muted small" id="agentEstimateFormula"></div>
+                </div>
             </div>
 
-            <!-- 后备接待员选择器 — 服务老师满员后按顺序激活 -->
-            <div class="col-12">
-                <label class="form-label">
-                    后备接待员
-                    <small class="text-muted fw-normal">— 服务老师满员后按顺序激活</small>
-                </label>
-                <div id="receptionistPicker" class="employee-picker"></div>
-                <input type="hidden" name="agentsJson" id="receptionistJson">
-            </div>
+            <!-- 员工选择器 -->
+            <div class="row g-3">
+                <!-- 服务老师选择器 — 活码主联系人 -->
+                <div class="col-12">
+                    <label class="form-label">
+                        服务老师 <span class="text-danger">*</span>
+                        <small class="text-muted fw-normal">— 客户扫码随机分配给其中一人</small>
+                    </label>
+                    <div id="svcPicker" class="employee-picker"></div>
+                    <input type="hidden" name="serviceTeacherJson" id="svcJson">
+                    <input type="hidden" name="serviceTeacherUserid" id="svcFallback">
+                </div>
 
-            <!-- 欢迎语配置 -->
-            <div class="col-md-6">
-                <label class="form-label">欢迎语文案</label>
-                <textarea name="welcomeText" class="form-control" rows="2"
-                          placeholder="欢迎来到XX书店家校服务！..."></textarea>
+                <!-- 后备接待员选择器 — 满员后按序激活 -->
+                <div class="col-12">
+                    <label class="form-label">
+                        后备接待员
+                        <small class="text-muted fw-normal">— 服务老师满员后按序激活</small>
+                    </label>
+                    <div id="receptionistPicker" class="employee-picker"></div>
+                    <input type="hidden" name="agentsJson" id="receptionistJson">
+                </div>
             </div>
-            <!-- 自定义标签板块已移除，customTags 字段保留在实体内以兼容已有数据 -->
         </div>
+
+        <!-- 创建失败错误提示（紧贴提交按钮上方，点击时一定可见） -->
+        <div id="createError" class="alert alert-danger d-none py-2 mb-2" role="alert"></div>
 
         <!-- 提交按钮 -->
         <div class="d-flex gap-2">
@@ -450,10 +461,11 @@ class EmployeePicker {
  * 用法: new AutocompleteInput(document.getElementById('wrapperId'), ['选项1', '选项2', ...])
  */
 class AutocompleteInput {
-    constructor(wrapper, options = []) {
+    constructor(wrapper, options = [], opts = {}) {
         this.wrapper = wrapper;
         this.input = wrapper.querySelector('input');
         this.options = options;
+        this.onSelect = opts.onSelect || null;  // 选中回调(value)
         this.dropdown = null;
         this.activeIdx = -1;
         this.bindEvents();
@@ -504,6 +516,9 @@ class AutocompleteInput {
     select(value) {
         this.input.value = value;
         this.hide();
+        if (this.onSelect) this.onSelect(value);
+        // 派发 input 事件，方便外部监听值变化
+        this.input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     /** 方向键移动高亮 */
@@ -560,28 +575,92 @@ document.addEventListener('DOMContentLoaded', () => {
     if (employees.length > 0) {
         svcPicker = new EmployeePicker(document.getElementById('svcPicker'), {
             items: employees,
-            defaultDailyMax: 30,
+            defaultDailyMax: 150,
             placeholder: '搜索服务老师姓名或账号...'
         });
 
         receptionistPicker = new EmployeePicker(document.getElementById('receptionistPicker'), {
             items: employees,
-            defaultDailyMax: 100,
+            defaultDailyMax: 150,
             placeholder: '搜索后备接待员姓名或账号...'
         });
 
-        // 表单提交前将选中员工数据序列化到隐藏字段
-        document.getElementById('createForm').addEventListener('submit', () => {
-            // 服务老师 → JSON 字符串
+        // 表单提交：先序列化员工数据，再 AJAX 提交，失败时留在页面显示错误
+        document.getElementById('createForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            // 1. 序列化员工选择到隐藏字段
             const svc = svcPicker.getSelected();
             document.getElementById('svcJson').value = svc.length > 0 ? JSON.stringify(svc) : '';
-            // 逗号分隔回退（兼容旧版接口）
             document.getElementById('svcFallback').value = svc.map(s => s.userid).join(',');
-
-            // 接待员 → JSON 字符串
             const receptionist = receptionistPicker.getSelected();
             document.getElementById('receptionistJson').value = receptionist.length > 0
                 ? JSON.stringify(receptionist) : '';
+
+            // 2. 客户端必填校验
+            const errEl = document.getElementById('createError');
+            const form = this;
+            const schoolName = form.querySelector('[name="schoolName"]').value.trim();
+            const city = form.querySelector('[name="regionCity"]').value.trim();
+            const district = form.querySelector('[name="regionDistrict"]').value.trim();
+
+            if (!schoolName) {
+                errEl.textContent = '请填写学校名称';
+                errEl.classList.remove('d-none');
+                form.querySelector('[name="schoolName"]').focus();
+                return;
+            }
+            if (!city) {
+                errEl.textContent = '请填写市州';
+                errEl.classList.remove('d-none');
+                form.querySelector('[name="regionCity"]').focus();
+                return;
+            }
+            if (!district) {
+                errEl.textContent = '请填写县区';
+                errEl.classList.remove('d-none');
+                form.querySelector('[name="regionDistrict"]').focus();
+                return;
+            }
+            if (svc.length === 0) {
+                errEl.textContent = '请至少选择一位服务老师';
+                errEl.classList.remove('d-none');
+                return;
+            }
+
+            // 隐藏之前的错误
+            errEl.classList.add('d-none');
+
+            // 3. 禁用提交按钮防重复点击
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const origText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ 创建中...';
+
+            // 4. AJAX 提交
+            const formData = new FormData(form);
+            fetch(form.action, {
+                method: 'POST',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                body: formData
+            })
+            .then(async resp => {
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || '创建失败，请重试');
+                }
+                // 成功 → 跳转到活码列表
+                window.location.href = '/qrcodes';
+            })
+            .catch(err => {
+                errEl.textContent = '创建失败：' + err.message;
+                errEl.classList.remove('d-none');
+                errEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            })
+            .finally(() => {
+                submitBtn.disabled = false;
+                submitBtn.textContent = origText;
+            });
         });
     }
 
@@ -606,6 +685,22 @@ document.addEventListener('DOMContentLoaded', () => {
     new AutocompleteInput(document.getElementById('cityAcWrapper'), window._cityOptions || []);
     new AutocompleteInput(document.getElementById('districtAcWrapper'), window._districtOptions || []);
 
+    // ── 部门可搜索下拉（选中时同步隐藏域 departmentId）──
+    const deptNames = window._departmentNames || [];
+    const deptMap = window._departmentMap || {};
+    new AutocompleteInput(document.getElementById('deptAcWrapper'), deptNames, {
+        onSelect: function(name) {
+            const id = deptMap[name];
+            document.getElementById('departmentId').value = id !== undefined ? id : '';
+        }
+    });
+    // 手动输入/清空时同步清除隐藏域（用户可能直接输入不存在的部门名）
+    document.getElementById('deptAcInput').addEventListener('input', function() {
+        const val = this.value.trim();
+        const id = deptMap[val];
+        document.getElementById('departmentId').value = id !== undefined ? id : '';
+    });
+
     // ── 学校人数 → 自动计算接待员数预览 ──
     const studentCountInput = document.getElementById('studentCountInput');
     const previewEl = document.getElementById('agentCountPreview');
@@ -627,15 +722,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // 场景配置（由后端 Thymeleaf 渲染）
     const SCENE_CONFIG = {
         daily_push: {
-            scanRatio: /*[[${sceneConfig.dailyPush.scanRatio}]]*/ 0.10,
+            scanRatio: /*[[${sceneConfig.dailyPush.scanRatio}]]*/ 0.20,
             urgentRatio: /*[[${sceneConfig.dailyPush.urgentRatio}]]*/ 95
         },
         parent_meeting: {
-            scanRatio: /*[[${sceneConfig.parentMeeting.scanRatio}]]*/ 0.60,
+            scanRatio: /*[[${sceneConfig.parentMeeting.scanRatio}]]*/ 0.75,
             urgentRatio: /*[[${sceneConfig.parentMeeting.urgentRatio}]]*/ 70
         }
     };
-    const DAILY_MAX = /*[[${dailyMaxDefault} ?: 100]]*/ 100;
+    const DAILY_MAX = /*[[${dailyMaxDefault} ?: 150]]*/ 150;
 
     function onSceneChange() {
         const checkedRadio = document.querySelector('input[name="scene"]:checked');

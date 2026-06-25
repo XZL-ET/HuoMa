@@ -35,13 +35,17 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> csrf
                         // 企微回调 POST 无 CSRF token，必须跳过 CSRF 校验
-                        .ignoringRequestMatchers("/api/wecom/callback/**"))
+                        .ignoringRequestMatchers("/api/wecom/callback/**")
+                        // H5 收集表单提交无 CSRF token
+                        .ignoringRequestMatchers("/api/form/submit"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
                         // Actuator 健康检查：供 K8s 探针使用
                         .requestMatchers("/actuator/health/**").permitAll()
                         .requestMatchers("/actuator/metrics/**").hasRole("ADMIN")
+                        // H5 收集表单：客户侧无需登录
+                        .requestMatchers("/form/**", "/api/form/submit").permitAll()
                         // 下载中心全部路径：由 DownloadAuthenticationFilter 独立处理认证
                         .requestMatchers("/download/**").permitAll()
                         // 用户管理：仅 admin 可访问

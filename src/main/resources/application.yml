@@ -58,21 +58,22 @@ app:
   wecom:
     root-department-id: ${WECOM_ROOT_DEPT_ID:1}
   agent:
-    daily-max-default: ${AGENT_DAILY_MAX:100}
-    batch-import-daily-max: ${AGENT_BATCH_IMPORT_DAILY_MAX:200}
+    daily-max-default: ${AGENT_DAILY_MAX:150}
+    batch-import-daily-max: ${AGENT_BATCH_IMPORT_DAILY_MAX:150}
     rotation-lock-ttl-seconds: ${AGENT_ROTATION_LOCK_TTL:60}
   transfer:
     form-url: ${TRANSFER_FORM_URL:}
+  base-url: ${APP_BASE_URL:https://your-domain.com}
   school-entry-url: ${SCHOOL_ENTRY_URL:}
   school-rate-limit:
     max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:500}
     window-seconds: 60
   scene:
     daily-push:
-      scan-ratio: 0.10
+      scan-ratio: 0.20
       urgent-ratio: 95
     parent-meeting:
-      scan-ratio: 0.60
+      scan-ratio: 0.75
       urgent-ratio: 70
 
 ---

@@ -17,22 +17,22 @@ class SceneAllocationTest {
     @BeforeEach
     void setUp() {
         sceneConfig = new SceneConfigProperties();
-        sceneConfig.setDailyPush(new SceneConfigProperties.ScenePreset(0.10, 95));
-        sceneConfig.setParentMeeting(new SceneConfigProperties.ScenePreset(0.60, 70));
+        sceneConfig.setDailyPush(new SceneConfigProperties.ScenePreset(0.20, 95));
+        sceneConfig.setParentMeeting(new SceneConfigProperties.ScenePreset(0.75, 70));
     }
 
     @Test
-    @DisplayName("日常推送 1000 学生 → 1 接待员")
+    @DisplayName("日常推送 1000 学生 → 2 接待员")
     void dailyPush1000Students() {
-        int need = computeAgentCount(1000, 0.10, 100);
-        assertThat(need).isEqualTo(1);
+        int need = computeAgentCount(1000, 0.20, 150);
+        assertThat(need).isEqualTo(2);
     }
 
     @Test
-    @DisplayName("家长会 1000 学生 → 6 接待员")
+    @DisplayName("家长会 1000 学生 → 5 接待员")
     void parentMeeting1000Students() {
-        int need = computeAgentCount(1000, 0.60, 100);
-        assertThat(need).isEqualTo(6);
+        int need = computeAgentCount(1000, 0.75, 150);
+        assertThat(need).isEqualTo(5);
     }
 
     @ParameterizedTest
@@ -53,16 +53,16 @@ class SceneAllocationTest {
     }
 
     @Test
-    @DisplayName("配置绑定：dailyPush scanRatio=0.10, urgentRatio=95")
+    @DisplayName("配置绑定：dailyPush scanRatio=0.20, urgentRatio=95")
     void configBindingDailyPush() {
-        assertThat(sceneConfig.getDailyPush().getScanRatio()).isEqualTo(0.10);
+        assertThat(sceneConfig.getDailyPush().getScanRatio()).isEqualTo(0.20);
         assertThat(sceneConfig.getDailyPush().getUrgentRatio()).isEqualTo(95);
     }
 
     @Test
-    @DisplayName("配置绑定：parentMeeting scanRatio=0.60, urgentRatio=70")
+    @DisplayName("配置绑定：parentMeeting scanRatio=0.75, urgentRatio=70")
     void configBindingParentMeeting() {
-        assertThat(sceneConfig.getParentMeeting().getScanRatio()).isEqualTo(0.60);
+        assertThat(sceneConfig.getParentMeeting().getScanRatio()).isEqualTo(0.75);
         assertThat(sceneConfig.getParentMeeting().getUrgentRatio()).isEqualTo(70);
     }
 
@@ -70,16 +70,16 @@ class SceneAllocationTest {
     @DisplayName("getPreset 返回正确预设")
     void getPresetReturnsCorrectPreset() {
         SceneConfigProperties.ScenePreset dailyPreset = sceneConfig.getPreset(Scene.daily_push);
-        assertThat(dailyPreset.getScanRatio()).isEqualTo(0.10);
+        assertThat(dailyPreset.getScanRatio()).isEqualTo(0.20);
         assertThat(dailyPreset.getUrgentRatio()).isEqualTo(95);
 
         SceneConfigProperties.ScenePreset meetingPreset = sceneConfig.getPreset(Scene.parent_meeting);
-        assertThat(meetingPreset.getScanRatio()).isEqualTo(0.60);
+        assertThat(meetingPreset.getScanRatio()).isEqualTo(0.75);
         assertThat(meetingPreset.getUrgentRatio()).isEqualTo(70);
 
         // null defaults to daily_push
         SceneConfigProperties.ScenePreset nullPreset = sceneConfig.getPreset(null);
-        assertThat(nullPreset.getScanRatio()).isEqualTo(0.10);
+        assertThat(nullPreset.getScanRatio()).isEqualTo(0.20);
         assertThat(nullPreset.getUrgentRatio()).isEqualTo(95);
     }
 

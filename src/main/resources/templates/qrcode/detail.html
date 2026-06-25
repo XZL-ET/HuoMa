@@ -18,6 +18,14 @@
                             <span th:if="${qr.studentCount != null}">
                                 | 学生人数：<span th:text="${qr.studentCount}"></span>人
                             </span>
+                            | 场景：
+                            <form th:action="@{/qrcodes/{id}/scene(id=${qr.id})}" method="post" class="d-inline">
+                                <select name="scene" class="form-select form-select-sm d-inline w-auto"
+                                        onchange="this.form.submit()">
+                                    <option value="daily_push" th:selected="${qr.scene.name() == 'daily_push'}">📱 日常推送</option>
+                                    <option value="parent_meeting" th:selected="${qr.scene.name() == 'parent_meeting'}">🏫 家长会</option>
+                                </select>
+                            </form>
                         </div>
                     </div>
                     <!-- 右侧：状态徽标 + 暂停/启用 + 删除按钮 -->
@@ -135,6 +143,7 @@
                     <tbody>
                         <!-- 服务老师行：th:each 遍历 services 列表 -->
                         <tr th:each="a : ${services}">
+                            <td></td>
                             <td>
                                 <!-- 通过 agentNameMap 将 userid 转为可读名称 -->
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
@@ -241,7 +250,7 @@
                                 <span th:text="${b.dailyCurrent}"
                                       th:classappend="${b.dailyCurrent >= b.dailyMax ? 'text-danger fw-bold' : ''}"></span>
                             </td>
-                            <td th:text="${b.dailyMax}">100</td>
+                            <td th:text="${b.dailyMax}">150</td>
                             <td>
                                 <span class="badge bg-success" th:if="${b.status.name() == 'standby'}">待命</span>
                                 <span class="badge bg-warning text-dark" th:if="${b.status.name() == 'full'}">已满</span>

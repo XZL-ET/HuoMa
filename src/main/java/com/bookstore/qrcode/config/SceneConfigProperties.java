@@ -18,11 +18,11 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "app.scene")
 public class SceneConfigProperties {
 
-    /** 日常推送场景预设：扫码率 10%，预激活阈值 95% */
-    private ScenePreset dailyPush = new ScenePreset(0.10, 95);
+    /** 日常推送场景预设：扫码率 20%，预激活阈值 95% */
+    private ScenePreset dailyPush = new ScenePreset(0.20, 95);
 
-    /** 家长会场景预设：扫码率 60%，预激活阈值 70% */
-    private ScenePreset parentMeeting = new ScenePreset(0.60, 70);
+    /** 家长会场景预设：扫码率 75%，预激活阈值 70% */
+    private ScenePreset parentMeeting = new ScenePreset(0.75, 70);
 
     /**
      * 根据场景枚举获取对应预设配置。
@@ -48,7 +48,7 @@ public class SceneConfigProperties {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class ScenePreset {
-        /** 预期扫码率，如 0.10 表示预计 10% 的学生会扫码 */
+        /** 预期扫码率，如 0.20 表示预计 20% 的学生会扫码 */
         private double scanRatio;
 
         /** 预激活阈值百分比，如 70 表示达到日限 70% 时预加载后备 */
