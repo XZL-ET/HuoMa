@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.config.SceneConfigProperties;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
@@ -88,6 +89,7 @@ public class QrCodeService {
     private final AlertService alertService;
     private final EmployeeRepository employeeRepo;
     private final WechatSyncHealingService healingService;
+    private final SceneConfigProperties sceneConfig;
 
     @Qualifier("taskExecutor")
     private final Executor taskExecutor;
@@ -212,12 +214,19 @@ public class QrCodeService {
             throw new RuntimeException("学校ID已存在: " + req.getSchoolId());
         }
 
-        // 若填写了学校人数，自动计算所需接待员总数（每 100 学生配 1 人，最少 1 人，最多 100 人）
-        if (req.getStudentCount() != null && req.getStudentCount() > 0) {
-            int computed = (int) Math.ceil(req.getStudentCount() / 100.0);
-            int need = Math.max(1, Math.min(100, computed));
+        // 根据场景自动计算所需接待员总数
+        // 公式：ceil(学生人数 × 场景扫码率 / 员工日限)，最少 1 人，最多 100 人
+        // 用户手动指定 initialAgentCount 时跳过自动计算
+        if (req.getStudentCount() != null && req.getStudentCount() > 0
+            && req.getInitialAgentCount() == null) {
+            Scene scene = req.getScene() != null ? req.getScene() : Scene.daily_push;
+            SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+            int expectedScans = (int) Math.ceil(req.getStudentCount() * preset.getScanRatio());
+            int need = Math.max(1, Math.min(100,
+                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
             req.setInitialAgentCount(need);
-            log.info("学校人数={}, 自动计算 initialAgentCount={}", req.getStudentCount(), need);
+            log.info("学校人数={}, 场景={}, 扫码率={}, 自动计算 initialAgentCount={}",
+                req.getStudentCount(), scene.name(), preset.getScanRatio(), need);
         }
 
         // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败回滚事务）
@@ -241,6 +250,10 @@ public class QrCodeService {
         // qr_code 是活码图片的 URL，前端直接展示
         String qrUrl = qrCodeNode.asText();
 
+        // 场景联动阈值
+        Scene effectiveScene = req.getScene() != null ? req.getScene() : Scene.daily_push;
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(effectiveScene);
+
         // 2. 保存活码主表记录
         // createMode 标记为 manual 以区别于批量导入（batch）
         QrCode qr = QrCode.builder()
@@ -260,6 +273,10 @@ public class QrCodeService {
                 ? req.getInitialAgentCount() : 1)
             .studentCount(req.getStudentCount())
             .customTags(req.getCustomTags())
+            .scene(effectiveScene)
+            .departmentId(req.getDepartmentId())
+            .warnRatio(80)
+            .urgentRatio(preset.getUrgentRatio())
             .build();
         qr = qrCodeRepo.save(qr);
 

@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.config.SceneConfigProperties;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.*;
@@ -52,7 +53,8 @@ class QrCodeControllerTest {
                 mock(FormTemplateRepository.class),
                 mock(QrCodeGroupRepository.class),
                 mock(StringRedisTemplate.class),
-                mock(ObjectMapper.class));
+                mock(ObjectMapper.class),
+                mock(SceneConfigProperties.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
