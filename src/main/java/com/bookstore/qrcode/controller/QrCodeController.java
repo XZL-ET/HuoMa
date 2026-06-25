@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.config.SceneConfigProperties;
+import com.bookstore.qrcode.dto.BatchRecycleRequest;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.Customer;
@@ -1360,6 +1361,17 @@ public class QrCodeController {
             redirect.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/qrcodes/" + id;
+    }
+
+    /**
+     * 批量回收闲置接待员 — 标记 removed + 恢复池 standby。
+     */
+    @PostMapping("/api/qrcodes/{id}/agents/batch-recycle")
+    @ResponseBody
+    public Map<String, Object> batchRecycleAgents(
+            @PathVariable Long id,
+            @RequestBody BatchRecycleRequest request) {
+        return qrCodeService.batchRecycleAgents(id, request.getAgentIds());
     }
 
     /**

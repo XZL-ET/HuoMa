@@ -1489,6 +1489,85 @@ public class QrCodeService {
     }
 
     /**
+     * 批量回收闲置接待员回全局池。
+     *
+     * <h3>校验规则</h3>
+     * <ol>
+     *   <li>服务老师（role=service）不可回收</li>
+     *   <li>回收后活码上至少保留 1 个 active 接待员</li>
+     * </ol>
+     *
+     * @param qrCodeId 活码 ID
+     * @param agentIds 要回收的 QrAgent ID 列表
+     * @return 回收结果，包含成功数/拒绝数及拒绝原因
+     */
+    @Transactional
+    public Map<String, Object> batchRecycleAgents(Long qrCodeId, List<Long> agentIds) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        Map<String, String> rejectReasons = new LinkedHashMap<>();
+        int recycled = 0;
+
+        // 统计当前 active 接待员总数
+        List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() == QrAgent.AgentStatus.active)
+            .toList();
+        long activeReceptionistCount = activeAgents.stream()
+            .filter(a -> a.getRole() != QrAgent.AgentRole.service
+                       && a.getRole() != QrAgent.AgentRole.dual)
+            .count();
+
+        for (Long agentId : agentIds) {
+            QrAgent agent = qrAgentRepo.findById(agentId).orElse(null);
+            if (agent == null || !agent.getQrCodeId().equals(qrCodeId)) {
+                rejectReasons.put(String.valueOf(agentId), "不存在或不属于此活码");
+                continue;
+            }
+            // 服务老师不可回收
+            if (agent.getRole() == QrAgent.AgentRole.service) {
+                rejectReasons.put(String.valueOf(agentId), "服务老师不可回收");
+                continue;
+            }
+            // 至少保留 1 个 active 接待员
+            if (agent.getRole() == QrAgent.AgentRole.receptionist
+                && activeReceptionistCount - recycled <= 1) {
+                rejectReasons.put(String.valueOf(agentId), "至少保留1个接待员");
+                continue;
+            }
+
+            agent.setStatus(QrAgent.AgentStatus.removed);
+            agent.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(agent);
+
+            // 恢复全局池状态
+            GlobalAgentPool pool = poolRepo.findByAgentUserid(agent.getAgentUserid()).orElse(null);
+            if (pool != null && pool.getStatus() != GlobalAgentPool.PoolStatus.standby) {
+                pool.setStatus(GlobalAgentPool.PoolStatus.standby);
+                poolRepo.save(pool);
+            }
+            recycled++;
+        }
+
+        result.put("recycled", recycled);
+        result.put("rejected", agentIds.size() - recycled);
+        result.put("rejectReasons", rejectReasons);
+
+        // 异步同步企微
+        if (recycled > 0) {
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        syncQrUsersToWechat(qrCodeId);
+                    }
+                });
+        }
+
+        log.info("批量回收完成: qrCodeId={}, recycled={}, rejected={}",
+            qrCodeId, recycled, agentIds.size() - recycled);
+        return result;
+    }
+
+    /**
      * 判定员工的异常状态标签（统一工具方法，供全系统复用）。
      *
      * <p>判定优先级：Agent blocked → Agent melted → Agent warning
