@@ -645,3 +645,42 @@ PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- 系统配置：默认欢迎语
 INSERT IGNORE INTO system_config (config_key, config_value) VALUES
 ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
+
+-- ============================================
+-- 场景分配优化：scene + department_id 字段
+-- ============================================
+
+-- qr_code: scene 列（场景枚举）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'scene') = 0,
+    'ALTER TABLE qr_code ADD COLUMN scene ENUM(''daily_push'',''parent_meeting'')
+        NOT NULL DEFAULT ''daily_push'' COMMENT ''场景：日常推送/家长会''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_code: department_id 列（所属企微部门）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'department_id') = 0,
+    'ALTER TABLE qr_code ADD COLUMN department_id BIGINT
+        COMMENT ''所属企微部门ID（扩容时同部门优先取人）''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- global_agent_pool: department_id 列（员工所属部门）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_agent_pool' AND COLUMN_NAME = 'department_id') = 0,
+    'ALTER TABLE global_agent_pool ADD COLUMN department_id BIGINT
+        COMMENT ''员工所属企微部门ID（从Employee同步，取主部门）''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 部门索引（加速同部门 standby 查询）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_agent_pool' AND INDEX_NAME = 'idx_pool_dept') = 0,
+    'CREATE INDEX idx_pool_dept ON global_agent_pool(department_id, status, sort_order)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;

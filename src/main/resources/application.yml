@@ -67,6 +67,13 @@ app:
   school-rate-limit:
     max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:500}
     window-seconds: 60
+  scene:
+    daily-push:
+      scan-ratio: 0.10
+      urgent-ratio: 95
+    parent-meeting:
+      scan-ratio: 0.60
+      urgent-ratio: 70
 
 ---
 spring:
