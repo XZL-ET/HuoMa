@@ -424,6 +424,21 @@ public class QrCodeService {
                         catch (NumberFormatException ignored) {}
                     }
                     req.setWelcomeText(item.get("welcomeText"));
+
+                    String sceneStr = item.get("scene");
+                    if (sceneStr != null && !sceneStr.isBlank()) {
+                        try { req.setScene(Scene.valueOf(sceneStr.trim().toLowerCase())); }
+                        catch (IllegalArgumentException e) {
+                            req.setScene(Scene.daily_push);
+                        }
+                    }
+
+                    String deptIdStr = item.get("departmentId");
+                    if (deptIdStr != null && !deptIdStr.isBlank()) {
+                        try { req.setDepartmentId(Long.valueOf(deptIdStr.trim())); }
+                        catch (NumberFormatException ignored) { }
+                    }
+
                     // 通过 self（Spring 代理）调用 create()，确保 @Transactional 生效
                     self.create(req);
                     success++;
@@ -1277,6 +1292,7 @@ public class QrCodeService {
                 item.put("row", String.valueOf(i + 1));
                 // 列索引: 0学校名称 1学校ID 2市 3区 4服务老师 5学校人数
                 //          6初始上码员工数 7接待员 8服务老师日上限 9欢迎语 10备注
+                //          11场景 12部门ID
                 item.put("schoolName", getCellString(row, 0));
                 item.put("schoolId", getCellString(row, 1));
                 item.put("regionCity", getCellString(row, 2));
@@ -1288,6 +1304,8 @@ public class QrCodeService {
                 item.put("serviceDailyMax", getCellString(row, 8));
                 item.put("welcomeText", getCellString(row, 9));
                 item.put("remark", getCellString(row, 10));
+                item.put("scene", getCellString(row, 11));
+                item.put("departmentId", getCellString(row, 12));
                 // 学校名称和学校ID必填
                 if (!item.get("schoolName").isEmpty() && !item.get("schoolId").isEmpty()) {
                     items.add(item);
