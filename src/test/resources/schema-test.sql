@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS qr_code (
     initial_agent_count INT DEFAULT 1,
     custom_tags VARCHAR(500),
     student_count INT,
+    scene ENUM('daily_push','parent_meeting') NOT NULL DEFAULT 'daily_push',
+    department_id BIGINT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS global_agent_pool (
     daily_max INT NOT NULL DEFAULT 100,
     daily_current INT NOT NULL DEFAULT 0,
     sort_order INT NOT NULL DEFAULT 0,
+    department_id BIGINT,
     status VARCHAR(20) NOT NULL DEFAULT 'standby'
         CHECK (status IN ('standby','full','blocked')),
     last_reset_at TIMESTAMP,

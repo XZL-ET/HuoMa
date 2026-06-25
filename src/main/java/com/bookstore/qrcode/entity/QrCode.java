@@ -145,6 +145,16 @@ public class QrCode {
     @Column(name = "student_count")
     private Integer studentCount;
 
+    /** 活码创建场景：daily_push-日常推送, parent_meeting-家长会 */
+    @Column(name = "scene", nullable = false, length = 20)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private Scene scene = Scene.daily_push;
+
+    /** 所属企微部门 ID，用于扩容时同部门优先取人 */
+    @Column(name = "department_id")
+    private Long departmentId;
+
     /** 客户扫码后自动打标的自定义标签列表，多个标签以逗号分隔 */
     @Column(name = "custom_tags", length = 500)
     private String customTags;

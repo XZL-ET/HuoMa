@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.dto;
 
+import com.bookstore.qrcode.entity.Scene;
 import lombok.Data;
 
 /**
@@ -34,6 +35,12 @@ public class QrCodeCreateRequest {
 
     /** 学校学生人数，用于自动计算所需接待员数量（每100学生配1人，最少1人，最多100人） */
     private Integer studentCount;
+
+    /** 活码创建场景：daily_push-日常推送, parent_meeting-家长会，默认 daily_push */
+    private Scene scene;
+
+    /** 所属企微部门 ID，用于扩容时同部门优先取人 */
+    private Long departmentId;
 
     /** 备注信息，灵活存储额外描述或内部说明 */
     private String remark;

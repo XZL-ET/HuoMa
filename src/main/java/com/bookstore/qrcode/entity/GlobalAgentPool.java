@@ -52,6 +52,10 @@ public class GlobalAgentPool {
     @Builder.Default
     private Integer sortOrder = 0;
 
+    /** 员工所属企微部门 ID（取主部门，从 Employee 同步），null 时退化为全局取人 */
+    @Column(name = "department_id")
+    private Long departmentId;
+
     /** 池状态：standby / full / blocked */
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
