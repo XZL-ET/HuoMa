@@ -85,6 +85,11 @@ public enum Scene {
 private Long departmentId;  // null = 未分配部门，扩容时退化为全局取人
 ```
 
+**多部门处理**：企微 API 返回的 `department` 是数组（如 `[1,2,3]`），一个员工可属多个部门。取主部门策略：
+1. 优先用企微 `main_department` 字段（如有）
+2. 否则取 `department` 数组的第一个元素
+3. 写入 `GlobalAgentPool.departmentId` 时仅取该主部门
+
 **QrCodeCreateRequest 新增：**
 ```java
 private Scene scene;         // 创建时场景选择
@@ -195,8 +200,8 @@ Excel 批量创建流程新增两列：
 
 | 列 | 字段 | 说明 |
 |----|------|------|
-| H (8) | scene | daily_push / parent_meeting，默认 daily_push |
-| I (9) | departmentId | 企微部门 ID，可选 |
+| L (11) | scene | daily_push / parent_meeting，默认 daily_push |
+| M (12) | departmentId | 企微部门 ID，可选 |
 
 解析代码 `QrCodeService.parseImportRow()` 需同步更新。
 
