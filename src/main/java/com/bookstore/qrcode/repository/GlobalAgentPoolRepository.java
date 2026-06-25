@@ -53,10 +53,11 @@ public interface GlobalAgentPoolRepository
      * @param status 池状态（standby）
      * @return 同部门 standby 列表
      */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
     @Query("SELECT p FROM GlobalAgentPool p WHERE p.status = :status "
          + "AND (:deptIds IS NULL OR p.departmentId IN :deptIds) "
          + "ORDER BY p.sortOrder ASC")
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
     List<GlobalAgentPool> findStandbysByDeptForUpdate(
         @Param("deptIds") Collection<Long> departmentIds,
         @Param("status") GlobalAgentPool.PoolStatus status);

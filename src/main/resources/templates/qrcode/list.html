@@ -488,11 +488,7 @@
         }
 
         function filterTableByGroupId(groupId) {
-            // 从服务端渲染的 data-group-id 属性筛选（需要在 server 端添加）
-            // 备选方案：通过已知对应关系过滤
-            // 由于当前表格行没有 data-group-id，这里直接刷新带 group 参数的页面
-            // 或使用已有的城市/区县筛选 — 这里退化为重定向
-            window.location.href = '/qrcodes';
+            window.location.href = '/qrcodes?groupId=' + encodeURIComponent(groupId);
         }
 
         function filterTableByQrCodeId(qrcodeId) {

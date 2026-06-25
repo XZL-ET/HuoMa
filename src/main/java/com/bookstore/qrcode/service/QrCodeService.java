@@ -1540,9 +1540,12 @@ public class QrCodeService {
                 rejectReasons.put(String.valueOf(agentId), "不存在或不属于此活码");
                 continue;
             }
-            // 服务老师不可回收
-            if (agent.getRole() == QrAgent.AgentRole.service) {
-                rejectReasons.put(String.valueOf(agentId), "服务老师不可回收");
+            // 服务老师和双角色员工不可回收
+            if (agent.getRole() == QrAgent.AgentRole.service
+                || agent.getRole() == QrAgent.AgentRole.dual) {
+                rejectReasons.put(String.valueOf(agentId),
+                    agent.getRole() == QrAgent.AgentRole.service
+                        ? "服务老师不可回收" : "双角色员工不可回收");
                 continue;
             }
             // 至少保留 1 个 active 接待员

@@ -164,8 +164,8 @@
                             <td>
                                 <input type="checkbox" class="receptionist-check"
                                        th:value="${a.id}"
-                                       th:disabled="${a.role.name() == 'service'}"
-                                       th:title="${a.role.name() == 'service' ? '服务老师不可回收' : '勾选以回收'}">
+                                       th:disabled="${a.role.name() == 'service' || a.role.name() == 'dual'}"
+                                       th:title="${a.role.name() == 'service' ? '服务老师不可回收' : (a.role.name() == 'dual' ? '双角色员工不可回收' : '勾选以回收')}">
                             </td>
                             <td>
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
