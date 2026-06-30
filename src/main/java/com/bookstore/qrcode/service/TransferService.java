@@ -459,7 +459,13 @@ public class TransferService {
                 ? qrCodeRepo.findById(transfer.getQrCodeId()).orElse(null) : null;
 
             // 客户或活码不存在则跳过
-            if (customer == null || qr == null) return;
+            if (customer == null || qr == null) {
+                log.warn("发送交接欢迎语跳过: customer={}, qr={}, transferId={}",
+                    customer == null ? "null" : customer.getId(),
+                    qr == null ? "null" : qr.getId(),
+                    transfer.getId());
+                return;
+            }
 
             // 三级回退解析交接问候语配置：① QrCode 新列 → ② welcomeConfig JSON（老活码）→ ③ SystemConfig 全局默认
             TransferGreetingCfg cfg = resolveTransferGreetingConfig(qr);
