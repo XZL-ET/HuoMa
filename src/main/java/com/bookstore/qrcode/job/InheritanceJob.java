@@ -193,6 +193,8 @@ public class InheritanceJob {
                                         String windowLabel) {
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
         int totalTransfers = 0;
+        int skippedNoReceptionist = 0;
+        int skippedNoService = 0;
 
         for (QrCode qr : activeQrs) {
             try {
@@ -213,7 +215,12 @@ public class InheritanceJob {
                               || a.getRole() == QrAgent.AgentRole.dual)
                     .findFirst().orElse(null);
 
-                if (receptionists.isEmpty() || serviceTeacher == null) {
+                if (receptionists.isEmpty()) {
+                    skippedNoReceptionist++;
+                    continue;
+                }
+                if (serviceTeacher == null) {
+                    skippedNoService++;
                     continue;
                 }
 
@@ -243,9 +250,10 @@ public class InheritanceJob {
                 log.error("在职继承失败: qrCodeId={}", qr.getId(), e);
             }
         }
-        if (totalTransfers > 0) {
-            log.info("在职继承（{}）: 共发起 {} 条转移, 窗口=[{}, {}]",
-                windowLabel, totalTransfers, windowStart, windowEnd);
+        if (totalTransfers > 0 || skippedNoReceptionist > 0 || skippedNoService > 0) {
+            log.info("在职继承（{}）: 共发起 {} 条转移, 无接待员跳过 {} 条, 无服务老师跳过 {} 条, 窗口=[{}, {}]",
+                windowLabel, totalTransfers, skippedNoReceptionist, skippedNoService,
+                windowStart, windowEnd);
         }
     }
 }

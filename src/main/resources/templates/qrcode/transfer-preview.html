@@ -226,6 +226,13 @@ async function pollBatchStatus(qrId, expectedTotal) {
         const resp = await fetch('/qrcodes/' + qrId + '/transfer/batch-status');
         const data = await resp.json();
         if (data.error) { console.error(data.error); return; }
+        // 数据库暂无记录：TransferWorker 还在消费队列
+        if ((data.total || 0) === 0) {
+            document.getElementById('progressNote').textContent =
+                '⏳ 队列处理中，已推送 ' + expectedTotal + ' 条，等待 Worker 消费...';
+            document.getElementById('progressPending').classList.add('progress-bar-animated');
+            return;
+        }
         updateProgress(data);
         const finished = (FINAL_STATUSES.reduce((s, k) => s + (data[k] || 0), 0));
         // 全部达到终态则停止轮询
