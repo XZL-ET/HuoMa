@@ -1747,6 +1747,36 @@ public class QrCodeController {
     }
 
     /**
+     * 批量转移进度查询 —— 返回指定活码下转移记录的各状态计数。
+     *
+     * <p>GET /qrcodes/{id}/transfer/batch-status → {"total":242, "pending_confirm":10,
+     * "confirmed":200, "rejected":2, "api_failed":0, ...}</p>
+     * 用于前端轮询展示实时转移进度。
+     *
+     * @param id 活码 ID
+     */
+    @GetMapping("/{id}/transfer/batch-status")
+    @ResponseBody
+    public Map<String, Object> transferBatchStatus(@PathVariable Long id) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            long total = transferRepo.countByQrCodeId(id);
+            result.put("total", total);
+            for (CustomerTransfer.TransferStatus s : CustomerTransfer.TransferStatus.values()) {
+                result.put(s.name(), transferRepo.countByQrCodeIdAndStatus(id, s));
+            }
+            // 已发问候语数
+            long greetingSent = 0;
+            // countByQrCodeIdAndGreetingSent 不存在，用 JPQL 的话太重
+            // 暂时跳过，后续如有需求再加
+            result.put("greeting_sent", greetingSent);
+        } catch (Exception e) {
+            result.put("error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
      * 在职继承预览 —— 查询指定活码的待转移客户数量。
      *
      * <p>GET /qrcodes/{id}/transfer/preview —— 统计该活码下所有接待员

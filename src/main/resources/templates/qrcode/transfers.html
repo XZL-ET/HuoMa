@@ -4,9 +4,19 @@
 <main>
 <div class="card p-4">
     <h5>🔄 在职继承记录 — <span th:text="${qr.schoolName}"></span></h5>
+
+    <!-- 实时统计条 -->
+    <div id="transferStats" class="d-flex flex-wrap gap-2 mb-3 small">
+        <span class="badge bg-secondary">加载中...</span>
+    </div>
+
     <a th:href="@{/qrcodes/{id}(id=${qr.id})}" class="btn btn-sm btn-outline-secondary mb-2">
         ← 返回活码详情
     </a>
+    <a th:href="@{/qrcodes/{id}/transfer-preview(id=${qr.id})}" class="btn btn-sm btn-outline-primary mb-2 ms-1">
+        📋 转移预览
+    </a>
+    <div id="tableContainer">
     <table class="table table-sm mt-3">
         <thead><tr><th>客户ID</th><th>转出方</th><th>转入方</th><th>状态</th><th>时间</th><th>欢迎语</th><th>失败原因</th></tr></thead>
         <tbody>
@@ -53,6 +63,50 @@
             </li>
         </ul>
     </nav>
+</div><!-- tableContainer -->
 </div>
+</main>
+
+<script>
+const QR_ID = [[${qr.id}]];
+let statsTimer = null;
+let tableTimer = null;
+let lastPending = -1;
+
+// 轮询统计
+async function refreshStats() {
+    try {
+        const resp = await fetch('/qrcodes/' + QR_ID + '/transfer/batch-status');
+        const data = await resp.json();
+        if (data.error) return;
+        const html = [];
+        html.push('<span class="badge bg-secondary">总计: ' + (data.total || 0) + '</span>');
+        html.push('<span class="badge bg-info">⏳ 待确认: ' + (data.pending_confirm || 0) + '</span>');
+        html.push('<span class="badge bg-success">✅ 已完成: ' + (data.confirmed || 0) + '</span>');
+        html.push('<span class="badge bg-danger">❌ 已拒绝: ' + (data.rejected || 0) + '</span>');
+        html.push('<span class="badge bg-warning">⏰ 超时: ' + (data.timeout || 0) + '</span>');
+        html.push('<span class="badge bg-secondary">⚠ API失败: ' + (data.api_failed || 0) + '</span>');
+        document.getElementById('transferStats').innerHTML = html.join(' ');
+        // 有 pending 变化时自动刷表
+        const curPending = data.pending_confirm || 0;
+        if (lastPending >= 0 && curPending !== lastPending) {
+            location.reload();
+        }
+        lastPending = curPending;
+        // 无 pending 则停止
+        if (data.total > 0 && curPending === 0 && statsTimer) {
+            clearInterval(statsTimer); statsTimer = null;
+            if (tableTimer) { clearInterval(tableTimer); tableTimer = null; }
+        }
+    } catch(e) {}
+}
+
+(function() {
+    refreshStats();
+    statsTimer = setInterval(refreshStats, 3000);
+    // 兜底：每 20s 刷新表格
+    tableTimer = setInterval(() => location.reload(), 20000);
+})();
+</script>
 </main>
 </html>

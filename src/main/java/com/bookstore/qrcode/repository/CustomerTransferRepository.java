@@ -113,6 +113,16 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     boolean existsByCustomerIdAndStatusIn(Long customerId, List<CustomerTransfer.TransferStatus> statuses);
 
     /**
+     * 统计指定活码下所有转移记录总数。
+     */
+    long countByQrCodeId(Long qrCodeId);
+
+    /**
+     * 统计指定活码下特定状态的转移记录数。
+     */
+    long countByQrCodeIdAndStatus(Long qrCodeId, CustomerTransfer.TransferStatus status);
+
+    /**
      * 查询指定状态下重试次数已达上限的转移记录。
      * <p>
      * 用于将重试耗尽但仍处于 pending_confirm 的记录标记为 retry_limit。
