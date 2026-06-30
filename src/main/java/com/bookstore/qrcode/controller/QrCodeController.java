@@ -1936,8 +1936,9 @@ public class QrCodeController {
                 if (rec.getAgentUserid().equals(serviceTeacher.getAgentUserid())) {
                     continue;
                 }
-                // 不限时间，查该接待员的所有客户
-                List<Customer> customers = customerRepo.findByAddedAgent(rec.getAgentUserid());
+                // 不限时间，查该接待员在该学校下的客户（限定 schoolId，防止串活码）
+                List<Customer> customers = customerRepo.findByAddedAgentAndSchoolId(
+                    rec.getAgentUserid(), qr.getSchoolId());
 
                 for (Customer c : customers) {
                     Map<String, Object> event = new LinkedHashMap<>();

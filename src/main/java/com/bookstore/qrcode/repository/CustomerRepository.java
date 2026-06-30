@@ -185,6 +185,19 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     List<Customer> findByAddedAgent(String addedAgent);
 
     /**
+     * 查询指定接待员在指定学校下添加的所有客户（不限时间），用于全量补转。
+     * <p>
+     * 与 {@link #findByAddedAgent(String)} 不同，此方法限定学校，
+     * 避免把一个接待员在其他活码下的客户也转给当前活码的服务老师。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @return 该接待员在该学校下添加的全部客户列表，按添加时间升序
+     */
+    List<Customer> findByAddedAgentAndSchoolId(String addedAgent, String schoolId);
+
+    /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
      * 仅返回需要修复的记录，避免全表扫描。
      */
