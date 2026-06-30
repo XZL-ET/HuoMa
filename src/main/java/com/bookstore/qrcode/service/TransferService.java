@@ -80,7 +80,10 @@ public class TransferService {
     @Transactional
     public void initiate(Long customerId, String fromUserid,
                           String toUserid, String externalUserid, String state) {
-        if (state == null) return;
+        if (state == null) {
+            log.warn("继承发起跳过: state 为空, customerId={}, external={}", customerId, externalUserid);
+            return;
+        }
 
         // ---- Redis 分布式锁：防止同一客户并发发起重复继承 ----
         String lockKey = "lock:transfer:" + customerId;
@@ -102,7 +105,10 @@ public class TransferService {
 
             // 根据 state（schoolId）查找活码，无对应活码则跳过
             QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
-            if (qr == null) return;
+            if (qr == null) {
+                log.warn("继承发起跳过: 找不到对应活码, state={}, customerId={}", state, customerId);
+                return;
+            }
 
             // 查找服务老师时包含 active/full（full 仍可接收转移），仅排除 removed
             List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId()).stream()

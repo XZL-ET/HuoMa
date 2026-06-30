@@ -93,6 +93,9 @@ public class TransferWorker {
                             transferService.initiate(customerId, fromUserid,
                                 toUserid,  // 可为 null，initiate 自动查找服务老师
                                 externalUserid, state);
+                        } else {
+                            log.warn("Transfer 事件缺少必要字段，跳过: msgId={}, customerId={}, from_userid={}, external_userid={}",
+                                msgId, customerId, fromUserid, externalUserid);
                         }
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TRANSFER_STREAM_KEY,
