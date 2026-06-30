@@ -1796,7 +1796,8 @@ public class QrCodeController {
                 if (a.getRole() == QrAgent.AgentRole.receptionist
                         || a.getRole() == QrAgent.AgentRole.dual) {
                     customerCount += customerRepo
-                        .countByAddedAgentAndAddTimeAfter(a.getAgentUserid(), todayStart);
+                        .countByAddedAgentAndSchoolIdAndAddTimeAfter(
+                            a.getAgentUserid(), qr.getSchoolId(), todayStart);
                 }
             }
             result.put("receptionistCount", recCount);
@@ -1868,7 +1869,8 @@ public class QrCodeController {
                     continue;
                 }
                 List<Customer> customers = customerRepo
-                    .findByAddedAgentAndAddTimeAfter(rec.getAgentUserid(), todayStart);
+                    .findByAddedAgentAndSchoolIdAndAddTimeAfter(
+                        rec.getAgentUserid(), qr.getSchoolId(), todayStart);
 
                 for (Customer c : customers) {
                     Map<String, Object> event = new LinkedHashMap<>();
@@ -2190,7 +2192,8 @@ public class QrCodeController {
                 .map(Employee::getName).orElse(agent.getAgentUserid());
 
             List<Customer> todayCustomers = customerRepo
-                .findByAddedAgentAndAddTimeAfter(agent.getAgentUserid(), todayStart);
+                .findByAddedAgentAndSchoolIdAndAddTimeAfter(
+                    agent.getAgentUserid(), qr.getSchoolId(), todayStart);
 
             List<Map<String, Object>> customerRows = new ArrayList<>();
             for (Customer c : todayCustomers) {
@@ -2285,7 +2288,8 @@ public class QrCodeController {
             for (String uid : fromUserids) {
                 if (uid.equals(serviceTeacher.getAgentUserid())) continue;
                 List<Customer> customers = customerRepo
-                    .findByAddedAgentAndAddTimeAfter(uid, todayStart);
+                    .findByAddedAgentAndSchoolIdAndAddTimeAfter(
+                        uid, qr.getSchoolId(), todayStart);
                 for (Customer c : customers) {
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("customer_id", c.getId().toString());

@@ -222,8 +222,8 @@ public class InheritanceJob {
                         continue; // 跳过自己转自己（dual 角色）
                     }
                     List<Customer> customers = customerRepo
-                        .findByAddedAgentAndAddTimeBetween(
-                            rec.getAgentUserid(), windowStart, windowEnd);
+                        .findByAddedAgentAndSchoolIdAndAddTimeBetween(
+                            rec.getAgentUserid(), qr.getSchoolId(), windowStart, windowEnd);
 
                     for (Customer c : customers) {
                         Map<String, Object> event = new LinkedHashMap<>();

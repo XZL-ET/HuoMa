@@ -162,6 +162,17 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     long countByAddedAgentAndAddTimeAfter(String addedAgent, LocalDateTime addTime);
 
     /**
+     * 统计指定接待员在指定学校下、晚于指定时间的客户数量。
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param addTime    添加时间下限（含）
+     * @return 满足条件的客户数量
+     */
+    long countByAddedAgentAndSchoolIdAndAddTimeAfter(
+        String addedAgent, String schoolId, LocalDateTime addTime);
+
+    /**
      * 根据添加人和添加时间区间查询客户列表，按添加时间升序排列。
      * <p>
      * 用于在职继承夜间批量场景：查询某个接待员在前一天 21:00 到今天 08:00
@@ -196,6 +207,35 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      * @return 该接待员在该学校下添加的全部客户列表，按添加时间升序
      */
     List<Customer> findByAddedAgentAndSchoolId(String addedAgent, String schoolId);
+
+    /**
+     * 查询指定接待员在指定学校下、晚于指定时间的客户，按添加时间升序。
+     * <p>
+     * 用于在职继承手动触发/预览/选择性转移：限定学校防止串活码。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param addTime    添加时间下限（含）
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndSchoolIdAndAddTimeAfter(
+        String addedAgent, String schoolId, LocalDateTime addTime);
+
+    /**
+     * 查询指定接待员在指定学校下、指定时间区间内的客户，按添加时间升序。
+     * <p>
+     * 用于在职继承自动继承定时任务：限定学校防止串活码。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param start      添加时间下限（含）
+     * @param end        添加时间上限（不含）
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndSchoolIdAndAddTimeBetween(
+        String addedAgent, String schoolId, LocalDateTime start, LocalDateTime end);
 
     /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
