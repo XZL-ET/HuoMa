@@ -111,11 +111,11 @@ class SchoolRepositoryTest {
     @DisplayName("findByFilters — 分页筛选")
     void findByFilters() {
         Page<School> page = schoolRepository.findByFilters(
-                "北京", null, PageRequest.of(0, 10));
+                "北京", null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(2); // 2 北京+未删除
 
         page = schoolRepository.findByFilters(
-                "北京", "海淀区", PageRequest.of(0, 10));
+                "北京", "海淀区", null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(1);
         assertThat(page.getContent().get(0).getSchoolName()).isEqualTo("北京第一中学");
     }

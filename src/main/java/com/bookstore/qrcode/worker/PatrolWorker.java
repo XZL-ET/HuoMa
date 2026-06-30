@@ -411,7 +411,7 @@ public class PatrolWorker {
             long now = System.currentTimeMillis();
             if (now - lastAnomalyAlertTime > 3600_000L) {
                 lastAnomalyAlertTime = now;
-                alertService.createAlert("system", "qr_agent_anomaly",
+                alertService.createAlert(null, "qr_agent_anomaly",
                     AgentAlert.AlertSeverity.medium,
                     String.format("巡检发现 %d 个异常员工分布在 %d 个活码上，可调用 /qrcodes/verify-all-agents 查看详情或 /qrcodes/replace-all-anomaly-agents 批量替换",
                         anomalyCount, affectedQrIds.size()),
@@ -450,7 +450,7 @@ public class PatrolWorker {
         if (totalRemoved > 0) {
             log.warn("每日异常员工自愈完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人 (共 {} 个活码)",
                 totalRemoved, totalReplaced, totalShortfall, activeQrs.size());
-            alertService.createAlert("system", "daily_anomaly_heal",
+            alertService.createAlert(null, "daily_anomaly_heal",
                 totalShortfall > 0 ? AgentAlert.AlertSeverity.medium : AgentAlert.AlertSeverity.low,
                 String.format("每日自愈: 扫描 %d 个活码，移除 %d 个异常员工，补入 %d 人，缺口 %d 人",
                     activeQrs.size(), totalRemoved, totalReplaced, totalShortfall),

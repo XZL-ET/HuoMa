@@ -98,4 +98,26 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      */
     long countByTransferTimeBetweenAndStatus(
             LocalDateTime start, LocalDateTime end, CustomerTransfer.TransferStatus status);
+
+    /**
+     * 判断指定客户是否存在处于给定状态集合中的转移记录。
+     * <p>
+     * 用于在职继承去重：在发起新转移前检查该客户是否已有
+     * pending_confirm 或 confirmed 的记录，避免重复转移。
+     * </p>
+     *
+     * @param customerId 客户 ID
+     * @param statuses   状态集合
+     * @return true 如果存在匹配记录
+     */
+    boolean existsByCustomerIdAndStatusIn(Long customerId, List<CustomerTransfer.TransferStatus> statuses);
+
+    /**
+     * 查询指定状态下重试次数已达上限的转移记录。
+     * <p>
+     * 用于将重试耗尽但仍处于 pending_confirm 的记录标记为 retry_limit。
+     * </p>
+     */
+    List<CustomerTransfer> findByStatusAndRetryCountGreaterThanEqual(
+            CustomerTransfer.TransferStatus status, int minRetries);
 }

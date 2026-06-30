@@ -51,7 +51,7 @@ public class AgentAlert {
     private Long id;
 
     /** 员工企业微信 userid，关联员工配置表 */
-    @Column(name = "agent_userid", nullable = false, length = 100)
+    @Column(name = "agent_userid", nullable = true, length = 100)
     private String agentUserid;
 
     /**

@@ -7,6 +7,24 @@
         <h5>🏫 区域联盟管理</h5>
         <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createModal">+ 新建联盟</button>
     </div>
+
+    <!-- 搜索栏 -->
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body py-2">
+            <form class="row g-2 align-items-center" method="get" th:action="@{/admin/groups}">
+                <div class="col-auto">
+                    <label class="form-label mb-0 small text-muted">搜索</label>
+                    <input type="text" name="keyword" class="form-control form-control-sm"
+                           th:value="${keyword}" placeholder="联盟名/市州/区县" style="min-width:220px">
+                </div>
+                <div class="col-auto align-self-end">
+                    <button type="submit" class="btn btn-sm btn-primary">🔍 搜索</button>
+                    <a href="/admin/groups" class="btn btn-sm btn-outline-secondary">🔄 重置</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div th:if="${groups.isEmpty()}" class="text-muted text-center py-4">暂无联盟</div>
     <table th:if="${!groups.isEmpty()}" class="table table-sm">
         <thead><tr><th>名称</th><th>市州</th><th>县区</th><th>关联活码</th><th>学校名单</th><th>操作</th></tr></thead>
@@ -40,12 +58,52 @@
                             data-bs-toggle="modal" data-bs-target="#editModal">✏️ 编辑</button>
                     <form th:action="@{/admin/groups/{id}/delete(id=${g.id})}" method="post" class="d-inline"
                           onsubmit="return confirm('确定删除该联盟？（关联的活码不会删除）')">
+                        <input type="hidden" name="keyword" th:value="${keyword}">
+                        <input type="hidden" name="page" th:value="${groupPage.number}">
                         <button class="btn btn-sm btn-outline-danger">🗑️ 删除</button>
                     </form>
                 </td>
             </tr>
         </tbody>
     </table>
+
+    <!-- 分页导航 -->
+    <div th:if="${groupPage.totalPages > 0}" class="d-flex justify-content-between align-items-center mt-3">
+        <span class="text-muted small">
+            共 <strong th:text="${groupPage.totalElements}"></strong> 条，
+            第 <strong th:text="${groupPage.number + 1}"></strong> / <strong th:text="${groupPage.totalPages}"></strong> 页
+        </span>
+        <nav th:if="${groupPage.totalPages > 1}">
+            <ul class="pagination pagination-sm mb-0">
+                <!-- 首页 -->
+                <li class="page-item" th:classappend="${groupPage.first} ? 'disabled'">
+                    <a class="page-link" th:href="@{/admin/groups(keyword=${keyword}, page=0)}">&laquo;&laquo;</a>
+                </li>
+                <!-- 上一页 -->
+                <li class="page-item" th:classappend="${groupPage.first} ? 'disabled'">
+                    <a class="page-link" th:href="@{/admin/groups(keyword=${keyword}, page=${groupPage.number - 1})}">&laquo;</a>
+                </li>
+                <!-- 前省略号 -->
+                <li th:if="${pageStart > 0}" class="page-item disabled"><span class="page-link">…</span></li>
+                <!-- 页码 -->
+                <li th:each="i : ${pageNumbers}" class="page-item"
+                    th:classappend="${i == groupPage.number} ? 'active'">
+                    <a class="page-link" th:text="${i + 1}"
+                       th:href="@{/admin/groups(keyword=${keyword}, page=${i})}"></a>
+                </li>
+                <!-- 后省略号 -->
+                <li th:if="${pageEnd < groupPage.totalPages - 1}" class="page-item disabled"><span class="page-link">…</span></li>
+                <!-- 下一页 -->
+                <li class="page-item" th:classappend="${groupPage.last} ? 'disabled'">
+                    <a class="page-link" th:href="@{/admin/groups(keyword=${keyword}, page=${groupPage.number + 1})}">&raquo;</a>
+                </li>
+                <!-- 末页 -->
+                <li class="page-item" th:classappend="${groupPage.last} ? 'disabled'">
+                    <a class="page-link" th:href="@{/admin/groups(keyword=${keyword}, page=${groupPage.totalPages - 1})}">&raquo;&raquo;</a>
+                </li>
+            </ul>
+        </nav>
+    </div>
 </div>
 
 <!-- ═══════════ 新建联盟弹窗 ═══════════ -->
@@ -80,11 +138,19 @@
                     <div class="row mb-3">
                         <div class="col">
                             <label class="form-label">关联活码</label>
-                            <select name="qrCodeId" class="form-select">
-                                <option value="">不关联（稍后设置）</option>
-                                <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
-                                        th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
-                            </select>
+                            <div class="combo-box position-relative">
+                                <input type="text" class="form-control combo-input pe-5"
+                                       placeholder="点击选择或输入搜索…" autocomplete="off">
+                                <span class="position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                                      style="pointer-events:none;z-index:5;">▼</span>
+                                <select name="qrCodeId" class="d-none">
+                                    <option value="">不关联（稍后设置）</option>
+                                    <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
+                                            th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
+                                </select>
+                                <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                     style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                            </div>
                             <small class="text-muted">联盟的唯一活码，多所小校共用这一个码</small>
                         </div>
                     </div>
@@ -107,9 +173,11 @@
                             <option th:each="ft : ${formTemplates}" th:value="${ft.id}"
                                     th:text="${ft.name}"></option>
                         </select>
-                        <small class="text-muted">建议选择包含「学校」字段的表单模板</small>
+                        <small class="text-muted">客户扫码后会看到此模板 + 自动附加的「所属学校」下拉框</small>
                     </div>
                 </div>
+                <input type="hidden" name="keyword" th:value="${keyword}">
+                <input type="hidden" name="page" th:value="${groupPage.number}">
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="submit" class="btn btn-primary">确认创建</button>
@@ -149,11 +217,19 @@
                     <div class="row mb-3">
                         <div class="col">
                             <label class="form-label">关联活码</label>
-                            <select name="qrCodeId" id="editQrCodeId" class="form-select">
-                                <option value="">不关联</option>
-                                <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
-                                        th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
-                            </select>
+                            <div class="combo-box position-relative">
+                                <input type="text" class="form-control combo-input pe-5" id="editQrCodeBox"
+                                       placeholder="点击选择或输入搜索…" autocomplete="off">
+                                <span class="position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                                      style="pointer-events:none;z-index:5;">▼</span>
+                                <select name="qrCodeId" id="editQrCodeId" class="d-none">
+                                    <option value="">不关联</option>
+                                    <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
+                                            th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
+                                </select>
+                                <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                                     style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                            </div>
                             <small class="text-muted">联盟的唯一活码，多所小校共用这一个码</small>
                         </div>
                     </div>
@@ -176,9 +252,11 @@
                             <option th:each="ft : ${formTemplates}" th:value="${ft.id}"
                                     th:text="${ft.name}"></option>
                         </select>
-                        <small class="text-muted">建议选择包含「学校」字段的表单模板</small>
+                        <small class="text-muted">客户扫码后会看到此模板 + 自动附加的「所属学校」下拉框</small>
                     </div>
                 </div>
+                <input type="hidden" name="keyword" th:value="${keyword}">
+                <input type="hidden" name="page" th:value="${groupPage.number}">
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="submit" class="btn btn-primary">保存修改</button>
@@ -201,7 +279,11 @@ document.querySelectorAll('.edit-btn').forEach(btn => {
         const formId = this.getAttribute('data-formid');
         document.getElementById('editFormTemplateId').value = formId || '';
         const qrCodeId = this.getAttribute('data-qrcodeid');
-        document.getElementById('editQrCodeId').value = qrCodeId || '';
+        const qrSelect = document.getElementById('editQrCodeId');
+        qrSelect.value = qrCodeId || '';
+        const qrOption = qrSelect.querySelector('option[value="' + qrCodeId + '"]');
+        const qrInput = document.getElementById('editQrCodeBox');
+        qrInput.value = qrOption ? qrOption.textContent.trim() : '';
         const schoolList = this.getAttribute('data-schoollist');
         document.getElementById('editSchoolList').value = schoolList || '';
     });

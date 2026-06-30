@@ -16,12 +16,13 @@ spring:
   sql:
     init:
       mode: always
+      encoding: UTF-8
       schema-locations: classpath:schema-test.sql
   datasource:
-    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=0;DATABASE_TO_LOWER=TRUE
+    url: "jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=0;DATABASE_TO_LOWER=TRUE"
     driver-class-name: org.h2.Driver
     username: sa
-    password:
+    password: ""
   data:
     redis:
       host: localhost
@@ -40,6 +41,8 @@ app:
   admin:
     default-username: admin
     default-password: ""          # 空密码跳过自动创建 admin，测试中手动播种
+  font:
+    resource-path: ""                     # 空字符串=禁用 classpath 字体，使用系统降级
   qr-image:
     font-name: SansSerif
   worker:
@@ -65,7 +68,7 @@ app:
     read-timeout: 10
   agent:
     daily-max-default: 150
-    batch-import-daily-max: 150
+    batch-import-daily-max: 200
     rotation-lock-ttl-seconds: 60
   transfer:
     form-url: http://localhost:8080/form

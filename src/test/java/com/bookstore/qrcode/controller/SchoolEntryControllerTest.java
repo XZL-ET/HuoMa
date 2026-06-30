@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.awt.*;
 import java.util.List;
 
 import static org.mockito.Mockito.*;
@@ -28,7 +29,8 @@ class SchoolEntryControllerTest {
         QrCodeRepository qrCodeRepo = mock(QrCodeRepository.class);
 
         SchoolEntryController controller = new SchoolEntryController(
-                schoolService, accessLogService, qrCodeRepo);
+                schoolService, accessLogService, qrCodeRepo,
+                new Font(Font.SANS_SERIF, Font.PLAIN, 12));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

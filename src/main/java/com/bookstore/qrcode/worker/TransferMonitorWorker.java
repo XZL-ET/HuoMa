@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.worker;
 
+import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.TransferService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +36,7 @@ import org.springframework.stereotype.Component;
 public class TransferMonitorWorker {
 
     private final TransferService transferService;
+    private final MessageGuardService messageGuardService;
 
     /**
      * 每 10 分钟执行一次，追踪在职继承的确认结果。
@@ -42,6 +44,7 @@ public class TransferMonitorWorker {
      * <p>调用 {@link TransferService#trackResults()} 查询企业微信接口，
      * 检查之前发起的继承请求是否已被客户确认或已超时，更新数据库中
      * {@link com.bookstore.qrcode.entity.CustomerTransfer} 的状态。
+     * 同时检查重试耗尽记录并标记为 retry_limit。
      * 异常会被捕获并记录，不会影响下一次调度执行。</p>
      */
     @Scheduled(cron = "0 */10 * * * *")
@@ -53,5 +56,34 @@ public class TransferMonitorWorker {
             log.error("继承结果追踪异常", e);
         }
         log.debug("继承结果追踪完成");
+    }
+
+    /**
+     * 每 30 分钟执行一次，重试 API 调用失败的转移记录。
+     *
+     * <p>调用 {@link TransferService#retryFailedTransfers()} 重新发起
+     * 之前因网络/限流等原因失败的 transfer_customer 调用。
+     * 最多重试 3 次，达到上限后标记为 retry_limit。
+     * </p>
+     */
+    @Scheduled(cron = "0 */30 * * * *")
+    public void retryFailed() {
+        log.debug("api_failed 转移重试开始");
+        try {
+            transferService.retryFailedTransfers();
+        } catch (Exception e) {
+            log.error("api_failed 转移重试异常", e);
+        }
+    }
+
+    /**
+     * 每 15 分钟检查一次死信队列，若有积压则输出告警日志。
+     */
+    @Scheduled(cron = "0 */15 * * * *")
+    public void checkDlq() {
+        long dlqLen = messageGuardService.dlqSize();
+        if (dlqLen > 0) {
+            log.warn("⚠ 死信队列积压: {} 条 — 建议检查并重放", dlqLen);
+        }
     }
 }

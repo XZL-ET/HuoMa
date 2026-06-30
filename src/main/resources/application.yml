@@ -15,14 +15,23 @@ spring:
     init:
       mode: always                        # 每次启动执行初始化脚本
       schema-locations: classpath:schema.sql  # 建表 DDL 脚本路径
+  servlet:
+    multipart:
+      max-file-size: 5MB          # 上传文件大小限制
+      max-request-size: 10MB
   transaction:
     default-timeout: 30s    # 全局事务超时，防止 DB 连接被长期占用
 
 server:
+  forward-headers-strategy: native   # 信任 ALB/Nginx 透传的 X-Forwarded-Proto，生成 https 链接
   port: 8080                    # HTTP 监听端口
   undertow:
     threads:
       worker: ${UNDERTOW_WORKER_THREADS:20}                # 限制 Undertow Worker 线程数，预留连接给异步任务池
+
+# 文件上传配置
+upload:
+  card-pic-dir: ${UPLOAD_CARD_PIC_DIR:./data/uploads/card-pics}   # 表单模板卡片图片上传目录
 
 # Actuator 健康检查（供 K8s 探针 / 负载均衡器使用）
 management:
@@ -40,8 +49,10 @@ app:
   admin:
     default-username: ${ADMIN_DEFAULT_USERNAME:admin}
     default-password: ${ADMIN_DEFAULT_PASSWORD:}   # 生产必设，空则跳过自建
+  font:
+    resource-path: ${FONT_RESOURCE_PATH:fonts/NotoSansSC-Regular.ttf}  # classpath 中文字体（空字符串禁用）
   qr-image:
-    font-name: ${QR_FONT_NAME:SansSerif}            # Linux 兼容默认字体
+    font-name: ${QR_FONT_NAME:SansSerif}            # 系统字体降级名（classpath 字体加载失败时使用）
   worker:
     callback:
       threads: ${CALLBACK_THREADS:4}
@@ -59,11 +70,11 @@ app:
     root-department-id: ${WECOM_ROOT_DEPT_ID:1}
   agent:
     daily-max-default: ${AGENT_DAILY_MAX:150}
-    batch-import-daily-max: ${AGENT_BATCH_IMPORT_DAILY_MAX:150}
+    batch-import-daily-max: ${AGENT_BATCH_IMPORT_DAILY_MAX:200}
     rotation-lock-ttl-seconds: ${AGENT_ROTATION_LOCK_TTL:60}
   transfer:
     form-url: ${TRANSFER_FORM_URL:}
-  base-url: ${APP_BASE_URL:https://your-domain.com}
+  base-url: ${APP_BASE_URL:https://huoma.gsxhsd.com}
   school-entry-url: ${SCHOOL_ENTRY_URL:}
   school-rate-limit:
     max-per-minute: ${SCHOOL_RATE_LIMIT_MAX:500}
@@ -75,6 +86,10 @@ app:
     parent-meeting:
       scan-ratio: 0.75
       urgent-ratio: 70
+  inheritance:
+    day-start-hour: 8          # 白天窗口起始（含），此时间到 day-end 内的新客户立即转移
+    day-end-hour: 21           # 白天窗口结束（不含），此时间到次日 day-start 的新客户延迟到 08:30 批量转移
+    cron: 0 30 8 * * *         # 夜间批量转移的 cron 表达式
 
 ---
 spring:

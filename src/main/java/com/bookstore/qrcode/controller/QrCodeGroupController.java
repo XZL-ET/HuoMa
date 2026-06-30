@@ -6,14 +6,15 @@ import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.QrCodeGroup;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Controller
 @RequestMapping("/admin/groups")
@@ -25,14 +26,26 @@ public class QrCodeGroupController {
     private final QrCodeRepository qrCodeRepo;
 
     @GetMapping
-    public String list(Model model) {
-        List<QrCodeGroup> groups = groupService.listAll();
-        List<QrCode> allQrCodes = qrCodeRepo.findAll();
+    public String list(@RequestParam(required = false) String keyword,
+                       @RequestParam(defaultValue = "0") int page,
+                       Model model) {
+        // 空字符串 → null
+        String keywordParam = (keyword != null && !keyword.isBlank()) ? keyword.trim() : null;
 
-        // 活码 ID → 活码 快速查找
+        Page<QrCodeGroup> groupPage = groupService.search(keywordParam, PageRequest.of(page, 20));
+        List<QrCodeGroup> groups = groupPage.getContent();
+
+        // 仅加载当前页需要的活码（按 qrCodeId 批量查）
+        Set<Long> qrCodeIds = groups.stream()
+            .map(QrCodeGroup::getQrCodeId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
         Map<Long, QrCode> qrCodeMap = new LinkedHashMap<>();
-        for (QrCode qr : allQrCodes) {
-            qrCodeMap.put(qr.getId(), qr);
+        if (!qrCodeIds.isEmpty()) {
+            List<QrCode> qrCodes = qrCodeRepo.findAllById(qrCodeIds);
+            for (QrCode qr : qrCodes) {
+                qrCodeMap.put(qr.getId(), qr);
+            }
         }
 
         // 每个联盟的学校数量
@@ -45,11 +58,25 @@ public class QrCodeGroupController {
             }
         }
 
+        // 分页页码范围
+        int totalPages = groupPage.getTotalPages();
+        int current = groupPage.getNumber();
+        int pageStart = Math.max(0, current - 2);
+        int pageEnd = Math.min(totalPages - 1, current + 2);
+        List<Integer> pageNumbers = new ArrayList<>();
+        for (int i = pageStart; i <= pageEnd; i++) {
+            pageNumbers.add(i);
+        }
+
         model.addAttribute("groups", groups);
+        model.addAttribute("groupPage", groupPage);
         model.addAttribute("formTemplates", formTemplateService.listAll());
-        model.addAttribute("allQrCodes", allQrCodes);
         model.addAttribute("qrCodeMap", qrCodeMap);
         model.addAttribute("schoolCounts", schoolCounts);
+        model.addAttribute("keyword", keywordParam);
+        model.addAttribute("pageNumbers", pageNumbers);
+        model.addAttribute("pageStart", pageStart);
+        model.addAttribute("pageEnd", pageEnd);
         return "admin/groups";
     }
 
@@ -61,6 +88,8 @@ public class QrCodeGroupController {
                          @RequestParam(required = false) Long defaultFormTemplateId,
                          @RequestParam(required = false) Long qrCodeId,
                          @RequestParam(required = false) String schoolList,
+                         @RequestParam(required = false) String keyword,
+                         @RequestParam(defaultValue = "0") int page,
                          RedirectAttributes redirect) {
         try {
             groupService.create(name, regionCity, regionDistrict,
@@ -69,6 +98,8 @@ public class QrCodeGroupController {
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
         }
+        if (keyword != null && !keyword.isBlank()) redirect.addAttribute("keyword", keyword);
+        if (page > 0) redirect.addAttribute("page", page);
         return "redirect:/admin/groups";
     }
 
@@ -80,6 +111,8 @@ public class QrCodeGroupController {
                          @RequestParam(required = false) Long defaultFormTemplateId,
                          @RequestParam(required = false) Long qrCodeId,
                          @RequestParam(required = false) String schoolList,
+                         @RequestParam(required = false) String keyword,
+                         @RequestParam(defaultValue = "0") int page,
                          RedirectAttributes redirect) {
         try {
             groupService.update(id, name, regionCity, regionDistrict,
@@ -88,17 +121,24 @@ public class QrCodeGroupController {
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
         }
+        if (keyword != null && !keyword.isBlank()) redirect.addAttribute("keyword", keyword);
+        if (page > 0) redirect.addAttribute("page", page);
         return "redirect:/admin/groups";
     }
 
     @PostMapping("/{id}/delete")
-    public String delete(@PathVariable Long id, RedirectAttributes redirect) {
+    public String delete(@PathVariable Long id,
+                         @RequestParam(required = false) String keyword,
+                         @RequestParam(defaultValue = "0") int page,
+                         RedirectAttributes redirect) {
         try {
             groupService.delete(id);
             redirect.addFlashAttribute("message", "联盟已删除");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
         }
+        if (keyword != null && !keyword.isBlank()) redirect.addAttribute("keyword", keyword);
+        if (page > 0) redirect.addAttribute("page", page);
         return "redirect:/admin/groups";
     }
 }

@@ -35,6 +35,7 @@ class QrCodeServiceTest {
     @Mock private GlobalAgentPoolService poolService;
     @Mock private AlertService alertService;
     @Mock private WechatSyncHealingService syncHealingService;
+    @Mock private SchoolRepository schoolRepo;
     @Mock private WecomApiClient wecomApiClient;
     @Mock private ObjectMapper objectMapper;
     @Mock private StringRedisTemplate redisTemplate;

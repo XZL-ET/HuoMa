@@ -101,6 +101,25 @@ public class QrCode {
     @Column(name = "welcome_config", columnDefinition = "JSON")
     private String welcomeConfig;
 
+    /**
+     * 在职继承问候语是否启用，{@code NULL}=使用系统默认。
+     * @see com.bookstore.qrcode.service.TransferService#sendTransferGreeting
+     */
+    @Column(name = "transfer_greeting_enabled")
+    private Boolean transferGreetingEnabled;
+
+    /** 在职继承-已填写备注模板，{@code NULL}=使用系统默认，支持 {@code {{grade}} {{class}} {{child_name}} {{school_name}}} 等变量 */
+    @Column(name = "transfer_filled_note", length = 500)
+    private String transferFilledNote;
+
+    /** 在职继承-已填写问候语模板，{@code NULL}=使用系统默认 */
+    @Column(name = "transfer_filled_greeting", length = 500)
+    private String transferFilledGreeting;
+
+    /** 在职继承-未填写问候语模板，{@code NULL}=使用系统默认 */
+    @Column(name = "transfer_unfilled_greeting", length = 500)
+    private String transferUnfilledGreeting;
+
     /** 活码状态：active-正常, paused-暂停, full-已满, no_agent-无可用客服 */
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)

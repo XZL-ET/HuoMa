@@ -98,8 +98,11 @@
                     </label>
                     <div class="autocomplete-wrapper" id="schoolAcWrapper">
                         <span class="search-icon">🔍</span>
-                        <input type="text" name="schoolName" class="form-control" required
+                        <input type="text" name="schoolName" id="schoolNameInput" class="form-control" required
                                placeholder="输入学校名，下拉选择已有学校" autocomplete="off">
+                    </div>
+                    <div id="duplicateWarning" class="form-text text-warning d-none" style="font-size:12px;">
+                        ⚠️ 该学校在相同城市已存在活码
                     </div>
                 </div>
                 <!-- 学校 ID（自动生成，可手动修改） -->
@@ -158,18 +161,18 @@
                     <label class="form-label">备注</label>
                     <input type="text" name="remark" class="form-control" placeholder="选填">
                 </div>
-                <!-- 收集表单模板（选填）—— 创建后也可在详情页修改 -->
-                <div class="col-md-6" th:if="${!formTemplates.isEmpty()}">
-                    <label class="form-label">收集表单模板
-                        <small class="text-muted fw-normal">— 选填，可后续修改</small>
+                <!-- 学段分类（选填）—— 归入分类后自动继承欢迎语和表单模板 -->
+                <div class="col-md-6" th:if="${!categories.isEmpty()}">
+                    <label class="form-label">学段分类
+                        <small class="text-muted fw-normal">— 选填，后续可改</small>
                     </label>
-                    <select name="formTemplateId" class="form-select">
-                        <option value="">不收集</option>
-                        <option th:each="t : ${formTemplates}"
-                                th:value="${t.id}"
-                                th:text="${t.name}"></option>
+                    <select name="categoryId" class="form-select">
+                        <option value="">未分类</option>
+                        <option th:each="cat : ${categories}"
+                                th:value="${cat.id}"
+                                th:text="${cat.name}"></option>
                     </select>
-                    <div class="form-text">客户扫码后将收到该模板的收集表单链接</div>
+                    <div class="form-text">分类配置的欢迎语和表单模板会自动生效</div>
                 </div>
             </div>
         </div>
@@ -631,7 +634,22 @@ document.addEventListener('DOMContentLoaded', () => {
             // 隐藏之前的错误
             errEl.classList.add('d-none');
 
-            // 3. 禁用提交按钮防重复点击
+            // 3. 检查同城市下是否已有同名学校（API 失败时放行）
+            fetch('/qrcodes/api/check-duplicate-school?schoolName=' + encodeURIComponent(schoolName)
+                + '&regionCity=' + encodeURIComponent(city))
+            .then(r => r.json())
+            .then(data => {
+                if (data.exists) {
+                    if (!confirm('「' + schoolName + '」在「' + city + '」已存在活码，确定继续创建吗？')) {
+                        return;
+                    }
+                }
+                doSubmit(form);
+            })
+            .catch(() => doSubmit(form)); // 检查接口异常时直接放行
+
+            function doSubmit(form) {
+            // 4. 禁用提交按钮防重复点击
             const submitBtn = form.querySelector('button[type="submit"]');
             const origText = submitBtn.textContent;
             submitBtn.disabled = true;
@@ -661,7 +679,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 submitBtn.disabled = false;
                 submitBtn.textContent = origText;
             });
+            } // end doSubmit
         });
+
+        // ── 实时重复检查：学校和城市字段失焦时查询 ──
+        const schoolNameInput = document.getElementById('schoolNameInput');
+        const cityInput = document.querySelector('[name="regionCity"]');
+        const dupWarning = document.getElementById('duplicateWarning');
+
+        function checkDuplicate() {
+            const name = schoolNameInput.value.trim();
+            const city = cityInput.value.trim();
+            if (!name || !city) {
+                dupWarning.classList.add('d-none');
+                return;
+            }
+            fetch('/qrcodes/api/check-duplicate-school?schoolName=' + encodeURIComponent(name)
+                + '&regionCity=' + encodeURIComponent(city))
+            .then(r => r.json())
+            .then(data => {
+                if (data.exists) {
+                    dupWarning.classList.remove('d-none');
+                    dupWarning.textContent = '⚠️「' + name + '」在「' + city + '」已存在活码';
+                } else {
+                    dupWarning.classList.add('d-none');
+                }
+            })
+            .catch(() => dupWarning.classList.add('d-none'));
+        }
+
+        schoolNameInput.addEventListener('blur', checkDuplicate);
+        cityInput.addEventListener('blur', checkDuplicate);
     }
 
     // ── 学校ID自动生成 ──

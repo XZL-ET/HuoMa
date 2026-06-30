@@ -68,6 +68,9 @@ public class OutboundMsgWorker {
     private final QrCodeGroupRepository groupRepo;
     private final SystemConfigRepository systemConfigRepo;
     private final CustomerRepository customerRepo;
+    private final FormTemplateRepository formTemplateRepo;
+    private final SchoolCategoryRepository categoryRepo;
+    private final SchoolRepository schoolRepo;
 
     private volatile boolean running = true;
     @Value("${app.worker.outbound.threads:4}")
@@ -201,38 +204,49 @@ public class OutboundMsgWorker {
 
         if (externalUserId == null || userid == null) return;
 
-        // Resolve welcome text: qrCode.welcomeText -> group default -> system default
+        // === 欢迎语 & 表单模板继承链解析 ===
+        // 链：QrCode → Group → SchoolCategory → SystemConfig（两字段独立解析）
         String welcomeText = null;
         Long formTemplateId = null;
+        String schoolName = "";
 
         if (qrCodeId != null) {
             QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
             if (qr != null) {
                 welcomeText = qr.getWelcomeText();
                 formTemplateId = qr.getFormTemplateId();
-                // Inherit from group
-                if (welcomeText == null && qr.getGroupId() != null) {
+                schoolName = qr.getSchoolName();  // 复用此处查询，避免重复查库
+
+                // L2: 分组继承
+                if (qr.getGroupId() != null) {
                     QrCodeGroup grp = groupRepo.findById(qr.getGroupId()).orElse(null);
                     if (grp != null) {
-                        welcomeText = grp.getDefaultWelcomeText();
+                        if (welcomeText == null) welcomeText = grp.getDefaultWelcomeText();
                         if (formTemplateId == null) formTemplateId = grp.getDefaultFormTemplateId();
+                    }
+                }
+
+                // L3: 学校分类继承（新增 — 通过 qr.schoolId → school.categoryId 解析）
+                if ((welcomeText == null || formTemplateId == null) && qr.getSchoolId() != null) {
+                    School school = schoolRepo.findBySchoolIdAndDeletedFalse(qr.getSchoolId()).orElse(null);
+                    if (school != null && school.getCategoryId() != null) {
+                        SchoolCategory cat = categoryRepo.findById(school.getCategoryId()).orElse(null);
+                        if (cat != null) {
+                            if (welcomeText == null) welcomeText = cat.getDefaultWelcomeText();
+                            if (formTemplateId == null) formTemplateId = cat.getDefaultFormTemplateId();
+                        }
                     }
                 }
             }
         }
-        // System default fallback
+        // L4: 系统默认（仅欢迎语有全局兜底）
         if (welcomeText == null) {
             welcomeText = systemConfigRepo.findByConfigKey("default_welcome_text")
                 .map(SystemConfig::getConfigValue).orElse("欢迎来到XX书店家校服务！");
         }
 
         // Template variable replacement
-        String schoolName = "";
         String teacherName = "";
-        if (qrCodeId != null) {
-            QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
-            if (qr != null) schoolName = qr.getSchoolName();
-        }
         // Get teacher name from Employee table or Agent table
         teacherName = userid; // fallback
         try {
@@ -253,32 +267,93 @@ public class OutboundMsgWorker {
         String welcomeCode = event.has("welcome_code") && !event.get("welcome_code").isNull()
             ? event.get("welcome_code").asText() : null;
 
+        // Build form link attachment (common to both paths)
+        // Read card content from template, fall back to defaults
+        FormTemplate formTpl = null;
+        String cardTitle = "📋 请填写孩子信息";
+        String cardDesc = "为了更好地为您提供精准服务，请点击填写孩子信息";
+        String cardPicUrl = null;
+        if (formTemplateId != null) {
+            formTpl = formTemplateRepo.findById(formTemplateId).orElse(null);
+            if (formTpl != null) {
+                if (formTpl.getCardTitle() != null && !formTpl.getCardTitle().isBlank())
+                    cardTitle = formTpl.getCardTitle();
+                if (formTpl.getCardDesc() != null && !formTpl.getCardDesc().isBlank())
+                    cardDesc = formTpl.getCardDesc();
+                if (formTpl.getCardPicUrl() != null && !formTpl.getCardPicUrl().isBlank())
+                    cardPicUrl = formTpl.getCardPicUrl();
+            }
+        }
+
+        Map<String, Object> formAttach = null;
+        if (formTemplateId != null) {
+            String formUrl = baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
+            Map<String, Object> linkMap = new java.util.LinkedHashMap<>();
+            linkMap.put("title", cardTitle);
+            linkMap.put("desc", cardDesc);
+            linkMap.put("url", formUrl);
+            if (cardPicUrl != null) {
+                linkMap.put("picurl", cardPicUrl);
+            }
+            formAttach = Map.of(
+                "msgtype", "link",
+                "link", linkMap
+            );
+        }
+
         // 1. Send welcome text
-        // Prefer send_welcome_msg (uses WelcomeCode, no daily rate limit) over sendMessage
+        // Prefer send_welcome_msg (uses WelcomeCode, no daily rate limit) over sendMessage.
+        // When welcome_code is available, attach form link directly — one API call for both.
         boolean sent = false;
         if (welcomeCode != null) {
             try {
-                wecomApi.sendWelcomeMsg(welcomeCode, welcomeText, null);
+                List<Map<String, Object>> attachments = formAttach != null
+                    ? List.of(formAttach) : null;
+                wecomApi.sendWelcomeMsg(welcomeCode, welcomeText, attachments);
                 sent = true;
-                log.info("欢迎语已通过 send_welcome_msg 发送: to={}", externalUserId);
+                log.info("欢迎语+表单已通过 send_welcome_msg 发送: to={}, hasForm={}",
+                    externalUserId, formAttach != null);
             } catch (Exception e) {
                 // welcome_code expired (valid ~20s) or already used — fallback to sendMessage
                 log.warn("send_welcome_msg 失败，降级到 sendMessage: external={}", externalUserId, e);
             }
         }
         if (!sent) {
-            wecomApi.sendMessage(userid, externalUserId, welcomeText);
-            log.info("欢迎语已通过 sendMessage 发送: to={}, sender={}", externalUserId, userid);
+            try {
+                wecomApi.sendMessage(userid, externalUserId, welcomeText);
+                log.info("欢迎语已通过 sendMessage 发送: to={}, sender={}", externalUserId, userid);
+            } catch (Exception e) {
+                // sendMessage 也失败（如 48002 api forbidden）→ 不抛异常，避免死循环入 DLQ
+                // 若 sendWelcomeMsg 已在上一次尝试中成功发出欢迎语，客户已收到，此处只是重复重试
+                log.error("sendMessage 失败，欢迎语可能未发出: to={}, sender={}",
+                    externalUserId, userid, e);
+            }
         }
 
-        // 2. Send form link as a textcard (card-style message, separate from welcome text)
-        if (formTemplateId != null) {
-            Thread.sleep(300);
-            String formUrl = baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
-            String cardTitle = "📋 请填写孩子信息";
-            String cardDesc = "<div class=\"normal\">为了更好地为您提供精准服务，请点击下方填写孩子信息</div>";
-            wecomApi.sendTextCard(userid, externalUserId, cardTitle, cardDesc, formUrl, "去填写");
-            log.info("表单卡片已发送: to={}", externalUserId);
+        // 2. Send form link — only needed when welcome_code was NOT available
+        //    (because send_welcome_msg already includes the attachment)
+        if (formAttach != null && !sent) {
+            try {
+                Thread.sleep(300);
+                String formUrl = baseUrl + "/form/" + qrCodeId + "?c=" + (customerId != null ? customerId : "");
+                log.info("发送表单卡片(sendTextCard): to={}, qrCodeId={}, formTemplateId={}, url={}",
+                    externalUserId, qrCodeId, formTemplateId, formUrl);
+                wecomApi.sendTextCard(userid, externalUserId,
+                    cardTitle,
+                    "<div class=\"normal\">" + cardDesc + "</div>",
+                    formUrl, "去填写");
+                log.info("表单卡片已发送(sendTextCard): to={}", externalUserId);
+                sent = true;
+            } catch (Exception e) {
+                // 表单卡片失败不回滚欢迎语（欢迎语已发送，retry 会导致重复）
+                log.error("表单卡片发送失败（欢迎语已发送，不回滚）: to={}, qrCodeId={}",
+                    externalUserId, qrCodeId, e);
+            }
+        }
+
+        if (formTemplateId == null) {
+            log.info("未发送表单卡片: to={}, qrCodeId={}, 原因: formTemplateId=null (活码未绑定且分组未设置默认表单模板)",
+                externalUserId, qrCodeId);
         }
     }
 

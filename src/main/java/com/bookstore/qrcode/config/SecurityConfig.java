@@ -37,7 +37,12 @@ public class SecurityConfig {
                         // 企微回调 POST 无 CSRF token，必须跳过 CSRF 校验
                         .ignoringRequestMatchers("/api/wecom/callback/**")
                         // H5 收集表单提交无 CSRF token
-                        .ignoringRequestMatchers("/api/form/submit"))
+                        .ignoringRequestMatchers("/api/form/submit")
+                        // 管理后台内部 API（活码操作 / 在职继承等），页面内 fetch() 调用无 CSRF token
+                        .ignoringRequestMatchers("/api/qrcodes/**")
+                        .ignoringRequestMatchers("/api/inheritance/**")
+                        .ignoringRequestMatchers("/qrcodes/*/transfer/**")
+                        .ignoringRequestMatchers("/qrcodes/*/agents/batch-recycle"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
@@ -56,6 +61,10 @@ public class SecurityConfig {
                         .requestMatchers("/s/**").permitAll()
                         // 学校管理后台：仅 admin 可访问
                         .requestMatchers("/admin/schools/**").hasRole("ADMIN")
+                        // 表单模板管理：仅 admin 可访问
+                        .requestMatchers("/admin/form-templates/**").hasRole("ADMIN")
+                        // 学校分类管理：仅 admin 可访问
+                        .requestMatchers("/admin/categories/**").hasRole("ADMIN")
                         // 系统配置管理：仅 admin 可访问
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问

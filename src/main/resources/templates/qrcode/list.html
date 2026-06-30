@@ -116,6 +116,21 @@
                 </div>
             </div>
         </form>
+
+        <!-- 批量操作工具栏（点击"批量操作"按钮后显示，放在搜索卡片内） -->
+        <div class="row g-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
+            <div class="col-12">
+                <span id="batchToolbar" style="display:none;">
+                    <span class="text-muted me-2">已选 <strong id="selectedCount" class="text-primary">0</strong> 个</span>
+                    <button class="btn btn-sm btn-outline-primary" onclick="batchAction('welcome')">改欢迎语</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="batchAction('scene')">切换场景</button>
+                    <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload()"><i class="bi bi-download"></i> 下载原图</button>
+                </span>
+            </div>
+        </div>
     </div>
 
     <!-- 数据表格 -->
@@ -140,7 +155,7 @@
                 </thead>
                 <tbody>
                     <tr th:each="qr : ${qrCodes.content}">
-                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox" onchange="onCheck([[${qr.id}]])"></td>
+                        <td><input type="checkbox" name="ids" th:value="${qr.id}" class="qr-checkbox" onchange="onCheck(this)"></td>
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
@@ -198,17 +213,26 @@
         </div>
     </div>
 
-    <!-- 批量操作工具栏 -->
-    <div class="d-flex gap-2 mt-2" th:if="${!qrCodes.content.isEmpty()}">
-        <span id="batchToolbar" style="display:none;">
-            已选 <strong id="selectedCount">0</strong> 个
-            <button class="btn btn-sm btn-outline-primary ms-1" onclick="batchAction('welcome')">改欢迎语</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('rotate-mode')">切换轮换</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('group')">改分组</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('status')">暂停/启用</button>
-            <button class="btn btn-sm btn-outline-primary" onclick="batchAction('scene')">切换场景</button>
-            <button class="btn btn-sm btn-outline-success ms-1" onclick="batchDownload()"><i class="bi bi-download"></i> 下载原图</button>
-        </span>
+    <!-- 批量下载确认弹窗 -->
+    <div class="modal fade" id="batchDownloadModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-download"></i> 批量下载原图</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>确认下载 <strong id="downloadCount" class="text-primary">0</strong> 个活码的企微原图？</p>
+                    <small class="text-muted">下载为 ZIP 压缩包，每个活码对应一张二维码图片</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="confirmBatchDownload()">
+                        <i class="bi bi-download"></i> 确认下载
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 批量下载隐藏表单 -->
@@ -236,6 +260,118 @@
 
     </div><!-- /col-md-9 -->
 </div><!-- /row -->
+
+    <!-- ═══════════ 批量切换轮换弹窗 ═══════════ -->
+    <div class="modal fade" id="batchRotateModeModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-arrow-repeat"></i> 批量切换轮换模式</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">轮换模式</label>
+                    <select id="batchRotateModeSelect" class="form-select">
+                        <option value="auto">🔄 自动轮换</option>
+                        <option value="manual">🖐️ 人工轮换</option>
+                    </select>
+                    <small class="text-muted">自动：由系统自动分配员工；人工：手动指定轮换顺序</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitBatchRotateMode()">
+                        <i class="bi bi-check-lg"></i> 确认
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ 批量切换状态弹窗 ═══════════ -->
+    <div class="modal fade" id="batchStatusModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-power"></i> 批量切换状态</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">目标状态</label>
+                    <select id="batchStatusSelect" class="form-select">
+                        <option value="active">✅ 启用</option>
+                        <option value="paused">⏸️ 暂停</option>
+                    </select>
+                    <small class="text-muted">暂停后客户扫码将看到「暂不可用」提示</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitBatchStatus()">
+                        <i class="bi bi-check-lg"></i> 确认
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ 批量切换场景弹窗 ═══════════ -->
+    <div class="modal fade" id="batchSceneModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-toggles"></i> 批量切换场景</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">目标场景</label>
+                    <select id="batchSceneSelect" class="form-select">
+                        <option value="daily_push">📢 日常推送</option>
+                        <option value="parent_meeting">👨‍👩‍👧 家长会</option>
+                    </select>
+                    <small class="text-muted">日常：每日轮换上限150；家长会：每日轮换上限30</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitBatchScene()">
+                        <i class="bi bi-check-lg"></i> 确认
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ 批量改分组弹窗 ═══════════ -->
+    <div class="modal fade" id="batchGroupModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-folder"></i> 批量改分组</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label">目标分组</label>
+                    <div class="combo-box position-relative">
+                        <input type="text" class="form-control combo-input pe-5"
+                               placeholder="点击选择或搜索分组…" autocomplete="off">
+                        <span class="position-absolute top-50 end-0 translate-middle-y me-2 text-muted combo-arrow"
+                              style="pointer-events:none;z-index:5;">▼</span>
+                        <select id="batchGroupSelect" class="d-none">
+                            <option value="">取消归属（从分组移除）</option>
+                            <option th:each="g : ${groups}" th:value="${g.id}"
+                                    th:text="${g.name + ' (' + g.regionDistrict + ')'}"></option>
+                        </select>
+                        <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
+                             style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitBatchGroup()">
+                        <i class="bi bi-check-lg"></i> 确认
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- ═══════════ 批量配置弹窗 ═══════════ -->
     <div class="modal fade" id="batchConfigModal" tabindex="-1">
@@ -282,307 +418,7 @@
     </div>
 
     <!-- ═══════════ JavaScript ═══════════ -->
-    <script>
-        /* ── 全选/取消全选 ── */
-        function toggleAll(source) {
-            document.querySelectorAll('.qr-checkbox').forEach(cb => {
-                cb.checked = source.checked;
-                const id = parseInt(cb.value);
-                if (source.checked) selectedIds.add(id); else selectedIds.delete(id);
-            });
-            updateSelectedCount();
-        }
-
-        /* ── 勾选变化时更新批量配置按钮可见性 ── */
-        function updateBatchBtn() {
-            const checked = document.querySelectorAll('.qr-checkbox:checked');
-            const btn = document.getElementById('batchConfigBtn');
-            if (btn) btn.style.display = checked.length > 0 ? '' : 'none';
-        }
-
-        /* ── 批量切换轮换模式 ── */
-        function batchSubmit(mode) {
-            const checked = document.querySelectorAll('.qr-checkbox:checked');
-            if (checked.length === 0) {
-                alert('请先勾选要操作的活码');
-                return;
-            }
-            const formId = mode === 'auto' ? 'batchAutoForm' : 'batchManualForm';
-            const idsDiv = document.getElementById(mode === 'auto' ? 'batchAutoIds' : 'batchManualIds');
-            idsDiv.innerHTML = '';
-            checked.forEach(cb => {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'ids';
-                input.value = cb.value;
-                idsDiv.appendChild(input);
-            });
-            document.getElementById(formId).submit();
-        }
-
-        /* ── 批量下载二维码（企微原图） ── */
-        function batchDownload() {
-            const checked = document.querySelectorAll('.qr-checkbox:checked');
-            if (checked.length === 0) {
-                alert('请先勾选要下载的活码');
-                return;
-            }
-            const idsDiv = document.getElementById('batchDownloadIds');
-            idsDiv.innerHTML = '';
-            checked.forEach(cb => {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'ids';
-                input.value = cb.value;
-                idsDiv.appendChild(input);
-            });
-            document.getElementById('batchDownloadForm').submit();
-        }
-
-        /* ── 打开批量配置弹窗 ── */
-        function openBatchConfigModal() {
-            const checked = document.querySelectorAll('.qr-checkbox:checked');
-            if (checked.length === 0) {
-                alert('请先勾选要配置的活码');
-                return;
-            }
-            // 填充隐藏的 ID 字段
-            const idsDiv = document.getElementById('batchConfigIds');
-            idsDiv.innerHTML = '';
-            checked.forEach(cb => {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = 'ids';
-                input.value = cb.value;
-                idsDiv.appendChild(input);
-            });
-            // 重置表单其他字段
-            document.getElementById('batchConfigForm').querySelector('textarea').value = '';
-            document.getElementById('batchConfigForm').querySelectorAll('select').forEach(s => s.value = '');
-            // 显示弹窗
-            new bootstrap.Modal(document.getElementById('batchConfigModal')).show();
-        }
-
-        /* ── 提交批量配置 ── */
-        function submitBatchConfig() {
-            document.getElementById('batchConfigForm').submit();
-        }
-
-        /* ── 分组树 ── */
-        let treeData = null;
-
-        function loadTree() {
-            const container = document.getElementById('treeContainer');
-            const loading = document.getElementById('treeLoading');
-            if (loading) loading.style.display = '';
-
-            fetch('/qrcodes/api/tree')
-                .then(r => r.json())
-                .then(data => {
-                    treeData = data;
-                    renderTree(data);
-                })
-                .catch(err => {
-                    container.innerHTML = '<div class="text-danger text-center py-2">加载失败</div>';
-                    console.error('Tree load error:', err);
-                });
-        }
-
-        function renderTree(nodes) {
-            const container = document.getElementById('treeContainer');
-            const loading = document.getElementById('treeLoading');
-            if (loading) loading.style.display = 'none';
-
-            if (!nodes || nodes.length === 0) {
-                container.innerHTML = '<div class="text-muted text-center py-2">暂无数据</div>';
-                return;
-            }
-
-            let html = '<ul class="list-unstyled tree-nav">';
-            nodes.forEach(city => {
-                const cityId = 'city-' + sanitizeId(city.name);
-                html += '<li>';
-                html += '<details open>';
-                html += '<summary class="tree-summary">';
-                html += '<span class="tree-label" onclick="filterByScope({city:\'' + esc(city.name) + '\'});return false;">';
-                html += '<i class="bi bi-building me-1"></i>' + esc(city.name);
-                html += '</span>';
-                html += '</summary>';
-                html += '<ul class="list-unstyled ms-3">';
-                (city.children || []).forEach(district => {
-                    const distId = 'dist-' + sanitizeId(district.name);
-                    html += '<li>';
-                    html += '<details>';
-                    html += '<summary class="tree-summary">';
-                    html += '<span class="tree-label" onclick="filterByScope({city:\'' + esc(city.name) + '\',district:\'' + esc(district.name) + '\'});return false;">';
-                    html += '<i class="bi bi-geo-alt me-1"></i>' + esc(district.name);
-                    html += '</span>';
-                    html += '</summary>';
-                    html += '<ul class="list-unstyled ms-3">';
-                    (district.children || []).forEach(group => {
-                        const isGroup = group.type === 'group';
-                        const icon = isGroup ? 'bi-people' : 'bi-folder';
-                        const label = isGroup ? esc(group.name) : esc(group.name);
-                        html += '<li>';
-                        if (isGroup && group.children && group.children.length > 0) {
-                            html += '<details>';
-                            html += '<summary class="tree-summary tree-group">';
-                            html += '<span class="tree-label" onclick="filterByScope({groupId:' + group.id + '});return false;">';
-                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
-                            html += ' <small class="text-muted">(' + group.children.length + ')</small>';
-                            html += '</span>';
-                            html += '</summary>';
-                            html += '<ul class="list-unstyled ms-3">';
-                            group.children.forEach(qr => {
-                                html += '<li><a href="#" class="tree-link tree-leaf" onclick="filterByScope({qrcodeId:' + qr.id + '});return false;">';
-                                html += '<i class="bi bi-qr-code me-1"></i>' + esc(qr.name);
-                                html += '</a></li>';
-                            });
-                            html += '</ul></details>';
-                        } else {
-                            html += '<span class="tree-summary tree-group" style="cursor:pointer;" onclick="filterByScope({groupId:' + (group.id || 0) + '});return false;">';
-                            html += '<i class="bi ' + icon + ' me-1"></i>' + label;
-                            if (isGroup) html += ' <small class="text-muted">(0)</small>';
-                            html += '</span>';
-                        }
-                        html += '</li>';
-                    });
-                    html += '</ul></details>';
-                    html += '</li>';
-                });
-                html += '</ul></details>';
-                html += '</li>';
-            });
-            html += '</ul>';
-            container.innerHTML = html;
-        }
-
-        function sanitizeId(name) {
-            return name.replace(/[^a-zA-Z0-9一-鿿]/g, '_');
-        }
-
-        function esc(str) {
-            if (!str) return '';
-            const div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
-        }
-
-        /* ── 通过树节点过滤表格 ── */
-        function filterByScope(scope) {
-            // 清除所有 active 样式
-            document.querySelectorAll('.tree-link').forEach(a => a.classList.remove('active', 'fw-bold'));
-            document.querySelectorAll('.tree-summary').forEach(s => s.classList.remove('tree-active'));
-
-            // 高亮当前点击的元素（若点击的是 tree-label，高亮其父级 summary）
-            if (event && event.target) {
-                let el = event.target;
-                if (el.classList.contains('tree-label')) {
-                    el = el.closest('summary');
-                }
-                if (el) el.classList.add('tree-active');
-            }
-
-            // 构建筛选参数
-            let params = new URLSearchParams();
-            if (scope.city) params.set('city', scope.city);
-            if (scope.district) params.set('district', scope.district);
-            // groupId 和 qrcodeId 筛选通过前端表格过滤实现
-            // 当前直接跳转到带城市/区县参数的分页列表
-
-            if (scope.city || scope.district) {
-                window.location.href = '/qrcodes?' + params.toString();
-            } else if (scope.groupId) {
-                // 前端按分组筛选：隐藏不匹配的行
-                filterTableByGroupId(scope.groupId);
-            } else if (scope.qrcodeId) {
-                // 前端按活码 ID 筛选：隐藏不匹配的行
-                filterTableByQrCodeId(scope.qrcodeId);
-            } else {
-                // "全部"：清除前端过滤
-                clearTableFilter();
-            }
-        }
-
-        function filterTableByGroupId(groupId) {
-            window.location.href = '/qrcodes?groupId=' + encodeURIComponent(groupId);
-        }
-
-        function filterTableByQrCodeId(qrcodeId) {
-            window.location.href = '/qrcodes/' + qrcodeId;
-        }
-
-        function clearTableFilter() {
-            window.location.href = '/qrcodes';
-        }
-
-        /* ── 页面加载时初始化树 ── */
-        document.addEventListener('DOMContentLoaded', function() {
-            loadTree();
-        });
-
-        /* ── 批量操作模式 ── */
-        let batchMode = false;
-        const selectedIds = new Set();
-
-        function toggleBatchMode() {
-            batchMode = !batchMode;
-            document.getElementById('batchToolbar').style.display = batchMode ? 'inline' : 'none';
-            document.getElementById('batchModeBtn').className = batchMode ? 'btn btn-sm btn-warning' : 'btn btn-sm btn-outline-warning';
-            document.getElementById('batchModeBtn').textContent = batchMode ? '🔧 退出批量' : '🔧 批量操作';
-            if (!batchMode) { selectedIds.clear(); updateSelectedCount(); }
-        }
-
-        function onCheck(id) {
-            if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
-            updateSelectedCount();
-        }
-
-        function updateSelectedCount() {
-            document.getElementById('selectedCount').textContent = selectedIds.size;
-        }
-
-        function batchAction(type) {
-            if (selectedIds.size === 0) { alert('请先勾选活码'); return; }
-            const ids = Array.from(selectedIds);
-            let url, body = 'ids=' + ids.join('&ids=');
-
-            switch(type) {
-                case 'welcome':
-                    const text = prompt('请输入新欢迎语：');
-                    if (!text) return;
-                    body += '&welcomeText=' + encodeURIComponent(text);
-                    url = '/qrcodes/batch/welcome'; break;
-                case 'rotate-mode':
-                    const mode = prompt('请输入轮换模式（auto/manual）：');
-                    if (!mode) return;
-                    body += '&mode=' + mode;
-                    url = '/qrcodes/batch/rotate-mode'; break;
-                case 'group':
-                    const gid = prompt('请输入分组ID（留空取消分组）：');
-                    if (gid === null) return;
-                    if (gid) body += '&groupId=' + gid;
-                    url = '/qrcodes/batch/group'; break;
-                case 'status':
-                    const st = prompt('请输入状态（active/paused）：');
-                    if (!st) return;
-                    body += '&status=' + st;
-                    url = '/qrcodes/batch/status'; break;
-                case 'scene':
-                    const sc = prompt('请输入场景（daily_push=日常 / parent_meeting=家长会）：');
-                    if (!sc) return;
-                    body += '&scene=' + sc;
-                    url = '/qrcodes/batch/scene'; break;
-                default: return;
-            }
-            fetch(url, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body})
-                .then(r => r.json()).then(d => {
-                    if (d.ok) { alert('成功更新 ' + d.count + ' 个活码'); location.reload(); }
-                    else alert('操作失败');
-                });
-        }
-    </script>
-
+    <script src="/js/qrcode-list.js"></script>
     <style>
         /* 树形导航样式 */
         .tree-nav details { margin-bottom: 2px; }

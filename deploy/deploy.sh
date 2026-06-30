@@ -108,7 +108,7 @@ ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "
         echo '>>> 首次部署：创建 huoma.env 模板，请编辑填入真实凭据'
         cp /dev/null /etc/systemd/system/huoma.env
         echo '# 请编辑此文件，填入真实凭据后重试部署' >> /etc/systemd/system/huoma.env
-        echo 'SCHOOL_ENTRY_URL=http://${SERVER_IP}/s' >> /etc/systemd/system/huoma.env
+        echo 'SCHOOL_ENTRY_URL=https://huoma.gsxhsd.com/s' >> /etc/systemd/system/huoma.env
         echo ''
         echo '========================================='
         echo ' ⚠️  检测到首次部署！'
@@ -236,6 +236,6 @@ fi
 echo ""
 echo "========================================="
 echo " 部署完成！"
-echo " 管理后台: http://${SERVER_IP}/"
+echo " 管理后台: https://huoma.gsxhsd.com/"
 [ -n "$ECS2_IP" ] && echo " ECS-2 后台: http://${ECS2_IP}/"
 echo "========================================="

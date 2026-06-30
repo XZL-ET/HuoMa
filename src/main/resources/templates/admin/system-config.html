@@ -12,12 +12,12 @@
 
     <div class="card border-0 shadow-sm">
         <div class="table-responsive">
-            <table class="table table-hover mb-0">
+            <table class="table table-hover mb-0 align-middle">
                 <thead class="table-light">
                     <tr>
-                        <th style="width:30%">配置键</th>
+                        <th style="width:25%">配置键</th>
                         <th>配置值</th>
-                        <th style="width:18%">更新时间</th>
+                        <th style="width:16%">更新时间</th>
                         <th style="width:8%">操作</th>
                     </tr>
                 </thead>
@@ -25,16 +25,23 @@
                     <tr th:each="c : ${configs}">
                         <td><code th:text="${c.configKey}"></code></td>
                         <td>
-                            <form th:action="@{/admin/system-config/save}" method="post" class="d-flex gap-2">
+                            <form th:action="@{/admin/system-config/save}" method="post"
+                                  class="d-flex align-items-start gap-2">
                                 <input type="hidden" name="configKey" th:value="${c.configKey}">
-                                <input type="text" name="configValue" th:value="${c.configValue}"
-                                       class="form-control form-control-sm" style="max-width:400px">
-                                <button type="submit" class="btn btn-sm btn-primary">
+                                <th:block th:if="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled')}">
+                                    <textarea name="configValue" class="form-control form-control-sm" rows="2"
+                                              style="max-width:480px" th:text="${c.configValue}"></textarea>
+                                </th:block>
+                                <th:block th:unless="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled')}">
+                                    <input type="text" name="configValue" th:value="${c.configValue}"
+                                           class="form-control form-control-sm" style="max-width:400px">
+                                </th:block>
+                                <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">
                                     ✓ 保存
                                 </button>
                             </form>
                         </td>
-                        <td th:text="${c.updatedAt}" class="text-muted small"></td>
+                        <td class="text-muted small" th:text="${c.updatedAt}"></td>
                         <td></td>
                     </tr>
                     <tr th:if="${configs.isEmpty()}">

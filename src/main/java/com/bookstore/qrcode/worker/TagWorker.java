@@ -274,13 +274,14 @@ public class TagWorker {
                     ? Long.valueOf(event.get("submission_id").asText()) : null;
                 String fieldData = (event.has("field_data") && !event.get("field_data").isNull())
                     ? event.get("field_data").asText() : "{}";
+                String schoolName = getField(event, "school_name");
 
                 if (externalUserId == null || userId == null || formTemplateId == null) {
                     log.warn("form_submit 事件缺少关键字段");
                     return;
                 }
                 tagService.applyFormTags(externalUserId, userId,
-                    formTemplateId, submissionId, fieldData);
+                    formTemplateId, submissionId, fieldData, schoolName);
                 return;
             }
         }

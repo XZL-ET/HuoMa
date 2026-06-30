@@ -136,7 +136,7 @@ public class DailyResetWorker {
             String msg = String.format("每日重置 %d 项失败: %s", failures, failDetails);
             log.error(msg);
             try {
-                alertService.createAlert("system", "daily_reset_failure",
+                alertService.createAlert(null, "daily_reset_failure",
                     AgentAlert.AlertSeverity.high, msg, AgentAlert.AutoAction.none, null);
             } catch (Exception e) {
                 log.error("告警发送失败", e);

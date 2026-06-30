@@ -5,7 +5,7 @@
 <div class="card p-4 mx-auto" style="max-width: 900px;">
     <h5 class="mb-4" th:text="${template == null ? '📋 新建表单模板' : '📋 编辑表单模板'}"></h5>
 
-    <form method="post"
+    <form method="post" enctype="multipart/form-data"
           th:action="${template == null ? '/admin/form-templates/create' : '/admin/form-templates/' + template.id + '/update'}"
           onsubmit="return prepareSubmit()">
 
@@ -20,6 +20,42 @@
                 <label class="form-label">说明</label>
                 <input type="text" name="description" class="form-control"
                        th:value="${template?.description}" placeholder="表单用途说明">
+            </div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">表单页副标题</label>
+            <input type="text" name="subtitle" class="form-control" maxlength="200"
+                   th:value="${template?.subtitle}"
+                   placeholder="留空使用默认：请填写孩子信息，以便为您精准服务">
+            <div class="form-text">客户在表单页看到的提示文字</div>
+        </div>
+
+        <!-- ④ 发送卡片设置 -->
+        <h6 class="mt-4 mb-3">📨 发送卡片设置</h6>
+        <div class="mb-3">
+            <label class="form-label">卡片标题</label>
+            <input type="text" name="cardTitle" class="form-control" maxlength="100"
+                   th:value="${template?.cardTitle}"
+                   placeholder="留空使用默认：📋 请填写孩子信息">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">卡片描述</label>
+            <input type="text" name="cardDesc" class="form-control" maxlength="500"
+                   th:value="${template?.cardDesc}"
+                   placeholder="留空使用默认：为了更好地为您提供精准服务，请点击填写孩子信息">
+        </div>
+        <div class="mb-3">
+            <label class="form-label">卡片图片</label>
+            <input type="file" name="cardPicFile" class="form-control" accept="image/*"
+                   onchange="previewCardPic(this)">
+            <div class="form-text">建议尺寸 400×300，JPG/PNG，不超过 5MB。留空不显示图片</div>
+            <!-- 编辑时保存已有图片地址 -->
+            <input type="hidden" name="existingCardPicUrl" th:value="${template?.cardPicUrl}">
+            <!-- 图片预览 -->
+            <div class="mt-2" id="cardPicPreview" th:style="'display:' + (${template?.cardPicUrl} != null ? 'block' : 'none')">
+                <img th:src="${template?.cardPicUrl}" class="border rounded" style="max-height:150px;max-width:300px;"
+                     onerror="this.style.display='none'">
+                <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="removeCardPic()">✕ 移除</button>
             </div>
         </div>
 
@@ -290,6 +326,26 @@
             fields[i].options = card.querySelector('.field-options').value;
         });
     }
+
+    // ── 卡片图片预览 ──
+    window.previewCardPic = function(input) {
+        var preview = document.getElementById('cardPicPreview');
+        var img = preview.querySelector('img');
+        if (input.files && input.files[0]) {
+            img.src = URL.createObjectURL(input.files[0]);
+            img.style.display = '';
+            preview.style.display = 'block';
+        }
+    };
+
+    window.removeCardPic = function() {
+        document.querySelector('input[name="cardPicFile"]').value = '';
+        document.querySelector('input[name="existingCardPicUrl"]').value = '';
+        var preview = document.getElementById('cardPicPreview');
+        preview.style.display = 'none';
+        var img = preview.querySelector('img');
+        img.src = '';
+    };
 
     // ── 初始渲染 ──
     render();

@@ -78,11 +78,17 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label">欢迎语文案
-                                <small class="text-muted">（留空继承分组或系统默认）</small>
+                                <small class="text-muted">（留空继承分组/分类或系统默认）</small>
                             </label>
                             <textarea name="welcomeText" class="form-control" rows="2"
                                       th:text="${qr.welcomeText}"
                                       placeholder="留空使用默认：{{school_name}}家长您好～"></textarea>
+                            <div class="form-text" th:if="${qr.welcomeText == null}">
+                                生效值：<code th:text="${effectiveWelcomeText}"></code>
+                                <span th:if="${welcomeSource != null}" class="text-info">
+                                    📎 继承自 <span th:text="${welcomeSource}"></span>
+                                </span>
+                            </div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">收集表单模板
@@ -95,9 +101,109 @@
                                         th:text="${t.name}"
                                         th:selected="${qr.formTemplateId == t.id}"></option>
                             </select>
+                            <div class="form-text" th:if="${qr.formTemplateId == null && effectiveFormTemplateId != null}">
+                                生效模板 ID：<code th:text="${effectiveFormTemplateId}"></code>
+                                <span th:if="${formTemplateSource != null}" class="text-info">
+                                    📎 继承自 <span th:text="${formTemplateSource}"></span>
+                                </span>
+                            </div>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-sm btn-primary mt-3">保存配置</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 在职继承问候语配置区 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>📝 在职继承问候语配置
+                    <small class="text-muted">（留空继承<a href="/admin/system-config">系统默认设置</a>）</small>
+                </h6>
+                <form th:action="@{/qrcodes/{id}/transfer-greeting(id=${qr.id})}" method="post" id="transferGreetingForm">
+                    <!-- 启用开关 -->
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   name="transferGreetingEnabled" value="true"
+                                   id="transferEnabled"
+                                   th:checked="${effectiveTransferEnabled}">
+                            <label class="form-check-label" for="transferEnabled">启用在职继承问候语</label>
+                        </div>
+                        <div class="form-text" th:if="${!transferEnabledOverride}">
+                            生效值：<span th:text="${effectiveTransferEnabled ? '已启用' : '已禁用'}"></span>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferEnabledOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 已填写-备注模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">已填写-备注模板
+                            <small class="text-muted">（写入企微客户备注）</small>
+                        </label>
+                        <textarea name="transferFilledNote" class="form-control" rows="2"
+                                  th:text="${qr.transferFilledNote}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferFilledNoteOverride}">
+                            生效值：<code th:text="${effectiveTransferFilledNote}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferFilledNoteOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 已填写-问候语模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">已填写-问候语模板
+                            <small class="text-muted">（客户已填表时发送）</small>
+                        </label>
+                        <textarea name="transferFilledGreeting" class="form-control" rows="2"
+                                  th:text="${qr.transferFilledGreeting}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferFilledGreetingOverride}">
+                            生效值：<code th:text="${effectiveTransferFilledGreeting}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferFilledGreetingOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 未填写-问候语模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">未填写-问候语模板
+                            <small class="text-muted">（客户未填表时发送）</small>
+                        </label>
+                        <textarea name="transferUnfilledGreeting" class="form-control" rows="2"
+                                  th:text="${qr.transferUnfilledGreeting}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferUnfilledGreetingOverride}">
+                            生效值：<code th:text="${effectiveTransferUnfilledGreeting}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferUnfilledGreetingOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 模板变量提示 -->
+                    <div class="text-muted small mb-2">
+                        可用变量：
+                        <code>{{parent_name}}</code> <code>{{school_name}}</code>
+                        <code>{{teacher_name}}</code> <code>{{grade}}</code>
+                        <code>{{class}}</code> <code>{{child_name}}</code>
+                        <code>{{form_link}}</code>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-sm btn-primary">保存问候语配置</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                onclick="resetTransferGreeting()">重置为系统默认</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -106,12 +212,23 @@
         <div class="col-12">
             <div class="card p-4">
                 <h6>🔄 在职继承
+                    <button type="button" class="btn btn-sm btn-outline-warning float-end ms-1" id="autoInheritanceToggle"
+                            onclick="toggleAutoInheritance()">⏸ 暂停自动</button>
                     <a th:href="@{/qrcodes/{id}/transfers(id=${qr.id})}"
                        class="btn btn-sm btn-outline-secondary float-end">查看记录</a>
+                    <span id="autoStatus" class="float-end small text-success me-2 mt-1">● 自动运行中</span>
                 </h6>
-                <p class="small text-muted">将接待员当日积累的客户批量转移给服务老师</p>
-                <button class="btn btn-sm btn-outline-primary" id="triggerInheritanceBtn"
-                        th:attr="data-qrid=${qr.id}">执行在职继承</button>
+                <p class="small text-muted">
+                    🕗 <b>白天 (<span th:text="${dayStartHour}"></span>:00‑<span th:text="${dayEndHour}"></span>:00)</b>：客户添加后延迟 15 分钟自动转到服务老师<br>
+                    🌙 <b>夜间 (<span th:text="${dayEndHour}"></span>:00‑<span th:text="${dayStartHour}"></span>:00)</b>：次日 08:30 批量转移，避免半夜打扰客户<br>
+                    <span class="text-secondary">下方按钮可手动触发今日待转移客户（无视时间窗口）</span>
+                </p>
+                <div class="d-flex gap-2">
+                    <a th:href="@{/qrcodes/{id}/transfer-preview(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-primary">📋 查看待转移客户</a>
+                    <button class="btn btn-sm btn-outline-success" id="triggerInheritanceBtn"
+                            th:attr="data-qrid=${qr.id}">⚡ 执行继承</button>
+                </div>
                 <span id="transferPreview" class="ms-2 small text-muted"></span>
             </div>
         </div>
@@ -122,7 +239,9 @@
                 <h6>
                     📱 活码联系人
                     <small class="text-muted">（扫码后客户随机分配到这几位中的一位）</small>
-                    <button class="btn btn-sm btn-outline-success float-end" data-bs-toggle="modal" data-bs-target="#addAgentModal">
+                    <a th:href="@{/qrcodes/{id}/verify-agents(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-danger float-end me-1">🔍 核验异常员工</a>
+                    <button class="btn btn-sm btn-outline-success float-end me-1" data-bs-toggle="modal" data-bs-target="#addAgentModal">
                         ➕ 新增联系人
                     </button>
                 </h6>
@@ -623,16 +742,86 @@
         this.disabled = true;
         this.textContent = '执行中...';
         try {
-            const resp = await fetch('/api/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
+            const resp = await fetch('/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
             const data = await resp.json();
             document.getElementById('transferPreview').textContent =
-                data.success ? '已发起 ' + data.count + ' 条继承任务' : '失败: ' + data.error;
+                data.transferred != null ? '✅ 已发起 ' + data.transferred + ' 条继承任务' : '失败: ' + (data.error || '未知错误');
         } catch(e) {
             document.getElementById('transferPreview').textContent = '网络错误';
         }
         this.disabled = false;
         this.textContent = '执行在职继承';
     });
+
+    // 自动在职继承开关
+    async function initAutoToggle() {
+        const btn = document.getElementById('autoInheritanceToggle');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = '加载中...';
+        try {
+            const resp = await fetch('/api/inheritance/auto/status');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            updateAutoToggleUI(data.enabled);
+        } catch(e) {
+            console.error('获取自动继承状态失败:', e);
+            // 恢复默认 UI（自动运行中）
+            updateAutoToggleUI(true);
+        }
+        btn.disabled = false;
+    }
+    function updateAutoToggleUI(enabled) {
+        const btn = document.getElementById('autoInheritanceToggle');
+        const status = document.getElementById('autoStatus');
+        if (!btn || !status) return;
+        if (enabled) {
+            btn.textContent = '⏸ 暂停自动';
+            btn.className = 'btn btn-sm btn-outline-warning float-end ms-1';
+            status.textContent = '● 自动运行中';
+            status.className = 'float-end small text-success me-2 mt-1';
+        } else {
+            btn.textContent = '▶ 开启自动';
+            btn.className = 'btn btn-sm btn-outline-success float-end ms-1';
+            status.textContent = '● 自动已暂停';
+            status.className = 'float-end small text-danger me-2 mt-1';
+        }
+    }
+    async function toggleAutoInheritance() {
+        const btn = document.getElementById('autoInheritanceToggle');
+        if (!btn) return;
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = '切换中...';
+        try {
+            const resp = await fetch('/api/inheritance/auto/toggle', {method:'POST'});
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error('HTTP ' + resp.status + (text.length < 100 ? ': ' + text : ''));
+            }
+            const data = await resp.json();
+            updateAutoToggleUI(data.enabled);
+        } catch(e) {
+            console.error('切换自动继承失败:', e);
+            alert('切换失败: ' + e.message);
+        }
+        btn.disabled = false;
+        if (btn.textContent === '切换中...') {
+            btn.textContent = originalText;
+        }
+    }
+    initAutoToggle();
+
+    function resetTransferGreeting() {
+        // 开启开关
+        document.getElementById('transferEnabled').checked = true;
+        // 清空三个模板字段（空=使用系统默认）
+        document.querySelector('[name="transferFilledNote"]').value = '';
+        document.querySelector('[name="transferFilledGreeting"]').value = '';
+        document.querySelector('[name="transferUnfilledGreeting"]').value = '';
+        // 提交表单
+        document.getElementById('transferGreetingForm').submit();
+    }
 
     function toggleAllReceptionists(master) {
         document.querySelectorAll('.receptionist-check:not([disabled])').forEach(cb => {
@@ -661,7 +850,7 @@
         const agentIds = Array.from(checked).map(cb => parseInt(cb.value));
         const qrId = /*[[${qr.id}]]*/ 0;
         try {
-            const resp = await fetch('/api/qrcodes/' + qrId + '/agents/batch-recycle', {
+            const resp = await fetch('/qrcodes/' + qrId + '/agents/batch-recycle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ agentIds: agentIds })

@@ -89,8 +89,10 @@ public class TransferWorker {
                         String state = getField(event, "state");
 
                         if (customerId != null && fromUserid != null
-                                && toUserid != null && externalUserid != null) {
-                            transferService.initiate(customerId, fromUserid, externalUserid, state);
+                                && externalUserid != null) {
+                            transferService.initiate(customerId, fromUserid,
+                                toUserid,  // 可为 null，initiate 自动查找服务老师
+                                externalUserid, state);
                         }
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TRANSFER_STREAM_KEY,
@@ -112,7 +114,8 @@ public class TransferWorker {
                 }
 
                 try {
-                    redisTemplate.opsForStream().trim(RedisConfig.TRANSFER_STREAM_KEY, 10000, true);
+                    redisTemplate.opsForStream().trim(
+                        RedisConfig.TRANSFER_STREAM_KEY, RedisConfig.STREAM_MAXLEN, true);
                 } catch (Exception e) { log.debug("TRANSFER trim skip: {}", e.getMessage()); }
             } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             catch (Exception e) {

@@ -123,19 +123,41 @@ public class TagService {
             }
 
             // ===== 活码自定义标签 =====
+            // 支持两种格式：
+            //   "标签名"              → 默认归入"学校"标签组（向后兼容）
+            //   "标签组名:标签名"      → 归入指定标签组，如 "客户等级:VIP客户"
             if (qr.getCustomTags() != null && !qr.getCustomTags().isBlank()) {
-                for (String tagName : qr.getCustomTags().split(",")) {
-                    String trimmed = tagName.trim();
+                for (String entry : qr.getCustomTags().split(",")) {
+                    String trimmed = entry.trim();
                     if (trimmed.isEmpty()) continue;
-                    Tag customTag = getOrCreateTag(trimmed, Tag.TagType.system, null, null);
+
+                    final String tagName;
+                    final String groupKeyword;
+                    if (trimmed.contains(":")) {
+                        String[] parts = trimmed.split(":", 2);
+                        String gk = parts[0].trim();
+                        tagName = parts[1].trim();
+                        if (tagName.isEmpty()) {
+                            log.warn("自动打标 自定义标签格式异常(跳过): entry={}", entry);
+                            continue;
+                        }
+                        // 标签组为空时回退到默认行为（null → createWecomTag 兜底"学校"组）
+                        groupKeyword = gk.isEmpty() ? null : gk;
+                    } else {
+                        groupKeyword = null;  // null → createWecomTag 兜底用"学校"组
+                        tagName = trimmed;
+                    }
+
+                    Tag customTag = getOrCreateTag(tagName, Tag.TagType.system, null, groupKeyword);
                     bindCustomerTag(customer.getId(), customTag.getId(), "system");
                     if (customTag.getWecomTagId() != null) {
                         try {
                             wecomApi.markTag(externalUserId, userId, List.of(customTag.getWecomTagId()));
-                            log.info("企微打标成功(自定义): tag={}, wecomTagId={}", customTag.getName(), customTag.getWecomTagId());
+                            log.info("企微打标成功(自定义): tag={}, group={}, wecomTagId={}",
+                                customTag.getName(), groupKeyword, customTag.getWecomTagId());
                         } catch (Exception e) {
-                            log.error("企微打标失败: tag={}, wecomTagId={}",
-                                customTag.getName(), customTag.getWecomTagId(), e);
+                            log.error("企微打标失败: tag={}, group={}, wecomTagId={}",
+                                customTag.getName(), groupKeyword, customTag.getWecomTagId(), e);
                         }
                     }
                 }
@@ -299,6 +321,8 @@ public class TagService {
         String exact = cachedGroupIdMap.get(keyword);
         if (exact != null) return exact;
         // ② 模糊匹配兜底：如 "学校" 匹配到第一个包含"学校"的组
+        // 防御：keyword 为空或 null 时不进行模糊匹配（String.contains(null) 会 NPE）
+        if (keyword == null || keyword.isEmpty()) return null;
         return cachedGroupIdMap.entrySet().stream()
             .filter(e -> e.getKey().contains(keyword))
             .map(Map.Entry::getValue)
@@ -331,10 +355,11 @@ public class TagService {
      * 在企业微信创建标签，返回企微标签 ID。
      *
      * <p>根据 groupKeyword 查找企微已有的标签组（如 "学校" 匹配 "学校" 标签组），
-     * 将标签创建到正确的分组下。若找不到匹配组，则使用企微默认行为（不指定 group_id）。</p>
+     * 将标签创建到正确的分组下。若找不到匹配组，则以 groupKeyword 作为组名创建新组。</p>
      *
      * @param tagName      标签名称
-     * @param groupKeyword 标签组关键词，用于匹配企微已有标签组（如 "学校"、"市"、"区"）
+     * @param groupKeyword 标签组关键词，用于匹配企微已有标签组（如 "学校"、"市"、"区"）。
+     *                     null 时默认归入"学校"组
      * @return 企业微信返回的标签 ID
      * @throws RuntimeException 企微接口调用失败或返回数据异常时抛出
      */
@@ -348,7 +373,8 @@ public class TagService {
                 log.info("标签 '{}' 归入企微标签组 groupId={} (keyword={})", tagName, groupId, groupKeyword);
                 resp = wecomApi.addCorpTag(tagName, groupId);
             } else {
-                // 未找到匹配组：用 group_name="学校" 兜底（企微 API 会追加到已有的同名组）
+                // 未找到匹配组：以 groupKeyword 为组名创建新组 + 标签
+                // （如 "学校-白银市" 首次出现时会自动创建该学校组）
                 String fallbackGroup = groupKeyword != null ? groupKeyword : "学校";
                 log.info("未找到关键词匹配的标签组，标签 '{}' 用 group_name='{}' 创建", tagName, fallbackGroup);
                 resp = wecomApi.addCorpTagWithGroup(tagName, fallbackGroup);
@@ -723,7 +749,8 @@ public class TagService {
      */
     @Transactional
     public void applyFormTags(String externalUserId, String userId,
-                               Long formTemplateId, Long submissionId, String fieldDataJson) {
+                               Long formTemplateId, Long submissionId, String fieldDataJson,
+                               String schoolName) {
         try {
             FormTemplate tpl = formTemplateRepo.findById(formTemplateId).orElse(null);
             if (tpl == null) { log.warn("表单模板不存在: {}", formTemplateId); return; }
@@ -737,6 +764,16 @@ public class TagService {
             List<String> appliedTags = new ArrayList<>();
             final String[] remarkText = { null };
 
+            // 区域联盟：客户选择的学校也打成标签
+            if (schoolName != null && !schoolName.isBlank()) {
+                Tag schoolTag = getOrCreateTag(schoolName, Tag.TagType.form, null, "学校");
+                bindCustomerTag(customer.getId(), schoolTag.getId(), "form");
+                if (schoolTag.getWecomTagId() != null) {
+                    wecomApi.markTag(externalUserId, userId, List.of(schoolTag.getWecomTagId()));
+                    appliedTags.add(schoolTag.getName());
+                }
+            }
+
             java.util.Iterator<String> fn = fieldData.fieldNames();
             while (fn.hasNext()) {
                 String fieldName = fn.next();
@@ -747,8 +784,18 @@ public class TagService {
                     ? tagMapping.get(fieldName).asText() : null;
                 if (action == null) continue;
 
-                if ("tag".equals(action)) {
-                    Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, "学校");
+                // 支持 "tag" 和 "tag:标签组名" 两种格式
+                //   "tag"           → 默认归入"学校"标签组（向后兼容）
+                //   "tag:客户等级"   → 归入"客户等级"标签组
+                if ("tag".equals(action) || action.startsWith("tag:")) {
+                    final String groupKeyword;
+                    if (action.startsWith("tag:") && action.length() > 4) {
+                        String extracted = action.substring(4).trim();
+                        groupKeyword = extracted.isEmpty() ? "学校" : extracted;
+                    } else {
+                        groupKeyword = "学校";
+                    }
+                    Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, groupKeyword);
                     bindCustomerTag(customer.getId(), tag.getId(), "form");
                     if (tag.getWecomTagId() != null) {
                         wecomApi.markTag(externalUserId, userId, List.of(tag.getWecomTagId()));

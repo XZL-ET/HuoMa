@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS qr_code (
     student_count INT,
     scene ENUM('daily_push','parent_meeting') NOT NULL DEFAULT 'daily_push',
     department_id BIGINT,
+    transfer_greeting_enabled BOOLEAN,
+    transfer_filled_note VARCHAR(500),
+    transfer_filled_greeting VARCHAR(500),
+    transfer_unfilled_greeting VARCHAR(500),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -182,7 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_customer_tag_tag_id ON customer_tag (tag_id);
 -- agent_alert：异常记录
 CREATE TABLE IF NOT EXISTS agent_alert (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    agent_userid VARCHAR(100) NOT NULL,
+    agent_userid VARCHAR(100) NULL,
     alert_type VARCHAR(50) NOT NULL,
     severity VARCHAR(20) NOT NULL DEFAULT 'medium'
         CHECK (severity IN ('low','medium','high')),
@@ -327,6 +331,7 @@ CREATE TABLE IF NOT EXISTS school (
     school_name VARCHAR(128) NOT NULL,
     region_city VARCHAR(64) NOT NULL,
     region_district VARCHAR(64) NOT NULL,
+    category_id BIGINT,
     has_qrcode BOOLEAN NOT NULL DEFAULT FALSE,
     deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -367,13 +372,21 @@ MERGE INTO system_config (config_key, config_value) KEY(config_key)
 VALUES ('global_contact_name', '火马客服'),
        ('global_contact_qr_config_id', ''),
        ('global_contact_qr_url', ''),
-       ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
+       ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！'),
+       ('transfer_greeting_enabled_default', 'true'),
+       ('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
+       ('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
+       ('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}');
 
 -- form_template：表单模板
 CREATE TABLE IF NOT EXISTS form_template (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     description VARCHAR(500),
+    subtitle VARCHAR(200),
+    card_title VARCHAR(100),
+    card_desc VARCHAR(500),
+    card_pic_url VARCHAR(500),
     fields JSON,
     tag_mapping JSON,
     remark_template VARCHAR(500),
@@ -388,6 +401,7 @@ CREATE TABLE IF NOT EXISTS form_submission (
     customer_id BIGINT NOT NULL,
     qr_code_id BIGINT,
     field_data JSON NOT NULL,
+    school_name VARCHAR(100),
     tags_applied VARCHAR(500),
     remark_updated VARCHAR(500),
     submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -409,3 +423,18 @@ CREATE TABLE IF NOT EXISTS qr_code_group (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- school_category：学校分类表
+CREATE TABLE IF NOT EXISTS school_category (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    default_welcome_text VARCHAR(500),
+    default_form_template_id BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_category_name UNIQUE (name)
+);
+
+-- 默认分类
+MERGE INTO school_category (name, sort_order) KEY(name) VALUES ('未分类', 0);

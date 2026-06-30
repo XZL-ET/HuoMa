@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.RenderingHints;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,6 +47,7 @@ public class SchoolEntryController {
     private final SchoolService schoolService;
     private final SchoolAccessLogService logService;
     private final QrCodeRepository qrCodeRepository;
+    private final Font baseFont;
 
     // ========================================================================
     // 首页：市州列表 + 全局联系人
@@ -191,9 +193,10 @@ public class SchoolEntryController {
                 // 分隔线
                 g.setColor(new Color(220, 220, 220));
                 g.drawLine(20, qrImage.getHeight() + 8, width - 20, qrImage.getHeight() + 8);
-                // 学校名称
+                // 学校名称（使用 FontConfig 加载的中文字体，避免 Linux 上显示为方块）
                 g.setColor(new Color(51, 51, 51));
-                g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
+                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                g.setFont(baseFont.deriveFont(Font.PLAIN, 16f));
                 FontMetrics fm = g.getFontMetrics();
                 String schoolLabel = detail.getSchoolName();
                 int textWidth = fm.stringWidth(schoolLabel);

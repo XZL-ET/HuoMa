@@ -19,6 +19,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -76,6 +77,7 @@ public class CallbackWorker {
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
     @Value("${app.worker.callback.threads:4}")
     private int consumerThreads;
+
     private static final String CONSUMER_PREFIX = "callback-worker";
 
     /**
@@ -424,7 +426,9 @@ public class CallbackWorker {
             if (qr != null) {
                 outEvent.put("qr_code_id", qr.getId().toString());
             }
-            outEvent.put("customer_id", customerId.toString());
+            if (customerId != null) {
+                outEvent.put("customer_id", customerId.toString());
+            }
             if (welcomeCode != null) {
                 outEvent.put("welcome_code", welcomeCode);
             }
@@ -435,6 +439,11 @@ public class CallbackWorker {
             log.error("发布欢迎语事件失败: external={}", externalUserId, e);
             // 不抛异常，不影响主流程（客户已入库+日计数已完成）
         }
+
+        // ⑥ 在职继承已移至 InheritanceJob 定时任务：
+        //    白天（默认 08:00-21:00）：每 15 分钟批量转移（延迟 15 分钟）
+        //    夜间（默认 21:00-08:00）：次日 08:30 批量转移
+        //    不再在此处立即 XADD，保证客户添加后延迟 15 分钟再转，避免打扰
 
         log.info("添加成功处理完成: external={}, userid={}, state={}, customerId={}",
             externalUserId, userId, state, customerId);

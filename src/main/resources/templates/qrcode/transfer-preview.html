@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='在职继承预览', content=~{::main})}">
+<main>
+<div class="container-fluid">
+
+    <!-- 标题栏 -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h5 class="mb-0">🔄 在职继承预览 — <span th:text="${qr.schoolName}"></span></h5>
+            <small class="text-muted">
+                <span th:if="${serviceName != null}">
+                    服务老师：<strong th:text="${serviceName}"></strong>
+                </span>
+                <span th:unless="${serviceName != null}" class="text-danger">
+                    ⚠ 未配置服务老师，无法执行继承
+                </span>
+            </small>
+        </div>
+        <div>
+            <a th:href="@{/qrcodes/{id}(id=${qr.id})}"
+               class="btn btn-sm btn-outline-secondary">← 返回活码</a>
+            <a th:href="@{/qrcodes/{id}/transfers(id=${qr.id})}"
+               class="btn btn-sm btn-outline-info ms-1">📋 转移记录</a>
+            <button class="btn btn-sm btn-outline-primary ms-1"
+                    id="triggerBtn" th:attr="data-qrid=${qr.id}"
+                    th:disabled="${serviceName == null}">
+                ⚡ 执行继承
+            </button>
+            <button class="btn btn-sm btn-outline-danger ms-1"
+                    id="backfillBtn" th:attr="data-qrid=${qr.id}"
+                    th:disabled="${serviceName == null}">
+                🔄 全量补转
+            </button>
+        </div>
+    </div>
+
+    <!-- 时间窗口提示 -->
+    <div class="alert alert-info py-2 small mb-3" role="alert">
+        <span th:if="${isDaytime}">
+            🕗 当前是<b>白天时段 (<span th:text="${dayStartHour}"></span>:00‑<span th:text="${dayEndHour}"></span>:00)</b>，新客户将在添加后 <b>15 分钟</b>自动转到服务老师。
+        </span>
+        <span th:unless="${isDaytime}">
+            🌙 当前是<b>夜间时段 (<span th:text="${dayEndHour}"></span>:00‑<span th:text="${dayStartHour}"></span>:00)</b>，新客户将在次日 08:30 <b>批量</b>转移。
+        </span>
+        下方按钮可立即执行手动转移（无视时间窗口）。
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <div class="card border-warning">
+                <div class="card-body py-2 text-center">
+                    <div class="fs-4 fw-bold text-warning" th:text="${totalWaiting}">0</div>
+                    <small class="text-muted">⏳ 待转移</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-info">
+                <div class="card-body py-2 text-center">
+                    <div class="fs-4 fw-bold text-info" th:text="${totalPending}">0</div>
+                    <small class="text-muted">🔄 待客户确认</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card border-success">
+                <div class="card-body py-2 text-center">
+                    <div class="fs-4 fw-bold text-success" th:text="${totalConfirmed}">0</div>
+                    <small class="text-muted">✅ 已完成</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 无数据提示 -->
+    <div th:if="${paths.isEmpty()}" class="text-center text-muted py-5">
+        <h4>📭 暂无待转移客户</h4>
+        <p>今天还没有新客户通过此活码添加接待员</p>
+    </div>
+
+    <!-- 批量操作栏 -->
+    <div th:unless="${paths.isEmpty()}" class="d-flex gap-2 mb-2 align-items-center">
+        <input type="checkbox" id="selectAll" onchange="toggleAll(this)" class="form-check-input ms-1">
+        <label for="selectAll" class="form-check-label small text-muted">全选</label>
+        <button class="btn btn-sm btn-outline-success ms-2" id="transferSelectedBtn"
+                th:attr="data-qrid=${qr.id}" onclick="transferSelected()">
+            ⚡ 转移选中接待员
+        </button>
+        <span id="selectedCount" class="small text-muted">未选中</span>
+    </div>
+
+    <!-- 每条转移路径 -->
+    <div th:each="p,iter : ${paths}" class="card mb-3">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+            <div>
+                <input type="checkbox" class="path-check form-check-input me-2"
+                       th:value="${p.fromUserid}" onchange="updateSelected()">
+                <strong th:text="${p.fromName}"></strong>
+                <span class="text-muted mx-2">→</span>
+                <strong th:text="${serviceName}"></strong>
+            </div>
+            <span class="badge bg-secondary" th:text="'共 ' + ${p.customerCount} + ' 人'"></span>
+        </div>
+        <table class="table table-sm table-hover mb-0">
+            <thead>
+                <tr class="table-light">
+                    <th>客户</th>
+                    <th>添加时间</th>
+                    <th style="width:100px">状态</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr th:each="c : ${p.customerRows}">
+                    <td>
+                        <span th:text="${c.name}"></span>
+                        <small class="text-muted ms-2" th:text="'(' + ${c.externalUserid} + ')'"></small>
+                    </td>
+                    <td class="small" th:text="${c.addTime}"></td>
+                    <td>
+                        <span class="badge"
+                              th:classappend="${c.transferStatus == 'waiting' ? 'bg-warning'
+                                  : c.transferStatus == 'pending_confirm' ? 'bg-info'
+                                  : c.transferStatus == 'confirmed' ? 'bg-success'
+                                  : 'bg-secondary'}"
+                              th:text="${c.transferStatus == 'waiting' ? '待转移'
+                                  : c.transferStatus == 'pending_confirm' ? '待确认'
+                                  : c.transferStatus == 'confirmed' ? '已完成'
+                                  : c.transferStatus}"></span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+        <!-- 截断提示 -->
+        <div th:if="${p.truncated}" class="card-footer py-1 small text-muted">
+            ⚠ 仅显示前 50 条，共 <span th:text="${p.customerCount}"></span> 条
+        </div>
+    </div>
+
+    <!-- 分页导航 -->
+    <nav th:if="${totalPages > 1}" class="mt-3">
+        <ul class="pagination pagination-sm justify-content-center">
+            <li class="page-item" th:classappend="${currentPage == 0} ? 'disabled'">
+                <a class="page-link" th:href="@{/qrcodes/{id}/transfer-preview(id=${qr.id}, page=${currentPage - 1})}">上一页</a>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link" th:text="'第' + (${currentPage} + 1) + '页 / 共' + ${totalPages} + '页'"></span>
+            </li>
+            <li class="page-item" th:classappend="${currentPage + 1 >= totalPages} ? 'disabled'">
+                <a class="page-link" th:href="@{/qrcodes/{id}/transfer-preview(id=${qr.id}, page=${currentPage + 1})}">下一页</a>
+            </li>
+        </ul>
+    </nav>
+
+</div>
+
+<script>
+// 全选/取消全选
+function toggleAll(master) {
+    document.querySelectorAll('.path-check').forEach(cb => { cb.checked = master.checked; });
+    updateSelected();
+}
+// 更新选中计数
+function updateSelected() {
+    const checked = document.querySelectorAll('.path-check:checked').length;
+    document.getElementById('selectedCount').textContent = checked > 0 ? '已选 ' + checked + ' 人' : '未选中';
+}
+// 转移选中的接待员
+async function transferSelected() {
+    const checked = document.querySelectorAll('.path-check:checked');
+    if (checked.length === 0) { alert('请先勾选要转移的接待员'); return; }
+    const fromUserids = Array.from(checked).map(cb => cb.value);
+    const qrId = document.getElementById('transferSelectedBtn').dataset.qrid;
+    if (!confirm('确定要转移选中的 ' + checked.length + ' 个接待员的客户吗？')) return;
+    try {
+        const params = new URLSearchParams();
+        fromUserids.forEach(u => params.append('fromUserids', u));
+        const resp = await fetch('/qrcodes/' + qrId + '/transfer/trigger-selected', {
+            method: 'POST', body: params
+        });
+        const data = await resp.json();
+        if (data.error) { alert('失败: ' + data.error); }
+        else { alert('已发起 ' + data.transferred + ' 条转移'); location.reload(); }
+    } catch(e) { alert('网络错误'); }
+}
+
+document.getElementById('triggerBtn')?.addEventListener('click', async function() {
+    const qrId = this.dataset.qrid;
+    if (!confirm('确定要立即执行在职继承吗？\n\n将把今天所有待转移客户转到服务老师名下。')) return;
+    this.disabled = true;
+    this.textContent = '执行中...';
+    try {
+        const resp = await fetch('/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
+        const data = await resp.json();
+        if (data.error) {
+            alert('失败: ' + data.error);
+        } else {
+            alert('已发起 ' + data.transferred + ' 条继承任务');
+            location.reload();
+        }
+    } catch(e) {
+        alert('网络错误');
+    }
+    this.disabled = false;
+    this.textContent = '⚡ 执行继承';
+});
+
+document.getElementById('backfillBtn')?.addEventListener('click', async function() {
+    const qrId = this.dataset.qrid;
+    if (!confirm('⚠️ 全量补转将把该活码下所有历史客户（不限添加时间）转到服务老师名下。\n\n'
+               + '已转过或被去重跳过的客户不会重复转移。\n\n确定要继续吗？')) return;
+    this.disabled = true;
+    this.textContent = '补转中...';
+    try {
+        const resp = await fetch('/qrcodes/' + qrId + '/transfer/backfill', {method:'POST'});
+        const data = await resp.json();
+        if (data.error) {
+            alert('失败: ' + data.error);
+        } else {
+            alert('已发起 ' + data.transferred + ' 条全量补转任务');
+            location.reload();
+        }
+    } catch(e) {
+        alert('网络错误');
+    }
+    this.disabled = false;
+    this.textContent = '🔄 全量补转';
+});
+</script>
+</main>
+</html>

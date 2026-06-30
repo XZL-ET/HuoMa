@@ -8,7 +8,7 @@
         ← 返回活码详情
     </a>
     <table class="table table-sm mt-3">
-        <thead><tr><th>客户ID</th><th>转出方</th><th>转入方</th><th>状态</th><th>时间</th></tr></thead>
+        <thead><tr><th>客户ID</th><th>转出方</th><th>转入方</th><th>状态</th><th>时间</th><th>欢迎语</th><th>失败原因</th></tr></thead>
         <tbody>
             <tr th:each="t : ${transfers.content}">
                 <td th:text="${t.customerId}"></td>
@@ -19,12 +19,22 @@
                           th:classappend="${t.status.name() == 'confirmed' ? 'bg-success'
                               : t.status.name() == 'rejected' ? 'bg-danger'
                               : t.status.name() == 'timeout' ? 'bg-warning'
+                              : t.status.name() == 'pending_confirm' ? 'bg-info'
                               : t.status.name() == 'api_failed' ? 'bg-secondary'
                               : t.status.name() == 'retry_limit' ? 'bg-dark'
                               : 'bg-secondary'}"
                           th:text="${t.status.name()}"></span>
                 </td>
                 <td th:text="${t.transferTime}"></td>
+                <td>
+                    <span th:if="${t.greetingSent}" class="badge bg-success">✓已发</span>
+                    <span th:unless="${t.greetingSent}" class="badge bg-secondary">未发</span>
+                    <small class="text-muted ms-1"
+                          th:text="${t.greetingType != null ? t.greetingType.name() : ''}"></small>
+                </td>
+                <td>
+                    <small class="text-muted" th:text="${t.failReason}"></small>
+                </td>
             </tr>
         </tbody>
     </table>

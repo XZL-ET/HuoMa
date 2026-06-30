@@ -24,6 +24,10 @@ public class FormSubmission {
     @Column(name = "field_data", columnDefinition = "JSON", nullable = false)
     private String fieldData;
 
+    /** 客户填写的学校名称（区域联盟场景下从 schoolList 下拉选择，独立学校自动取自活码） */
+    @Column(name = "school_name", length = 100)
+    private String schoolName;
+
     @Column(name = "tags_applied", length = 500)
     private String tagsApplied;
 

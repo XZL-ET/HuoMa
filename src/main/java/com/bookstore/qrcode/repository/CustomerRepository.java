@@ -162,6 +162,29 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     long countByAddedAgentAndAddTimeAfter(String addedAgent, LocalDateTime addTime);
 
     /**
+     * 根据添加人和添加时间区间查询客户列表，按添加时间升序排列。
+     * <p>
+     * 用于在职继承夜间批量场景：查询某个接待员在前一天 21:00 到今天 08:00
+     * 之间添加的全部客户，由 08:30 定时任务统一发起转移。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid，不可为 null
+     * @param start      添加时间下限（含），不可为 null
+     * @param end        添加时间上限（不含），不可为 null
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndAddTimeBetween(String addedAgent,
+                                                      LocalDateTime start, LocalDateTime end);
+
+    /**
+     * 查询指定接待员添加的所有客户（不限时间），用于全量补转。
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @return 该接待员添加的全部客户列表，按添加时间升序
+     */
+    List<Customer> findByAddedAgent(String addedAgent);
+
+    /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
      * 仅返回需要修复的记录，避免全表扫描。
      */

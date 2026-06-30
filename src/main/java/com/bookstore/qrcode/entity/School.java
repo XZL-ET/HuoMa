@@ -35,6 +35,9 @@ public class School {
     @Column(name = "region_district", nullable = false, length = 64)
     private String regionDistrict;
 
+    @Column(name = "category_id")
+    private Long categoryId;
+
     @Column(name = "has_qrcode", nullable = false)
     @Builder.Default
     private Boolean hasQrcode = false;

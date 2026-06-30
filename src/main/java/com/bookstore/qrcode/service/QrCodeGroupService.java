@@ -6,6 +6,8 @@ import com.bookstore.qrcode.repository.QrCodeGroupRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
@@ -22,6 +24,11 @@ public class QrCodeGroupService {
         return groupRepo.findAllByOrderByName();
     }
 
+    /** 分页搜索联盟（关键词模糊匹配名称/市州/区县） */
+    public Page<QrCodeGroup> search(String keyword, Pageable pageable) {
+        return groupRepo.search(keyword, pageable);
+    }
+
     public QrCodeGroup getById(Long id) {
         return groupRepo.findById(id)
             .orElseThrow(() -> new RuntimeException("分组不存在: " + id));
@@ -33,7 +40,8 @@ public class QrCodeGroupService {
                                Long qrCodeId, String schoolList) {
         QrCodeGroup g = groupRepo.save(QrCodeGroup.builder()
             .name(name).regionCity(regionCity).regionDistrict(regionDistrict)
-            .defaultWelcomeText(defaultWelcomeText).defaultFormTemplateId(defaultFormTemplateId)
+            .defaultWelcomeText(defaultWelcomeText != null && defaultWelcomeText.isBlank()
+                ? null : defaultWelcomeText).defaultFormTemplateId(defaultFormTemplateId)
             .qrCodeId(qrCodeId).schoolList(schoolList)
             .build());
         // 同步活码的 group_id ← 联盟 ID（用于树形导航）
@@ -51,7 +59,8 @@ public class QrCodeGroupService {
         if (name != null) g.setName(name);
         if (regionCity != null) g.setRegionCity(regionCity);
         if (regionDistrict != null) g.setRegionDistrict(regionDistrict);
-        if (defaultWelcomeText != null) g.setDefaultWelcomeText(defaultWelcomeText);
+        if (defaultWelcomeText != null)
+            g.setDefaultWelcomeText(defaultWelcomeText.isBlank() ? null : defaultWelcomeText);
         g.setDefaultFormTemplateId(defaultFormTemplateId);
 
         // 处理活码关联变更

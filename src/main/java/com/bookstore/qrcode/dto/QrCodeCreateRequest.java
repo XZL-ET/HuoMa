@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.dto;
 
+import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.Scene;
 import lombok.Data;
 
@@ -39,8 +40,14 @@ public class QrCodeCreateRequest {
     /** 活码创建场景：daily_push-日常推送, parent_meeting-家长会，默认 daily_push */
     private Scene scene;
 
+    /** 创建方式：null 默认 manual，批量导入时显式传入 batch_import */
+    private QrCode.CreateMode createMode;
+
     /** 所属企微部门 ID，用于扩容时同部门优先取人 */
     private Long departmentId;
+
+    /** 学校分类 ID（FK→school_category.id），留空默认”未分类“ */
+    private Long categoryId;
 
     /** 备注信息，灵活存储额外描述或内部说明 */
     private String remark;
@@ -147,8 +154,12 @@ public class QrCodeCreateRequest {
     /**
      * 自定义标签，英文逗号分隔。
      * <p>
-     * 示例：<code>"VIP,重点校,高三优先"</code>
-     * <br>客户扫码添加好友成功后，系统自动为客户打上这些标签，
+     * 支持两种格式：
+     * <ul>
+     *   <li><b>简单格式</b>：<code>"VIP,重点校,高三优先"</code> — 标签默认归入"学校"标签组</li>
+     *   <li><b>指定标签组</b>：<code>"客户等级:VIP客户,意向:潜在客户"</code> — 冒号前为企微标签组名，冒号后为标签名</li>
+     * </ul>
+     * 客户扫码添加好友成功后，系统自动为客户打上这些标签，
      * 方便后续客户分层运营和精准触达。
      * </p>
      */

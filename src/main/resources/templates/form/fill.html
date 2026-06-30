@@ -10,11 +10,20 @@
 <div class="container py-4" style="max-width:500px;">
     <div class="card shadow-sm">
         <div class="card-body p-4">
-            <h5 class="text-center mb-2" th:text="${schoolName}"></h5>
-            <p class="text-center text-muted small mb-4">请填写孩子信息，以便为您精准服务</p>
+            <h5 class="text-center mb-2" th:text="${groupName != null ? groupName : schoolName}"></h5>
+            <p class="text-center text-muted small mb-4"
+               th:text="${#strings.isEmpty(subtitle)} ? '请填写孩子信息，以便为您精准服务' : ${subtitle}">请填写孩子信息，以便为您精准服务</p>
             <form id="collectForm">
                 <input type="hidden" id="qrCodeId" th:value="${qrCodeId}">
                 <input type="hidden" id="customerId" th:value="${customerId}">
+                <!-- 区域联盟：学校选择下拉框 -->
+                <div class="mb-3" id="schoolPicker" th:if="${schoolList != null and !schoolList.isEmpty()}">
+                    <label class="form-label">所属学校 <span class="text-danger">*</span></label>
+                    <select id="schoolSelect" class="form-select" required>
+                        <option value="">请选择学校</option>
+                        <option th:each="s : ${schoolList}" th:value="${s}" th:text="${s}"></option>
+                    </select>
+                </div>
                 <div id="formFields"></div>
                 <button type="submit" class="btn btn-primary w-100 mt-3">提交</button>
             </form>
@@ -22,7 +31,7 @@
         </div>
     </div>
 </div>
-<script>
+<script th:inline="javascript">
     var fields = JSON.parse(/*[[${fieldsJson}]]*/ '[]');
     var container = document.getElementById('formFields');
     fields.forEach(function(f) {
@@ -33,8 +42,14 @@
         if (f.type === 'select') {
             var sel = document.createElement('select');
             sel.className = 'form-select'; sel.name = f.name; sel.required = f.required || false;
-            sel.innerHTML = '<option value="">请选择</option>' +
-                (f.options || []).map(function(o) { return '<option value="' + o + '">' + o + '</option>'; }).join('');
+            var defaultOpt = document.createElement('option');
+            defaultOpt.value = ''; defaultOpt.textContent = '请选择';
+            sel.appendChild(defaultOpt);
+            (f.options || []).forEach(function(o) {
+                var opt = document.createElement('option');
+                opt.value = o; opt.textContent = o;
+                sel.appendChild(opt);
+            });
             div.appendChild(sel);
         } else {
             var input = document.createElement('input');
@@ -54,14 +69,17 @@
         });
         var btn = e.target.querySelector('button');
         btn.disabled = true; btn.textContent = '提交中...';
+        var schoolSelect = document.getElementById('schoolSelect');
+        var body = {
+            qrCodeId: parseInt(document.getElementById('qrCodeId').value),
+            customerId: parseInt(document.getElementById('customerId').value),
+            fieldData: fieldData
+        };
+        if (schoolSelect) body.schoolName = schoolSelect.value;
         fetch('/api/form/submit', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                qrCodeId: parseInt(document.getElementById('qrCodeId').value),
-                customerId: parseInt(document.getElementById('customerId').value),
-                fieldData: fieldData
-            })
+            body: JSON.stringify(body)
         }).then(function(r) { return r.json(); }).then(function(d) {
             var msg = document.getElementById('submitMsg'); msg.style.display = '';
             if (d.success) {

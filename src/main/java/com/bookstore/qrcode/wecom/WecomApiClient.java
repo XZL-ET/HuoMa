@@ -524,9 +524,12 @@ public class WecomApiClient {
      *     "errcode": 0,
      *     "errmsg": "ok",
      *     "customer": [
-     *       {"external_userid": "wmxxx", "status": 1}  // 1=成功 2=失败
+     *       {"external_userid": "wmxxx", "status": 1}
+     *       // status: 1=接替完毕 2=等待接替 3=客户拒绝 4=接替成员客户达上限 5=无接替记录
      *     ]
      *   }
+     * @apiNote 此接口 (get_transfer_result) 已于 2023/11/30 标记废弃，企微推荐使用
+     *          transfer_result 接口（cursor 分页）；当前仍可用但未来可能移除
      * </pre>
      *
      * @param handoverUserid 原添加人（转出方）的 userid

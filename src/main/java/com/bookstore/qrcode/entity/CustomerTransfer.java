@@ -84,10 +84,15 @@ public class CustomerTransfer {
     private TransferStatus status = TransferStatus.pending_confirm;
 
     /**
-     * 重试次数。
-     * <p>
-     * 当调用企业微信转移客户API时，可能因网络波动或服务限流导致失败。
-     * 系统会按策略自动重试，每次重试该值递增，达到上限后状态变为 retry_limit。
+     * 重试次数，兼用两种上下文：
+     * <ul>
+     *   <li><b>转移结果追踪</b>（status=pending_confirm）：轮询 get_transfer_result 的次数，
+     *       达到 10 次标记为 retry_limit</li>
+     *   <li><b>发起重试</b>（status=api_failed）：重新调用 transfer_customer 的次数，
+     *       达到 3 次标记为 retry_limit</li>
+     * </ul>
+     * 注意：从 api_failed 重试成功后状态变为 pending_confirm，retryCount 不清零，
+     * 继续作为追踪轮询计数器使用。
      */
     @Column(name = "retry_count")
     @Builder.Default

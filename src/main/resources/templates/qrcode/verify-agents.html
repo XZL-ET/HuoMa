@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!-- 异常员工核验页面 — 展示单个活码下所有状态异常的接待员，支持一键替换 -->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='异常员工核验', content=~{::main})}">
+<main>
+    <div class="row g-3">
+        <!-- 活码基本信息 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h5 th:text="${qr.schoolName}">学校名</h5>
+                        <div class="text-muted small">
+                            学校ID：<code th:text="${qr.schoolId}"></code> |
+                            地区：<span th:text="${qr.regionCity + ' ' + qr.regionDistrict}"></span> |
+                            状态：<span class="badge" th:classappend="${qr.status.name() == 'active' ? 'bg-success' : 'bg-secondary'}"
+                                          th:text="${qr.status.name()}"></span>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a th:href="@{/qrcodes/{id}(id=${qr.id})}" class="btn btn-sm btn-outline-secondary">← 返回详情</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 统计概览 -->
+        <div class="col-12">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="fs-2 fw-bold" th:class="${anomalyCount > 0 ? 'text-danger' : 'text-success'}"
+                             th:text="${anomalyCount}">0</div>
+                        <small class="text-muted">异常员工</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card p-3 text-center">
+                        <div class="fs-2 fw-bold" th:class="${poolStandby > 0 ? 'text-primary' : 'text-warning'}"
+                             th:text="${poolStandby}">0</div>
+                        <small class="text-muted">全局池可用替补</small>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card p-3 d-flex flex-row align-items-center justify-content-between h-100">
+                        <div>
+                            <div th:if="${anomalyCount > 0}">
+                                <span class="text-danger fw-bold">⚠ 存在异常员工</span>
+                                <small class="text-muted ms-2">这些员工无法正常接待客户，建议尽快替换</small>
+                            </div>
+                            <div th:if="${anomalyCount == 0}">
+                                <span class="text-success fw-bold">✅ 无异常员工</span>
+                                <small class="text-muted ms-2">所有接待员状态正常</small>
+                            </div>
+                        </div>
+                        <form th:if="${anomalyCount > 0 && poolStandby > 0}"
+                              th:action="@{/qrcodes/{id}/verify-agents/replace(id=${qr.id})}" method="post"
+                              onsubmit="return confirm('确定要替换全部异常员工吗？\n\n将移除所有异常员工并从全局池补入替补。')">
+                            <button class="btn btn-warning">🔧 一键替换全部异常</button>
+                        </form>
+                        <button th:if="${anomalyCount > 0 && poolStandby == 0}"
+                                class="btn btn-secondary" disabled
+                                title="全局池无可用替补，无法替换">🔒 无可用替补</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 异常员工列表 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>🔍 异常员工列表</h6>
+                <div th:if="${#lists.isEmpty(anomalies)}" class="text-center text-muted py-4">
+                    ✅ 该活码下没有异常员工，所有接待员状态正常
+                </div>
+                <table th:if="${!#lists.isEmpty(anomalies)}" class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>姓名</th>
+                            <th>企微 UserID</th>
+                            <th>角色</th>
+                            <th>异常类型</th>
+                            <th>日接待上限</th>
+                            <th>今日已用</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="a : ${anomalies}">
+                            <td>
+                                <strong th:text="${a.name}"></strong>
+                            </td>
+                            <td><code th:text="${a.userid}"></code></td>
+                            <td>
+                                <span class="badge" th:classappend="${a.role == 'service' ? 'bg-primary' : (a.role == 'dual' ? 'bg-info' : 'bg-secondary')}"
+                                      th:text="${a.role == 'service' ? '服务老师' : (a.role == 'dual' ? '双重角色' : '接待员')}"></span>
+                            </td>
+                            <td>
+                                <span class="badge bg-danger" th:text="${a.anomaly}"></span>
+                            </td>
+                            <td th:text="${a.dailyMax}"></td>
+                            <td>
+                                <span th:text="${a.dailyCurrent}"></span>
+                                <small class="text-muted">/ <span th:text="${a.dailyMax}"></span></small>
+                            </td>
+                            <td>
+                                <span class="badge" th:classappend="${a.status == 'active' ? 'bg-success' : 'bg-warning'}"
+                                      th:text="${a.status == 'active' ? '活跃' : a.status}"></span>
+                            </td>
+                            <td>
+                                <a th:href="@{/agents/{userid}(userid=${a.userid})}" target="_blank"
+                                   class="btn btn-sm btn-outline-secondary">查看员工</a>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 异常类型说明 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>📋 异常类型说明</h6>
+                <table class="table table-sm mb-0 w-auto">
+                    <thead><tr><th>标签</th><th>含义</th><th>影响</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="badge bg-danger">已离职</span></td><td>员工已从企业微信离职</td><td>无法接待客户，客户添加后无人响应</td></tr>
+                        <tr><td><span class="badge bg-danger">未激活</span></td><td>员工未激活企业微信账号</td><td>无法使用企微功能，无法接待</td></tr>
+                        <tr><td><span class="badge bg-danger">已禁用</span></td><td>员工账号已被管理员禁用</td><td>无法使用企微功能</td></tr>
+                        <tr><td><span class="badge bg-danger">已停用</span></td><td>员工状态为 blocked</td><td>已停止接待能力</td></tr>
+                        <tr><td><span class="badge bg-danger">已熔断</span></td><td>员工当日接待量超限被熔断</td><td>当日无法继续接待新客户</td></tr>
+                        <tr><td><span class="badge bg-warning text-dark">预警</span></td><td>员工接近日接待上限</td><td>可能很快无法接待新客户</td></tr>
+                        <tr><td><span class="badge bg-danger">未实名</span></td><td>员工未完成实名认证（40098）</td><td>无法添加客户</td></tr>
+                        <tr><td><span class="badge bg-danger">未加入组织</span></td><td>员工未加入企业微信组织（41054）</td><td>无法使用活码功能</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</main>
+</html>

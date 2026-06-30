@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS customer_tag (
 -- 异常记录表
 CREATE TABLE IF NOT EXISTS agent_alert (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    agent_userid VARCHAR(100) NOT NULL COMMENT '员工ID',
+    agent_userid VARCHAR(100) NULL COMMENT '员工ID（系统告警时为 NULL）',
     alert_type VARCHAR(50) NOT NULL COMMENT 'blocked/greeting_fail/low_approval/high_delete/traffic_spike/melt/empty_backup',  -- 异常类型枚举
     severity ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
     detail JSON COMMENT '异常详情',
@@ -482,6 +482,14 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- agent_alert: 允许系统告警不关联具体员工（agent_userid 改为 NULL）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND COLUMN_NAME = 'agent_userid' AND IS_NULLABLE = 'NO') > 0,
+    'ALTER TABLE agent_alert MODIFY COLUMN agent_userid VARCHAR(100) NULL COMMENT ''员工ID（系统告警时为 NULL）''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- qr_rotate_log: 按活码+时间（轮换记录查询）
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
@@ -571,12 +579,44 @@ CREATE TABLE IF NOT EXISTS form_template (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL COMMENT '模板名称',
     description VARCHAR(500) COMMENT '备注',
+    subtitle VARCHAR(200) COMMENT '表单页副标题，为空使用系统默认',
+    card_title VARCHAR(100) COMMENT '卡片标题，为空使用默认',
+    card_desc VARCHAR(500) COMMENT '卡片描述，为空使用默认',
+    card_pic_url VARCHAR(500) COMMENT '卡片图片链接，为空不传',
     fields JSON NOT NULL COMMENT '字段定义',
     tag_mapping JSON NOT NULL COMMENT '字段→打标/备注映射规则',
     remark_template VARCHAR(500) COMMENT '备注模板, 如 {{child_name}}-{{grade}}{{class}}',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单模板';
+
+-- form_template 新增字段（兼容旧表）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'form_template' AND COLUMN_NAME = 'subtitle') = 0,
+    'ALTER TABLE form_template ADD COLUMN subtitle VARCHAR(200) COMMENT ''表单页副标题，为空使用系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- form_template 新增卡片字段（兼容旧表）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'form_template' AND COLUMN_NAME = 'card_title') = 0,
+    'ALTER TABLE form_template ADD COLUMN card_title VARCHAR(100) COMMENT ''卡片标题，为空使用默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'form_template' AND COLUMN_NAME = 'card_desc') = 0,
+    'ALTER TABLE form_template ADD COLUMN card_desc VARCHAR(500) COMMENT ''卡片描述，为空使用默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'form_template' AND COLUMN_NAME = 'card_pic_url') = 0,
+    'ALTER TABLE form_template ADD COLUMN card_pic_url VARCHAR(500) COMMENT ''卡片图片链接，为空不传''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- form_submission：表单提交记录
 CREATE TABLE IF NOT EXISTS form_submission (
@@ -585,12 +625,21 @@ CREATE TABLE IF NOT EXISTS form_submission (
     customer_id BIGINT NOT NULL COMMENT 'FK→customer.id',
     qr_code_id BIGINT COMMENT '来源活码',
     field_data JSON NOT NULL COMMENT '提交数据',
+    school_name VARCHAR(100) COMMENT '客户填写的学校名称（区域联盟场景）',
     tags_applied VARCHAR(500) COMMENT '已打标签,逗号分隔',
     remark_updated VARCHAR(500) COMMENT '已设备注',
     submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_fs_customer (customer_id),
     INDEX idx_fs_template (form_template_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表单提交记录';
+
+-- form_submission 新增字段（兼容旧表）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'form_submission' AND COLUMN_NAME = 'school_name') = 0,
+    'ALTER TABLE form_submission ADD COLUMN school_name VARCHAR(100) COMMENT ''客户填写的学校名称（区域联盟场景）''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- qr_code_group：活码分组（教育联盟）
 CREATE TABLE IF NOT EXISTS qr_code_group (
@@ -647,6 +696,49 @@ INSERT IGNORE INTO system_config (config_key, config_value) VALUES
 ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
 
 -- ============================================
+-- 在职继承问候语可配置化：qr_code 新增 4 列 + system_config 全局默认值
+-- ============================================
+
+-- qr_code: transfer_greeting_enabled（NULL=使用系统默认）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_greeting_enabled') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_greeting_enabled TINYINT(1) DEFAULT NULL COMMENT ''NULL=使用系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_code: transfer_filled_note（NULL=使用系统默认）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_filled_note') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_filled_note VARCHAR(500) DEFAULT NULL COMMENT ''已填写备注模板, NULL=使用系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_code: transfer_filled_greeting（NULL=使用系统默认）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_filled_greeting') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_filled_greeting VARCHAR(500) DEFAULT NULL COMMENT ''已填写问候语模板, NULL=使用系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- qr_code: transfer_unfilled_greeting（NULL=使用系统默认）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_unfilled_greeting') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_unfilled_greeting VARCHAR(500) DEFAULT NULL COMMENT ''未填写问候语模板, NULL=使用系统默认''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 系统配置：在职继承问候语全局默认值
+INSERT IGNORE INTO system_config (config_key, config_value) VALUES
+('transfer_greeting_enabled_default', 'true'),
+('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
+('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
+('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}');
+
+-- ============================================
 -- 场景分配优化：scene + department_id 字段
 -- ============================================
 
@@ -682,5 +774,32 @@ SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'global_agent_pool' AND INDEX_NAME = 'idx_pool_dept') = 0,
     'CREATE INDEX idx_pool_dept ON global_agent_pool(department_id, status, sort_order)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ============================================
+-- 学校分类：类别层级的默认欢迎语与表单继承
+-- ============================================
+
+-- school_category：学校分类表
+CREATE TABLE IF NOT EXISTS school_category (
+    id                        BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name                      VARCHAR(100) NOT NULL COMMENT '分类名称',
+    sort_order                INT NOT NULL DEFAULT 0 COMMENT '排序（越小越靠前）',
+    default_welcome_text      VARCHAR(500) COMMENT '分类默认欢迎语，null=继承系统默认',
+    default_form_template_id  BIGINT COMMENT 'FK→form_template.id，分类默认表单模板',
+    created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_category_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='学校分类表';
+
+-- 默认分类（向后兼容：已存在的学校 category_id=NULL 不受影响）
+INSERT IGNORE INTO school_category (name) VALUES ('未分类');
+
+-- school: category_id 列
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'school' AND COLUMN_NAME = 'category_id') = 0,
+    'ALTER TABLE school ADD COLUMN category_id BIGINT COMMENT ''FK→school_category.id，null=未分类''',
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;

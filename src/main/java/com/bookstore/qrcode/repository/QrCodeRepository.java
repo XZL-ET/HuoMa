@@ -48,6 +48,12 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      */
     boolean existsBySchoolId(String schoolId);
 
+    /** 判断指定学校名称是否已存在活码（用于批量导入去重） */
+    boolean existsBySchoolName(String schoolName);
+
+    /** 判断同城市下是否已有同名学校活码（用于手动创建去重预警） */
+    boolean existsBySchoolNameAndRegionCity(String schoolName, String regionCity);
+
     /**
      * 多条件组合分页搜索活码。
      * <p>
@@ -296,6 +302,9 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
     @Query("UPDATE QrCode q SET q.formTemplateId = :formTemplateId WHERE q.id IN :ids")
     int batchUpdateFormTemplateId(@Param("formTemplateId") Long formTemplateId,
                                    @Param("ids") List<Long> ids);
+
+    /** 统计引用了指定表单模板的活码数（删除保护） */
+    long countByFormTemplateId(Long formTemplateId);
 
     /** 批量切换轮换模式 */
     @Modifying

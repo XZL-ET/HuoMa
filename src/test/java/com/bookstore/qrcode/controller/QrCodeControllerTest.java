@@ -52,6 +52,9 @@ class QrCodeControllerTest {
                 mock(EmployeeSyncService.class),
                 mock(FormTemplateRepository.class),
                 mock(QrCodeGroupRepository.class),
+                mock(SchoolCategoryRepository.class),
+                mock(SchoolRepository.class),
+                mock(SystemConfigRepository.class),
                 mock(StringRedisTemplate.class),
                 mock(ObjectMapper.class),
                 mock(SceneConfigProperties.class));
