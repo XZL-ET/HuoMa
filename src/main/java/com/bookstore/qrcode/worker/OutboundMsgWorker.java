@@ -217,22 +217,22 @@ public class OutboundMsgWorker {
                 formTemplateId = qr.getFormTemplateId();
                 schoolName = qr.getSchoolName();  // 复用此处查询，避免重复查库
 
-                // L2: 分组继承
+                // L2: 分组继承（isBlank 过滤空字符串，防止穿透到 API 导致 40063）
                 if (qr.getGroupId() != null) {
                     QrCodeGroup grp = groupRepo.findById(qr.getGroupId()).orElse(null);
                     if (grp != null) {
-                        if (welcomeText == null) welcomeText = grp.getDefaultWelcomeText();
+                        if (isBlank(welcomeText)) welcomeText = grp.getDefaultWelcomeText();
                         if (formTemplateId == null) formTemplateId = grp.getDefaultFormTemplateId();
                     }
                 }
 
                 // L3: 学校分类继承（新增 — 通过 qr.schoolId → school.categoryId 解析）
-                if ((welcomeText == null || formTemplateId == null) && qr.getSchoolId() != null) {
+                if ((isBlank(welcomeText) || formTemplateId == null) && qr.getSchoolId() != null) {
                     School school = schoolRepo.findBySchoolIdAndDeletedFalse(qr.getSchoolId()).orElse(null);
                     if (school != null && school.getCategoryId() != null) {
                         SchoolCategory cat = categoryRepo.findById(school.getCategoryId()).orElse(null);
                         if (cat != null) {
-                            if (welcomeText == null) welcomeText = cat.getDefaultWelcomeText();
+                            if (isBlank(welcomeText)) welcomeText = cat.getDefaultWelcomeText();
                             if (formTemplateId == null) formTemplateId = cat.getDefaultFormTemplateId();
                         }
                     }
@@ -240,9 +240,12 @@ public class OutboundMsgWorker {
             }
         }
         // L4: 系统默认（仅欢迎语有全局兜底）
-        if (welcomeText == null) {
+        // filter(isBlank) 防止 DB 中存在空字符串时 orElse 不生效
+        if (isBlank(welcomeText)) {
             welcomeText = systemConfigRepo.findByConfigKey("default_welcome_text")
-                .map(SystemConfig::getConfigValue).orElse("欢迎来到XX书店家校服务！");
+                .map(SystemConfig::getConfigValue)
+                .filter(v -> v != null && !v.isBlank())
+                .orElse("欢迎来到XX书店家校服务！");
         }
 
         // Template variable replacement
@@ -305,10 +308,14 @@ public class OutboundMsgWorker {
         // Prefer send_welcome_msg (uses WelcomeCode, no daily rate limit) over sendMessage.
         // When welcome_code is available, attach form link directly — one API call for both.
         boolean sent = false;
-        if (welcomeCode != null) {
+        if (!isBlank(welcomeCode)) {
             try {
                 List<Map<String, Object>> attachments = formAttach != null
                     ? List.of(formAttach) : null;
+                log.info("send_welcome_msg 请求: welcomeCode={}, text.len={}, hasAttach={}",
+                    welcomeCode.substring(0, Math.min(20, welcomeCode.length())),
+                    welcomeText != null ? welcomeText.length() : 0,
+                    attachments != null);
                 wecomApi.sendWelcomeMsg(welcomeCode, welcomeText, attachments);
                 sent = true;
                 log.info("欢迎语+表单已通过 send_welcome_msg 发送: to={}, hasForm={}",
@@ -360,5 +367,10 @@ public class OutboundMsgWorker {
     private String getField(JsonNode event, String field) {
         return event.has(field) && !event.get(field).isNull()
             ? event.get(field).asText() : null;
+    }
+
+    /** 等价于 {@code s == null || s.isBlank()}，避免 NPE 并统一空值判断语义 */
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 }
