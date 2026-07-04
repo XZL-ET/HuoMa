@@ -4,6 +4,8 @@ import com.bookstore.qrcode.entity.AgentAlert;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -91,4 +93,64 @@ public interface AgentAlertRepository extends JpaRepository<AgentAlert, Long> {
      */
     long countBySeverityAndCreatedAtBetween(AgentAlert.AlertSeverity severity,
                                             LocalDateTime start, LocalDateTime end);
+
+    /**
+     * 按告警状态统计总数。
+     *
+     * @param status 告警状态（open / resolved / auto_resolved）
+     * @return 该状态的告警数量
+     */
+    long countByStatus(AgentAlert.AlertStatus status);
+
+    /**
+     * 按严重程度统计总数（不限时间）。
+     *
+     * @param severity 严重程度（low / medium / high）
+     * @return 该严重程度的告警数量
+     */
+    long countBySeverity(AgentAlert.AlertSeverity severity);
+
+    /**
+     * 按状态分页查询（用于批量解决时读取未处理告警）。
+     *
+     * @param status   告警状态
+     * @param pageable 分页参数
+     * @return 该状态的告警分页数据
+     */
+    Page<AgentAlert> findByStatus(AgentAlert.AlertStatus status, Pageable pageable);
+
+    /**
+     * 多条件分页搜索告警，遵循 {@code :param IS NULL OR ...} 模式。
+     * <p>
+     * 所有筛选参数均可为 {@code null}，表示不限制该维度。
+     * 结果按创建时间降序排列，最新告警在前。
+     * </p>
+     *
+     * @param status      告警状态筛选（open / resolved / auto_resolved），可为 {@code null}
+     * @param severity    严重程度筛选（low / medium / high），可为 {@code null}
+     * @param alertType   告警类型筛选，可为 {@code null}
+     * @param agentUserid 员工账号模糊搜索，可为 {@code null}
+     * @param qrCodeId    关联活码 ID 筛选，可为 {@code null}
+     * @param startDate   创建时间起始（含），可为 {@code null}
+     * @param endDate     创建时间结束（含），可为 {@code null}
+     * @param pageable    分页参数
+     * @return 满足条件的告警分页数据，按创建时间降序
+     */
+    @Query("SELECT a FROM AgentAlert a WHERE "
+         + "(:status IS NULL OR a.status = :status) "
+         + "AND (:severity IS NULL OR a.severity = :severity) "
+         + "AND (:alertType IS NULL OR a.alertType = :alertType) "
+         + "AND (:agentUserid IS NULL OR a.agentUserid LIKE %:agentUserid%) "
+         + "AND (:qrCodeId IS NULL OR a.qrCodeId = :qrCodeId) "
+         + "AND (:startDate IS NULL OR a.createdAt >= :startDate) "
+         + "AND (:endDate IS NULL OR a.createdAt < :endDate) "
+         + "ORDER BY a.createdAt DESC")
+    Page<AgentAlert> search(@Param("status") AgentAlert.AlertStatus status,
+                            @Param("severity") AgentAlert.AlertSeverity severity,
+                            @Param("alertType") String alertType,
+                            @Param("agentUserid") String agentUserid,
+                            @Param("qrCodeId") Long qrCodeId,
+                            @Param("startDate") LocalDateTime startDate,
+                            @Param("endDate") LocalDateTime endDate,
+                            Pageable pageable);
 }

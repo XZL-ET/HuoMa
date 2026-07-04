@@ -6,11 +6,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -342,5 +347,115 @@ public class AlertService {
     private String getStr(JsonNode event, String field) {
         return event.has(field) && !event.get(field).isNull()
             ? event.get(field).asText() : null;
+    }
+
+    // ==================== 告警中心页面查询 ====================
+
+    /**
+     * 多条件分页搜索告警，供告警中心列表页使用。
+     *
+     * @param status      告警状态筛选，可为 {@code null}
+     * @param severity    严重程度筛选，可为 {@code null}
+     * @param alertType   告警类型筛选，可为 {@code null}
+     * @param agentUserid 员工账号模糊搜索，可为 {@code null}
+     * @param qrCodeId    关联活码 ID，可为 {@code null}
+     * @param startDate   起始日期（含），可为 {@code null}
+     * @param endDate     结束日期（含），可为 {@code null}
+     * @param pageable    分页参数
+     * @return 满足条件的告警分页数据
+     */
+    public Page<AgentAlert> findAlerts(AgentAlert.AlertStatus status,
+                                       AgentAlert.AlertSeverity severity,
+                                       String alertType,
+                                       String agentUserid,
+                                       Long qrCodeId,
+                                       LocalDate startDate,
+                                       LocalDate endDate,
+                                       Pageable pageable) {
+        LocalDateTime start = startDate != null ? startDate.atStartOfDay() : null;
+        LocalDateTime end = endDate != null ? endDate.plusDays(1).atStartOfDay() : null;
+        return alertRepo.search(status, severity, alertType, agentUserid,
+            qrCodeId, start, end, pageable);
+    }
+
+    /**
+     * 获取告警统计摘要 — 按状态和严重程度分组计数。
+     *
+     * @return Map 包含 openCount / resolvedCount / autoResolvedCount / totalCount
+     *         以及 highCount / mediumCount / lowCount
+     */
+    public Map<String, Long> getAlertStats() {
+        LocalDate today = LocalDate.now();
+        LocalDateTime todayStart = today.atStartOfDay();
+        LocalDateTime weekStart = today.minusDays(6).atStartOfDay();
+        LocalDateTime todayEnd = today.plusDays(1).atStartOfDay();
+
+        Map<String, Long> stats = new LinkedHashMap<>();
+        stats.put("totalCount", alertRepo.count());
+        stats.put("openCount", alertRepo.countByStatus(AgentAlert.AlertStatus.open));
+        stats.put("resolvedCount", alertRepo.countByStatus(AgentAlert.AlertStatus.resolved));
+        stats.put("autoResolvedCount", alertRepo.countByStatus(AgentAlert.AlertStatus.auto_resolved));
+        stats.put("highCount", alertRepo.countBySeverity(AgentAlert.AlertSeverity.high));
+        stats.put("mediumCount", alertRepo.countBySeverity(AgentAlert.AlertSeverity.medium));
+        stats.put("lowCount", alertRepo.countBySeverity(AgentAlert.AlertSeverity.low));
+        stats.put("todayCount", alertRepo.countByCreatedAtBetween(todayStart, todayEnd));
+        stats.put("weekCount", alertRepo.countByCreatedAtBetween(weekStart, todayEnd));
+        return stats;
+    }
+
+    /**
+     * 管理员手动解决告警。
+     *
+     * <p>将告警状态从 open 置为 resolved，记录操作人和时间。
+     * 已关闭的告警不会重复操作。</p>
+     *
+     * @param alertId   告警 ID
+     * @param adminUser 操作的管理员账号
+     */
+    @Transactional
+    public void resolveAlert(Long alertId, String adminUser) {
+        alertRepo.findById(alertId).ifPresent(alert -> {
+            if (alert.getStatus() == AgentAlert.AlertStatus.open) {
+                alert.setStatus(AgentAlert.AlertStatus.resolved);
+                alert.setResolvedBy(adminUser);
+                alert.setResolvedAt(LocalDateTime.now());
+                alertRepo.save(alert);
+                log.info("告警 #{} 已由 {} 手动解决", alertId, adminUser);
+            }
+        });
+    }
+
+    /**
+     * 一键解决所有未处理告警，分页遍历直到全部处理完。
+     * <p>
+     * 每批处理 500 条并立即 flush，确保下一轮查询不会重复捞出已解决的记录。
+     * 超大数量（万级）场景下有性能考虑，需注意单次事务时长。
+     * </p>
+     *
+     * @param adminUser 操作的管理员账号
+     * @return 实际解决的告警数量
+     */
+    @Transactional
+    public int resolveAllAlerts(String adminUser) {
+        LocalDateTime now = LocalDateTime.now();
+        int count = 0;
+        int maxIterations = 200; // 安全上限：最多 200 轮 × 500 = 100,000 条
+        Page<AgentAlert> page;
+        do {
+            page = alertRepo.findByStatus(AgentAlert.AlertStatus.open,
+                PageRequest.of(0, 500));
+            for (AgentAlert alert : page.getContent()) {
+                alert.setStatus(AgentAlert.AlertStatus.resolved);
+                alert.setResolvedBy(adminUser);
+                alert.setResolvedAt(now);
+                alertRepo.save(alert);
+                count++;
+            }
+            alertRepo.flush(); // 确保下一轮查询能看到本轮的更新
+        } while (page.hasNext() && --maxIterations > 0);
+        if (count > 0) {
+            log.info("批量解决告警: {} 条，操作人: {}", count, adminUser);
+        }
+        return count;
     }
 }
