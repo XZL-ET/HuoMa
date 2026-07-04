@@ -329,9 +329,12 @@ public class PatrolWorker {
     /**
      * 每分钟第 30 秒执行一次 PEL 崩溃回收巡检。
      *
-     * <p>扫描三个 Stream 的 Pending Entries List，回收 idle 超过 30 秒的孤消息。
+     * <p>扫描五个 Stream 的 Pending Entries List，回收 idle 超过 120 秒的孤消息。
      * 这些消息意味着原来的消费者（Worker 线程）在 READ 和 ACK 之间崩溃
      * （JVM crash / kill -9），需要重新入队或移入死信队列。</p>
+     *
+     * <p><b>覆盖范围：</b>callback / tag / datafill / outbound / transfer
+     * 五个 Stream 的 Consumer Group。</p>
      *
      * <p><b>与正常重试的关系：</b>正常 Worker 处理失败时会走
      * {@link MessageGuardService#markRetryOrDead} 主动重试或移入 DLQ，
@@ -358,8 +361,19 @@ public class PatrolWorker {
                 RedisConfig.DATAFILL_CONSUMER_GROUP,
                 "datafill-recovery", idleMs);
 
-            if (cb + tag + df > 0) {
-                log.warn("PEL 崩溃回收完成: callback={}, tag={}, datafill={}", cb, tag, df);
+            int outbound = messageGuardService.recoverOrphanedPending(
+                RedisConfig.OUTBOUND_STREAM_KEY,
+                RedisConfig.OUTBOUND_CONSUMER_GROUP,
+                "outbound-recovery", idleMs);
+
+            int transfer = messageGuardService.recoverOrphanedPending(
+                RedisConfig.TRANSFER_STREAM_KEY,
+                RedisConfig.TRANSFER_CONSUMER_GROUP,
+                "transfer-recovery", idleMs);
+
+            if (cb + tag + df + outbound + transfer > 0) {
+                log.warn("PEL 崩溃回收完成: callback={}, tag={}, datafill={}, outbound={}, transfer={}",
+                    cb, tag, df, outbound, transfer);
             }
         } catch (Exception e) {
             log.error("PEL 崩溃回收异常", e);

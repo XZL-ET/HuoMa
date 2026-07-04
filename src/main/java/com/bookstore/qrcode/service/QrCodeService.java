@@ -856,10 +856,11 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
-        // 服务老师不允许直接移除：必须先指定新的服务老师，通过更换流程替换
+        // 服务老师/双角色不允许直接移除：必须先指定新的服务老师，通过更换流程替换
         // 这是为了防止活码失去服务老师导致客户无人接待
-        if (agent.getRole() == QrAgent.AgentRole.service) {
-            throw new RuntimeException("服务老师不能移除，请先更换服务老师");
+        if (agent.getRole() == QrAgent.AgentRole.service
+            || agent.getRole() == QrAgent.AgentRole.dual) {
+            throw new RuntimeException("服务老师/双角色不能移除，请先更换服务老师");
         }
         // 软删除：标记为 removed 而非物理删除，保留历史记录
         agent.setStatus(QrAgent.AgentStatus.removed);
@@ -906,7 +907,34 @@ public class QrCodeService {
         if (dailyMax != null && dailyMax > 0) agent.setDailyMax(dailyMax);
         if (role != null) {
             try {
-                agent.setRole(QrAgent.AgentRole.valueOf(role));
+                QrAgent.AgentRole newRole = QrAgent.AgentRole.valueOf(role);
+                // 禁止将唯一的 service/dual 降级为 receptionist（会绕过所有保护）
+                if (newRole == QrAgent.AgentRole.receptionist
+                    && (agent.getRole() == QrAgent.AgentRole.service
+                     || agent.getRole() == QrAgent.AgentRole.dual)) {
+                    long svcCount = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                        .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+                        .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                                  || a.getRole() == QrAgent.AgentRole.dual)
+                        .count();
+                    if (svcCount <= 1) {
+                        throw new RuntimeException(
+                            "不能降级唯一的服务老师/双角色，请先指定新的服务老师再更换");
+                    }
+                }
+                agent.setRole(newRole);
+                // 同步 Agent 表角色（仅升级：receptionist → service/dual），
+                // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
+                if (newRole == QrAgent.AgentRole.service
+                    || newRole == QrAgent.AgentRole.dual) {
+                    Agent agentRecord = agentRepo.findById(agent.getAgentUserid()).orElse(null);
+                    if (agentRecord != null
+                        && agentRecord.getRole() == Agent.AgentRole.receptionist) {
+                        agentRecord.setRole(Agent.AgentRole.valueOf(role));
+                        agentRepo.save(agentRecord);
+                        log.info("Agent 角色已同步升级: userid={}, role={}", agent.getAgentUserid(), role);
+                    }
+                }
             } catch (IllegalArgumentException ignored) {
                 // 无效角色值被静默忽略，避免前端误传导致 500
             }
@@ -1190,9 +1218,10 @@ public class QrCodeService {
                 int removed = 0;
                 for (QrAgent agent : candidates) {
                     if (removed >= toRemove) break;
-                    if (agent.getRole() == QrAgent.AgentRole.service) {
-                        // 服务老师受保护，只在无可移除的接待员时才下
-                        // 此处 candidates 已排好序，走到这里的 service 说明接待员不够
+                    if (agent.getRole() == QrAgent.AgentRole.service
+                        || agent.getRole() == QrAgent.AgentRole.dual) {
+                        // 服务老师/双角色受保护，不参与场景切换下码
+                        continue;
                     }
                     agent.setStatus(QrAgent.AgentStatus.removed);
                     qrAgentRepo.save(agent);
@@ -1463,7 +1492,7 @@ public class QrCodeService {
 
             // ① 确保在职继承目标在全局池中
             if (req.getTransferTargetUserid() != null && !req.getTransferTargetUserid().isBlank()) {
-                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 150);
+                ensureAgent(req.getTransferTargetUserid().trim(), "service"); // 继承目标不入全局池
             }
 
             // ② 初始上码员工：优先使用 initialAgentUserids 列表
@@ -1499,7 +1528,7 @@ public class QrCodeService {
                 ? req.getServiceDailyMax() : 150;
             // 手动指定的初始员工作为「服务老师」，其余从全局池补的作为「接待员」
             for (String uid : initialUserids) {
-                poolService.ensureInPool(uid, defaultDailyMax);
+                ensureAgent(uid, "service"); // 服务老师不入全局池，避免被其他活码借走
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(uid)
                     .role(QrAgent.AgentRole.service)
@@ -1555,31 +1584,45 @@ public class QrCodeService {
      * @param role   员工角色（"service" 或 "receptionist"），用于初始化 {@link Agent.AgentRole}
      */
     private void ensureAgent(String userid, String role) {
-        if (!agentRepo.existsById(userid)) {
-            // 尝试从企微 API 获取真实姓名，失败时用 userid 作为降级方案
-            String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
-            try {
-                JsonNode result = wecomApi.getUserSimplelist();
-                // parseAndCheck 保证 errcode=0
-                for (JsonNode u : result.get("userlist")) {
-                    if (userid.equals(u.get("userid").asText())) {
-                        name = u.get("name").asText();
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                // 获取员工姓名失败不阻断流程，使用 userid 作为 name 降级
-                log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
+        Agent.AgentRole requestedRole = Agent.AgentRole.valueOf(role);
+        Agent existing = agentRepo.findById(userid).orElse(null);
+        if (existing != null) {
+            // 只升级不降级：receptionist → dual/service 时同步更新 Agent 角色，
+            // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
+            if (existing.getRole() == Agent.AgentRole.receptionist
+                && (requestedRole == Agent.AgentRole.service
+                 || requestedRole == Agent.AgentRole.dual)) {
+                existing.setRole(requestedRole);
+                agentRepo.save(existing);
+                log.info("Agent 角色已升级: userid={}, {} → {}", userid,
+                    Agent.AgentRole.receptionist, requestedRole);
             }
-
-            // 创建 Agent 记录，默认日总接待上限 500（适用于未单独配置的员工）
-            agentRepo.save(Agent.builder()
-                .userid(userid)
-                .name(name)
-                .role(Agent.AgentRole.valueOf(role))
-                .dailyTotalCap(500)
-                .build());
+            return;
         }
+
+        // 尝试从企微 API 获取真实姓名，失败时用 userid 作为降级方案
+        String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
+        try {
+            JsonNode result = wecomApi.getUserSimplelist();
+            // parseAndCheck 保证 errcode=0
+            for (JsonNode u : result.get("userlist")) {
+                if (userid.equals(u.get("userid").asText())) {
+                    name = u.get("name").asText();
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            // 获取员工姓名失败不阻断流程，使用 userid 作为 name 降级
+            log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
+        }
+
+        // 创建 Agent 记录，默认日总接待上限 500（适用于未单独配置的员工）
+        agentRepo.save(Agent.builder()
+            .userid(userid)
+            .name(name)
+            .role(requestedRole)
+            .dailyTotalCap(500)
+            .build());
     }
 
     /**
@@ -1995,6 +2038,22 @@ public class QrCodeService {
         for (QrAgent qa : anomalous) {
             String label = getAnomalyLabel(
                 agentMap.get(qa.getAgentUserid()), empMap.get(qa.getAgentUserid()));
+
+            // 服务老师/双角色异常不下码，只告警，由管理员手动处理
+            if (qa.getRole() == QrAgent.AgentRole.service
+                || qa.getRole() == QrAgent.AgentRole.dual) {
+                log.warn("服务老师/双角色异常但不下码: qrCodeId={}, userid={}, role={}, anomaly={}",
+                    qrCodeId, qa.getAgentUserid(), qa.getRole(), label);
+                alertService.createAlert(qa.getAgentUserid(), "service_teacher_anomaly",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("活码「%s」服务老师/双角色 %s 异常(%s)，请手动处理",
+                        qr.getSchoolName(), qa.getAgentUserid(), label),
+                    AgentAlert.AutoAction.none, qrCodeId);
+                details.add(Map.of("userid", qa.getAgentUserid(),
+                    "role", qa.getRole().name(),
+                    "anomaly", label, "skipped", "服务老师/双角色需手动处理"));
+                continue;
+            }
 
             // 移除
             qa.setStatus(QrAgent.AgentStatus.removed);
