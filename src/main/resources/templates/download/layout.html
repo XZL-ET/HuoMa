@@ -29,7 +29,7 @@
         </div>
     </div>
 
-    <div class="container-fluid py-4" style="max-width: 1320px;">
+    <div class="container-fluid py-4" style="max-width: 1320px; min-height: 70vh;">
         <th:block th:if="${message}">
             <div class="alert alert-success alert-dismissible fade show" role="alert">
                 ✅ <span th:text="${message}"></span>
@@ -44,6 +44,11 @@
         </th:block>
         <th:block th:replace="${content}"></th:block>
     </div>
+
+    <footer style="text-align:center; padding:20px 16px; color:#999; font-size:0.75rem; line-height:1.8;">
+        甘肃省新华书店有限责任公司 · 火马活码管理平台<br>
+        本页面仅供内部员工使用
+    </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
