@@ -474,7 +474,8 @@ public class WecomApiClient {
      *   {
      *     "handover_userid": "zhangsan",    // 原添加人
      *     "takeover_userid": "lisi",        // 接替人
-     *     "external_userid": ["wmxxxxxx"]   // 待转移的客户列表
+     *     "external_userid": ["wmxxxxxx"],  // 待转移的客户列表
+     *     "transfer_success_msg": "..."     // 可选，转接成功后发给客户的消息，最多200字符
      *   }
      * 响应:
      *   {"errcode":0,"errmsg":"ok"}
@@ -483,17 +484,25 @@ public class WecomApiClient {
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
      * @param externalUserid 待转移客户的 external_userid
+     * @param transferSuccessMsg 转接成功后发给客户的通知消息，{@code null}=不传字段（企微发默认消息），
+     *                           {@code ""}=传空字符串（抑制通知），最多200字符
      * @return JsonNode {@code {errcode, errmsg}}
      * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode transferCustomer(String handoverUserid, String takeoverUserid,
-                                      String externalUserid) {
+                                      String externalUserid, String transferSuccessMsg) {
         String url = BASE_URL + "/externalcontact/transfer_customer?access_token=" + getAccessToken();
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
             bodyMap.put("external_userid", List.of(externalUserid));
+            if (transferSuccessMsg != null) {
+                // 企微接口限制 200 字符，防御性截断
+                String msg = transferSuccessMsg.length() > 200
+                        ? transferSuccessMsg.substring(0, 200) : transferSuccessMsg;
+                bodyMap.put("transfer_success_msg", msg);
+            }
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
             return parseAndCheck(resp, "在职继承");
@@ -551,7 +560,7 @@ public class WecomApiClient {
             return parseAndCheck(resp, "查询继承结果");
         } catch (WecomApiException e) {
             throw e;
-        } catch (Exception e) {
+         } catch (Exception e) {
             throw new WecomTransientException(-1,
                 "查询继承结果失败: " + e.getMessage(), null);
         }

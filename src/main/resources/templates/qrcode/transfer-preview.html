@@ -149,10 +149,18 @@
                               th:classappend="${c.transferStatus == 'waiting' ? 'bg-warning'
                                   : c.transferStatus == 'pending_confirm' ? 'bg-info'
                                   : c.transferStatus == 'confirmed' ? 'bg-success'
+                                  : c.transferStatus == 'api_failed' ? 'bg-secondary'
+                                  : c.transferStatus == 'rejected' ? 'bg-danger'
+                                  : c.transferStatus == 'timeout' ? 'bg-dark'
+                                  : c.transferStatus == 'retry_limit' ? 'bg-dark'
                                   : 'bg-secondary'}"
                               th:text="${c.transferStatus == 'waiting' ? '待转移'
                                   : c.transferStatus == 'pending_confirm' ? '待确认'
                                   : c.transferStatus == 'confirmed' ? '已完成'
+                                  : c.transferStatus == 'api_failed' ? 'API失败'
+                                  : c.transferStatus == 'rejected' ? '已拒绝'
+                                  : c.transferStatus == 'timeout' ? '超时'
+                                  : c.transferStatus == 'retry_limit' ? '重试耗尽'
                                   : c.transferStatus}"></span>
                     </td>
                 </tr>

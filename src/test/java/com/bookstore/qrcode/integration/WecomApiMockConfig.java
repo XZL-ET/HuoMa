@@ -156,7 +156,7 @@ public class WecomApiMockConfig {
             JsonNode transferResp = objectMapper.readTree(
                     "{\"errcode\":0,\"errmsg\":\"ok\"," +
                     "\"customer\":[{\"external_userid\":\"wm-mock-001\",\"errcode\":0}]}");
-            when(mock.transferCustomer(anyString(), anyString(), anyString()))
+            when(mock.transferCustomer(anyString(), anyString(), anyString(), any()))
                     .thenReturn(transferResp);
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -243,7 +243,7 @@ public class WecomApiMockConfig {
                 "\"tag\":[{\"id\":\"t1\",\"name\":\"一年级\"}]}]}"));
 
             // transferCustomer
-            when(mock.transferCustomer(anyString(), anyString(), anyString()))
+            when(mock.transferCustomer(anyString(), anyString(), anyString(), any()))
                 .thenReturn(om.readTree(
                     "{\"errcode\":0,\"errmsg\":\"ok\"," +
                     "\"customer\":[{\"external_userid\":\"wm-mock-001\",\"errcode\":0}]}"));

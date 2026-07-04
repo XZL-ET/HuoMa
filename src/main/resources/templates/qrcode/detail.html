@@ -199,6 +199,25 @@
                         <code>{{form_link}}</code>
                     </div>
 
+                    <!-- 转接成功通知消息 -->
+                    <div class="mb-3">
+                        <label class="form-label">转接成功通知
+                            <small class="text-muted">（客户侧可见，最多200字符，由企微在转接成功后自动发送）</small>
+                        </label>
+                        <textarea name="transferSuccessMsg" class="form-control" rows="2"
+                                  maxlength="200"
+                                  th:text="${qr.transferSuccessMsg}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferSuccessMsgOverride}">
+                            生效值：<code th:text="${effectiveTransferSuccessMsg}"></code>
+                            <span class="text-info" th:if="${effectiveTransferSuccessMsg != null and !effectiveTransferSuccessMsg.isEmpty()}">📎 继承自系统默认</span>
+                            <span class="text-muted" th:if="${effectiveTransferSuccessMsg == null or effectiveTransferSuccessMsg.isEmpty()}">📎 继承自系统默认（不发送）</span>
+                        </div>
+                        <div class="form-text" th:if="${transferSuccessMsgOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
                     <div class="d-flex gap-2">
                         <button type="submit" class="btn btn-sm btn-primary">保存问候语配置</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary"
@@ -819,6 +838,7 @@
         document.querySelector('[name="transferFilledNote"]').value = '';
         document.querySelector('[name="transferFilledGreeting"]').value = '';
         document.querySelector('[name="transferUnfilledGreeting"]').value = '';
+        document.querySelector('[name="transferSuccessMsg"]').value = '';
         // 提交表单
         document.getElementById('transferGreetingForm').submit();
     }

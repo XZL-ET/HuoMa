@@ -120,6 +120,10 @@ public class QrCode {
     @Column(name = "transfer_unfilled_greeting", length = 500)
     private String transferUnfilledGreeting;
 
+    /** 转接成功通知消息（客户侧可见），{@code NULL}=使用系统默认，空字符串=不发送。最多200字符，由企微API限制。 */
+    @Column(name = "transfer_success_msg", length = 200)
+    private String transferSuccessMsg;
+
     /** 活码状态：active-正常, paused-暂停, full-已满, no_agent-无可用客服 */
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)

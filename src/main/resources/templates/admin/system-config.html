@@ -28,11 +28,11 @@
                             <form th:action="@{/admin/system-config/save}" method="post"
                                   class="d-flex align-items-start gap-2">
                                 <input type="hidden" name="configKey" th:value="${c.configKey}">
-                                <th:block th:if="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled')}">
+                                <th:block th:if="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled') or #strings.contains(c.configKey, 'transfer_success_msg')}">
                                     <textarea name="configValue" class="form-control form-control-sm" rows="2"
                                               style="max-width:480px" th:text="${c.configValue}"></textarea>
                                 </th:block>
-                                <th:block th:unless="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled')}">
+                                <th:block th:unless="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled') or #strings.contains(c.configKey, 'transfer_success_msg')}">
                                     <input type="text" name="configValue" th:value="${c.configValue}"
                                            class="form-control form-control-sm" style="max-width:400px">
                                 </th:block>
