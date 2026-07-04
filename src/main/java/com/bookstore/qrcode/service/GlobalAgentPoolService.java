@@ -111,6 +111,15 @@ public class GlobalAgentPoolService {
                 log.info("跳过并清理封号/熔断员工: userid={}", p.getAgentUserid());
                 continue;
             }
+            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
+            if (agent != null
+                && (agent.getRole() == Agent.AgentRole.service
+                 || agent.getRole() == Agent.AgentRole.dual)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
+                continue;
+            }
             // 取走后移至队尾，确保下次活码创建时补充到不同员工（公平轮转）
             int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
                 .map(GlobalAgentPool::getSortOrder).orElse(0);
@@ -197,6 +206,15 @@ public class GlobalAgentPoolService {
                 || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
                 skippedBlocked++;
                 poolRepo.delete(p);
+                continue;
+            }
+            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
+            if (agent != null
+                && (agent.getRole() == Agent.AgentRole.service
+                 || agent.getRole() == Agent.AgentRole.dual)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
                 continue;
             }
             // 取走 → 推到队尾（公平轮转）

@@ -113,6 +113,27 @@ public class AgentRotationService {
         QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
         if (qr == null) return;
 
+        // 服务老师/双角色不参与轮换，即使日限到达也不下码，
+        // 但仍触发扩容加接待员分担流量，防止服务老师成为单点瓶颈
+        QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, userId).orElse(null);
+        if (qa != null && (qa.getRole() == QrAgent.AgentRole.service
+                        || qa.getRole() == QrAgent.AgentRole.dual)) {
+            int dailyMax = pool.getDailyMax();
+            if (dailyMax > 0) {
+                int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
+                if (globalCount >= dailyMax) {
+                    log.warn("服务老师/双角色 {} 日限到达 {}/{}，触发扩容分担流量（不下码）: qr={}",
+                        userId, globalCount, dailyMax, qrCodeId);
+                    preActivateBackup(qrCodeId, qr);
+                } else if (urgentThreshold > 0 && globalCount >= urgentThreshold) {
+                    log.info("服务老师/双角色 {} 紧急阈值 {}/{}，提前激活后备: qr={}",
+                        userId, globalCount, dailyMax, qrCodeId);
+                    preActivateBackup(qrCodeId, qr);
+                }
+            }
+            return;
+        }
+
         int dailyMax = pool.getDailyMax();
         if (dailyMax <= 0) {
             log.warn("员工 {} dailyMax={} 异常，跳过阈值检查", userId, dailyMax);
@@ -163,6 +184,13 @@ public class AgentRotationService {
                 log.info("员工已下码，跳过重复扩容: qr={}, user={}", qrCodeId, fullUserId);
                 return;
             }
+            // 服务老师/双角色不参与轮换，不应走到这里（checkAndRotate 已拦截），防御兜底
+            if (fullAgent.getRole() == QrAgent.AgentRole.service
+                || fullAgent.getRole() == QrAgent.AgentRole.dual) {
+                log.warn("expandQrCodeUsers 被服务老师/双角色触发（不应发生），跳过: qr={}, user={}",
+                    qrCodeId, fullUserId);
+                return;
+            }
 
             // 构建排除列表
             Set<String> excludeUserids = new HashSet<>();
@@ -181,7 +209,7 @@ public class AgentRotationService {
 
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId).agentUserid(backupUserid)
-                .role(QrAgent.AgentRole.receptionist)
+                .role(fullAgent.getRole()) // 跟随被替换员工的角色
                 .dailyMax(backup.getDailyMax())
                 .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
                 .status(QrAgent.AgentStatus.active).build();

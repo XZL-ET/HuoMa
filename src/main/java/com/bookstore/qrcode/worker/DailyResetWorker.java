@@ -206,6 +206,18 @@ public class DailyResetWorker {
             if (agent != null
                 && agent.getOverallStatus() != Agent.OverallStatus.blocked
                 && agent.getOverallStatus() != Agent.OverallStatus.melted) {
+                // 服务老师/双角色不应出现 full 状态（应被 checkAndRotate 拦截），
+                // 若出现则告警（说明有漏洞），并正常恢复为 active
+                if (qa.getRole() == QrAgent.AgentRole.service
+                    || qa.getRole() == QrAgent.AgentRole.dual) {
+                    log.warn("服务老师/双角色异常出现在 full 状态: qrCodeId={}, userid={}, role={}",
+                        qa.getQrCodeId(), qa.getAgentUserid(), qa.getRole());
+                    alertService.createAlert(qa.getAgentUserid(), "service_teacher_full_recovered",
+                        AgentAlert.AlertSeverity.high,
+                        String.format("服务老师/双角色 %s 异常出现在 full 状态（活码=%d），已自动恢复",
+                            qa.getAgentUserid(), qa.getQrCodeId()),
+                        AgentAlert.AutoAction.none, qa.getQrCodeId());
+                }
                 qa.setStatus(QrAgent.AgentStatus.active);
                 qrAgentRepo.save(qa);
                 affectedQrIds.add(qa.getQrCodeId());

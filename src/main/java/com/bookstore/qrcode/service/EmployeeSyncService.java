@@ -220,6 +220,20 @@ public class EmployeeSyncService {
                 log.info("全局池同步：排除 {} 个已封禁/熔断员工",
                     before - activeNotInPool.size());
             }
+            // 排除已在活码上担任服务老师/双角色的员工（避免被其他活码借走）
+            int beforeSvc = activeNotInPool.size();
+            activeNotInPool = activeNotInPool.stream()
+                .filter(e -> {
+                    Agent a = agentSnapshot.get(e.getUserid());
+                    return a == null
+                        || (a.getRole() != Agent.AgentRole.service
+                            && a.getRole() != Agent.AgentRole.dual);
+                })
+                .toList();
+            if (activeNotInPool.size() < beforeSvc) {
+                log.info("全局池同步：排除 {} 个服务老师/双角色员工",
+                    beforeSvc - activeNotInPool.size());
+            }
         }
 
         if (activeNotInPool.isEmpty()) {

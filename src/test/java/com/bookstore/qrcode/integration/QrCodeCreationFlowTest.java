@@ -96,9 +96,9 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         assertThat(agent1.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
         assertThat(agent1.getSortOrder()).isEqualTo(0);
 
-        // 3. GlobalAgentPool 验证：agent1 和 agent2 应被自动加入后备池
-        assertThat(poolRepo.findByAgentUserid("agent1")).isPresent();
-        assertThat(poolRepo.findByAgentUserid("agent2")).isPresent();
+        // 3. 服务老师不入全局池（避免被其他活码借走）
+        assertThat(poolRepo.findByAgentUserid("agent1")).isEmpty();
+        assertThat(poolRepo.findByAgentUserid("agent2")).isEmpty();
     }
 
     @org.junit.jupiter.api.Disabled("池耗尽路径 + H2 FOR UPDATE 行为差异，需集成环境调试")
@@ -156,21 +156,18 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("活码创建后未在池中的员工自动进入后备池（status=standby）")
+    @DisplayName("活码创建后服务老师不入全局池（避免被其他活码借走）")
     void shouldPopulateGlobalPoolOnCreation() {
         QrCodeCreateRequest req = baseRequest();
-        // agent1, agent2 还未在池中 → create 过程中 ensureInPool 应自动创建
+        // agent1, agent2 还未在池中 → create 过程中不应入池（服务老师）
         assertThat(poolRepo.findByAgentUserid("agent1")).isEmpty();
         assertThat(poolRepo.findByAgentUserid("agent2")).isEmpty();
 
         qrCodeService.create(req);
 
-        GlobalAgentPool pool1 = poolRepo.findByAgentUserid("agent1").orElseThrow();
-        assertThat(pool1.getStatus()).isEqualTo(GlobalAgentPool.PoolStatus.standby);
-        assertThat(pool1.getDailyMax()).isEqualTo(150); // bindAgents 默认值：serviceDailyMax null → 150
-
-        GlobalAgentPool pool2 = poolRepo.findByAgentUserid("agent2").orElseThrow();
-        assertThat(pool2.getStatus()).isEqualTo(GlobalAgentPool.PoolStatus.standby);
+        // 服务老师不入全局池
+        assertThat(poolRepo.findByAgentUserid("agent1")).isEmpty();
+        assertThat(poolRepo.findByAgentUserid("agent2")).isEmpty();
     }
 
     // ================================================================

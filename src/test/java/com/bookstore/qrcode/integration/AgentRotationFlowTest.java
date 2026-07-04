@@ -48,22 +48,30 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
         qrCodeRepo.deleteAll();
         agentRepo.deleteAll();
 
-        // 创建活码，绑定 agent1（主接待员）, agent2（后备）
+        // 确保 agent1-agent5 在后备池中（作为接待员供轮换测试使用）
+        poolService.ensureInPool("agent1", 100);
+        poolService.ensureInPool("agent2", 100);
+        poolService.ensureInPool("agent3", 100);
+        poolService.ensureInPool("agent4", 100);
+        poolService.ensureInPool("agent5", 100);
+
+        // 创建活码，绑定 agent_svc 为服务老师（不入全局池）
         QrCodeCreateRequest req = new QrCodeCreateRequest();
         req.setSchoolName("轮换测试学校");
         req.setSchoolId("SCH-ROTATE-001");
         req.setRegionCity("深圳");
         req.setRegionDistrict("南山区");
-        req.setServiceTeacherUserid("agent1,agent2");
-        req.setInitialAgentUserids("agent1,agent2");
+        req.setServiceTeacherUserid("agent_svc");
+        req.setInitialAgentUserids("agent_svc");
         testQr = qrCodeService.create(req);
 
-        // 确保 agent3, agent4, agent5 也在后备池中（供轮换使用）
-        poolService.ensureInPool("agent3", 100);
-        poolService.ensureInPool("agent4", 100);
-        poolService.ensureInPool("agent5", 100);
-
-        // service methods have their own @Transactional
+        // 手动将 agent1 添加为活码上的接待员（供轮换测试使用）
+        qrAgentRepo.save(QrAgent.builder()
+            .qrCodeId(testQr.getId()).agentUserid("agent1")
+            .role(QrAgent.AgentRole.receptionist)
+            .dailyMax(100)
+            .sortOrder(1)
+            .status(QrAgent.AgentStatus.active).build());
     }
 
     // ================================================================
@@ -140,7 +148,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
     void shouldTriggerCheckAndRotateAtFullThreshold() {
         int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
 
-        // agent1 的 dailyMax 默认 150，传 globalCount=150 触发扩容
+        // agent1 的 dailyMax=100，传 globalCount=150 触发扩容
         rotationService.checkAndRotate(testQr.getId(), "agent1", 150);
 
         // flush/clear not needed — service methods manage their own transactions
@@ -155,7 +163,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
     void shouldNotChangeBelowThreshold() {
         int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
 
-        // agent1 的 dailyMax=150（bindAgents 默认值），warnRatio=80 → warnThreshold=120
+        // agent1 的 dailyMax=100，warnRatio=80 → warnThreshold=80
         // globalCount=10 低于 warn 阈值 → 应无变更
         rotationService.checkAndRotate(testQr.getId(), "agent1", 10);
 

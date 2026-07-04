@@ -99,14 +99,38 @@ public class WechatSyncHealingService {
                     current.remove(failing);
                     result.replacedUsers.add(failing);
 
-                    // ① 从 qr_agent 移除
-                    qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, failing).ifPresent(qa -> {
-                        qa.setStatus(QrAgent.AgentStatus.removed);
-                        qrAgentRepo.save(qa);
-                    });
-
-                    // ② 封锁 agent 并从全局池移除
-                    poolService.blockAgentForWechatIssue(failing, 40098);
+                    // ① 从 qr_agent 移除（服务老师/双角色除外，需手动处理）
+                    QrAgent failingAgent = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, failing).orElse(null);
+                    if (failingAgent != null
+                        && (failingAgent.getRole() == QrAgent.AgentRole.service
+                         || failingAgent.getRole() == QrAgent.AgentRole.dual)) {
+                        log.warn("自愈: 服务老师/双角色不可用但不下码: qrCodeId={}, userid={}, role={}",
+                            qrCodeId, failing, failingAgent.getRole());
+                        try {
+                            alertService.createAlert(failing, "wechat_unavailable_service",
+                                AgentAlert.AlertSeverity.high,
+                                String.format("活码 %d 服务老师/双角色 %s 企微不可用，请手动处理",
+                                    qrCodeId, failing),
+                                AgentAlert.AutoAction.none, qrCodeId);
+                        } catch (Exception e2) {
+                            log.error("服务老师自愈告警失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
+                        }
+                        // 自动提拔替补 dual，保障在职继承不中断
+                        try {
+                            ensureServiceFallback(qrCodeId, failing);
+                        } catch (Exception e2) {
+                            log.error("服务老师替补提拔失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
+                        }
+                        // 已从 current 移除（企微侧确实不可用），但不下码不补人
+                    } else {
+                        if (failingAgent != null) {
+                            failingAgent.setStatus(QrAgent.AgentStatus.removed);
+                            qrAgentRepo.save(failingAgent);
+                        }
+                        // ② 封锁 agent 并从全局池移除
+                        poolService.blockAgentForWechatIssue(failing, 40098);
+                        result.needReplacement = true;
+                    }
 
                     // ③ 创建告警
                     try {
@@ -118,9 +142,6 @@ public class WechatSyncHealingService {
                     } catch (Exception e2) {
                         log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
                     }
-
-                    // ④ 需要补充新成员
-                    result.needReplacement = true;
                 } else {
                     // 数量对不上但不是 missing 问题 — 重试
                     attempt++;
@@ -140,11 +161,36 @@ public class WechatSyncHealingService {
                         current.remove(failing);
                         result.replacedUsers.add(failing);
 
-                        qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, failing).ifPresent(qa -> {
-                            qa.setStatus(QrAgent.AgentStatus.removed);
-                            qrAgentRepo.save(qa);
-                        });
-                        poolService.blockAgentForWechatIssue(failing, errcode);
+                        // 服务老师/双角色不下码，只告警
+                        QrAgent failingAgent2 = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, failing).orElse(null);
+                        if (failingAgent2 != null
+                            && (failingAgent2.getRole() == QrAgent.AgentRole.service
+                             || failingAgent2.getRole() == QrAgent.AgentRole.dual)) {
+                            log.warn("自愈: 服务老师/双角色不可用但不下码: qrCodeId={}, userid={}, role={}, errcode={}",
+                                qrCodeId, failing, failingAgent2.getRole(), errcode);
+                            try {
+                                alertService.createAlert(failing, "wechat_unavailable_service",
+                                    AgentAlert.AlertSeverity.high,
+                                    String.format("活码 %d 服务老师/双角色 %s 企微不可用(errcode=%d)，请手动处理",
+                                        qrCodeId, failing, errcode),
+                                    AgentAlert.AutoAction.none, qrCodeId);
+                            } catch (Exception e2) {
+                                log.error("服务老师自愈告警失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
+                            }
+                            // 自动提拔替补 dual，保障在职继承不中断
+                            try {
+                                ensureServiceFallback(qrCodeId, failing);
+                            } catch (Exception e2) {
+                                log.error("服务老师替补提拔失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
+                            }
+                        } else {
+                            if (failingAgent2 != null) {
+                                failingAgent2.setStatus(QrAgent.AgentStatus.removed);
+                                qrAgentRepo.save(failingAgent2);
+                            }
+                            poolService.blockAgentForWechatIssue(failing, errcode);
+                            result.needReplacement = true;
+                        }
 
                         try {
                             alertService.createAlert(failing, "wechat_unavailable",
@@ -155,7 +201,6 @@ public class WechatSyncHealingService {
                         } catch (Exception e2) {
                             log.error("自愈移除告警创建失败: userid={}, qrCodeId={}", failing, qrCodeId, e2);
                         }
-                        result.needReplacement = true;
                         attempt++;
                         // 继续循环，用剩余成员重试同步
                         continue;
@@ -344,6 +389,66 @@ public class WechatSyncHealingService {
             }
         }
         return users;
+    }
+
+    /**
+     * 服务老师/双角色失联时，自动提拔最资深接待员为 dual 作为替补转接目标。
+     *
+     * <p>只在活码上没有其他可用 service/dual 时才提拔，避免重复。
+     * 提拔后发送告警通知管理员。</p>
+     *
+     * @param qrCodeId      活码 ID
+     * @param failingUserId 已失联的服务老师 userid
+     */
+    private void ensureServiceFallback(Long qrCodeId, String failingUserId) {
+        // 检查是否已有其他可用 service/dual（排除当前失联的）
+        long otherSvcCount = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                      || a.getRole() == QrAgent.AgentRole.dual)
+            .filter(a -> !a.getAgentUserid().equals(failingUserId))
+            .count();
+        if (otherSvcCount > 0) {
+            return; // 已有其他替补，无需提拔
+        }
+
+        // 找到最资深的活跃接待员（sortOrder 最小 = 上码最早）
+        QrAgent senior = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() == QrAgent.AgentStatus.active)
+            .filter(a -> a.getRole() == QrAgent.AgentRole.receptionist)
+            .min(java.util.Comparator.comparingInt(QrAgent::getSortOrder))
+            .orElse(null);
+
+        if (senior == null) {
+            log.warn("活码 {} 服务老师 {} 失联，且无接待员可提拔为替补", qrCodeId, failingUserId);
+            alertService.createAlert(failingUserId, "service_fallback_failed",
+                AgentAlert.AlertSeverity.high,
+                String.format("活码 %d 服务老师 %s 企微不可用且无接待员可提拔，在职继承将中断",
+                    qrCodeId, failingUserId),
+                AgentAlert.AutoAction.none, qrCodeId);
+            return;
+        }
+
+        // 提拔为 dual
+        senior.setRole(QrAgent.AgentRole.dual);
+        qrAgentRepo.save(senior);
+        log.info("服务老师替补已提拔: qrCodeId={}, userid={}, receptionist → dual",
+            qrCodeId, senior.getAgentUserid());
+
+        // 同步 Agent 表
+        agentRepo.findById(senior.getAgentUserid()).ifPresent(a -> {
+            if (a.getRole() == Agent.AgentRole.receptionist) {
+                a.setRole(Agent.AgentRole.dual);
+                agentRepo.save(a);
+            }
+        });
+
+        // 告警通知
+        alertService.createAlert(senior.getAgentUserid(), "service_fallback_promoted",
+            AgentAlert.AlertSeverity.high,
+            String.format("活码 %d 服务老师 %s 企微不可用，已将 %s 自动提拔为 dual 作为替补转接目标",
+                qrCodeId, failingUserId, senior.getAgentUserid()),
+            AgentAlert.AutoAction.none, qrCodeId);
     }
 
     /** 同步结果 */
