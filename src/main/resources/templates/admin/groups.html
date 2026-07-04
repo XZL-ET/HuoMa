@@ -145,13 +145,18 @@
                                       style="pointer-events:none;z-index:5;">▼</span>
                                 <select name="qrCodeId" class="d-none">
                                     <option value="">不关联（稍后设置）</option>
-                                    <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
+                                    <option th:each="qr : ${unassignedQrCodes}" th:value="${qr.id}"
                                             th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
                                 </select>
                                 <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
                                      style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>
                             </div>
-                            <small class="text-muted">联盟的唯一活码，多所小校共用这一个码</small>
+                            <small class="text-muted">
+                                联盟的唯一活码，多所小校共用这一个码。仅显示未被其他联盟关联的活码
+                                <span th:if="${unassignedQrCodes.isEmpty()}" class="text-warning">
+                                    ⚠️ 当前所有活码都已关联联盟，请先创建后通过编辑关联
+                                </span>
+                            </small>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -225,7 +230,7 @@
                                 <select name="qrCodeId" id="editQrCodeId" class="d-none">
                                     <option value="">不关联</option>
                                     <option th:each="qr : ${allQrCodes}" th:value="${qr.id}"
-                                            th:text="${qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
+                                            th:text="${(qr.groupId != null ? '[已关联] ' : '') + qr.schoolName + ' (' + qr.schoolId + ' — ' + qr.regionDistrict + ')'}"></option>
                                 </select>
                                 <div class="combo-dropdown position-absolute bg-white border rounded shadow-sm"
                                      style="z-index:1060;max-height:200px;overflow-y:auto;display:none;"></div>

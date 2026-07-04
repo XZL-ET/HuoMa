@@ -71,6 +71,10 @@ public class QrCodeGroupController {
         model.addAttribute("groups", groups);
         model.addAttribute("groupPage", groupPage);
         model.addAttribute("formTemplates", formTemplateService.listAll());
+        // 新建弹窗：仅显示未关联联盟的活码
+        model.addAttribute("unassignedQrCodes", qrCodeRepo.findUnassignedTreeProjection());
+        // 编辑弹窗：显示全部活码（含已关联的，保证当前关联的活码可被选中）
+        model.addAttribute("allQrCodes", qrCodeRepo.findAllTreeProjection());
         model.addAttribute("qrCodeMap", qrCodeMap);
         model.addAttribute("schoolCounts", schoolCounts);
         model.addAttribute("keyword", keywordParam);

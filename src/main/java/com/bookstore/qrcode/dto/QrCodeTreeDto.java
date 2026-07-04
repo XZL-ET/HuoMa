@@ -15,6 +15,7 @@ import lombok.Data;
 public class QrCodeTreeDto {
     private Long id;
     private String schoolName;
+    private String schoolId;
     private String regionCity;
     private String regionDistrict;
     private Long groupId;

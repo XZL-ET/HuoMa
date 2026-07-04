@@ -285,9 +285,19 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
      * @return 活码树 DTO 列表（仅含 id、schoolName、regionCity、regionDistrict、groupId）
      */
     @Query("SELECT new com.bookstore.qrcode.dto.QrCodeTreeDto(" +
-           "q.id, q.schoolName, q.regionCity, q.regionDistrict, q.groupId) " +
+           "q.id, q.schoolName, q.schoolId, q.regionCity, q.regionDistrict, q.groupId) " +
            "FROM QrCode q")
     List<QrCodeTreeDto> findAllTreeProjection();
+
+    /**
+     * 查询未关联任何联盟的活码投影（用于新建联盟时选择活码）。
+     */
+    @Query("SELECT new com.bookstore.qrcode.dto.QrCodeTreeDto(" +
+           "q.id, q.schoolName, q.schoolId, q.regionCity, q.regionDistrict, q.groupId) " +
+           "FROM QrCode q WHERE q.id NOT IN " +
+           "(SELECT g.qrCodeId FROM QrCodeGroup g WHERE g.qrCodeId IS NOT NULL) " +
+           "ORDER BY q.schoolName")
+    List<QrCodeTreeDto> findUnassignedTreeProjection();
 
     // ── 批量更新方法 ──
 

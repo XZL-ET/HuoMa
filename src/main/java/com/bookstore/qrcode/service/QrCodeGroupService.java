@@ -38,6 +38,16 @@ public class QrCodeGroupService {
     public QrCodeGroup create(String name, String regionCity, String regionDistrict,
                                String defaultWelcomeText, Long defaultFormTemplateId,
                                Long qrCodeId, String schoolList) {
+        // 若活码已被其他联盟占用，先清理旧联盟的引用（防御脏数据，遍历所有匹配）
+        if (qrCodeId != null) {
+            List<QrCodeGroup> oldGroups = groupRepo.findByQrCodeId(qrCodeId);
+            for (QrCodeGroup oldGroup : oldGroups) {
+                oldGroup.setQrCodeId(null);
+                groupRepo.save(oldGroup);
+                log.info("活码 {} 从联盟 [{}] 转移至新联盟 [{}]", qrCodeId, oldGroup.getName(), name);
+            }
+        }
+
         QrCodeGroup g = groupRepo.save(QrCodeGroup.builder()
             .name(name).regionCity(regionCity).regionDistrict(regionDistrict)
             .defaultWelcomeText(defaultWelcomeText != null && defaultWelcomeText.isBlank()
@@ -66,6 +76,13 @@ public class QrCodeGroupService {
         // 处理活码关联变更
         Long oldQrCodeId = g.getQrCodeId();
         if (qrCodeId != null && !qrCodeId.equals(oldQrCodeId)) {
+            // 若新活码已被其他联盟占用，先清理旧联盟的引用
+            List<QrCodeGroup> oldGroups = groupRepo.findByQrCodeId(qrCodeId);
+            for (QrCodeGroup oldGroup : oldGroups) {
+                oldGroup.setQrCodeId(null);
+                groupRepo.save(oldGroup);
+                log.info("活码 {} 从联盟 [{}] 转移至联盟 [{}]", qrCodeId, oldGroup.getName(), g.getName());
+            }
             // 新活码 → 绑定本联盟
             syncQrCodeGroup(qrCodeId, id);
             // 旧活码 → 解除绑定
