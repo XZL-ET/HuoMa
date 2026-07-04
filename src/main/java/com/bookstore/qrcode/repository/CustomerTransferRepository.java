@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.CustomerTransfer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
@@ -195,7 +196,16 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     List<CustomerTransfer> findTerminalOlderThan(@Param("cutoff") LocalDateTime cutoff);
 
     /**
-     * 删除指定 ID 列表中的记录。
+     * 批量删除指定 ID 列表中的记录（单条 DELETE 语句，避免 N+1）。
      */
-    void deleteAllByIdIn(List<Long> ids);
+    @Modifying
+    @Query("DELETE FROM CustomerTransfer t WHERE t.id IN :ids")
+    void deleteAllByIdIn(@Param("ids") List<Long> ids);
+
+    /**
+     * 判断指定客户是否存在最近 N 天内的 terminal 转移记录
+     * （timeout / rejected / retry_limit），用于冷却期检查。
+     */
+    @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt >= :since")
+    boolean existsRecentTerminalByCustomerId(@Param("customerId") Long customerId, @Param("since") LocalDateTime since);
 }

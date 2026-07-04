@@ -59,6 +59,9 @@ public class TransferService {
     /** 超时阈值：发起转移后等待 24 小时 */
     private static final Duration TRANSFER_TIMEOUT = Duration.ofHours(24);
 
+    /** 冷却期：最近 N 天内已有 timeout/rejected/retry_limit 的客户不再重转 */
+    private static final Duration TRANSFER_COOLDOWN = Duration.ofDays(7);
+
     /** 收集表单链接，可通过 app.transfer.form-url 配置，空则使用占位符 */
     @Value("${app.transfer.form-url:}")
     private String formUrl;
@@ -112,6 +115,15 @@ public class TransferService {
                 CustomerTransfer.TransferStatus.confirmed);
             if (transferRepo.existsByCustomerIdAndStatusIn(customerId, dedupStatuses)) {
                 log.info("客户 {} 已有进行中/已完成继承记录，跳过", customerId);
+                return;
+            }
+
+            // ---- 冷却期：7 天内 timeout/rejected/retry_limit 的客户不重转 ----
+            // 防止僵尸客户陷入 "发起 → 超时 → 再发起" 的死循环，浪费 API 配额
+            if (transferRepo.existsRecentTerminalByCustomerId(customerId,
+                    LocalDateTime.now().minus(TRANSFER_COOLDOWN))) {
+                log.info("客户 {} 在冷却期内（{} 天内有 terminal 记录），跳过",
+                    customerId, TRANSFER_COOLDOWN.toDays());
                 return;
             }
 

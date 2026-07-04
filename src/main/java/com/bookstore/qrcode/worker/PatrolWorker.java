@@ -55,7 +55,6 @@ public class PatrolWorker {
     private final WecomApiClient wecomApi;
     private final OperationLogRepository operationLogRepo;
     private final CustomerTransferRepository transferRepo;
-    private final CustomerRepository customerRepo;
     private final QrCodeService qrCodeService;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
@@ -463,32 +462,13 @@ public class PatrolWorker {
         // 每天只在 03:00-03:04 批次执行一次
         if (now.getHour() != 3 || now.getMinute() >= 5) return;
 
-        int deleted = 0;
-
-        // 1. 清理 terminal 状态的旧记录（30 天前）
+        // 清理 terminal 状态的旧记录（30 天前）
+        // 注意：孤记录（Customer 已删除）由数据库 ON DELETE CASCADE 自动处理，无需应用层扫描
         List<CustomerTransfer> stale = transferRepo.findTerminalOlderThan(now.minusDays(30));
         if (!stale.isEmpty()) {
             List<Long> staleIds = stale.stream().map(CustomerTransfer::getId).toList();
             transferRepo.deleteAllByIdIn(staleIds);
-            deleted += staleIds.size();
-        }
-
-        // 2. 清理 Customer 已不存在的孤记录
-        List<CustomerTransfer> all = transferRepo.findAll();
-        List<Long> orphanIds = new ArrayList<>();
-        for (CustomerTransfer t : all) {
-            if (!customerRepo.existsById(t.getCustomerId())) {
-                orphanIds.add(t.getId());
-            }
-        }
-        if (!orphanIds.isEmpty()) {
-            transferRepo.deleteAllByIdIn(orphanIds);
-            deleted += orphanIds.size();
-        }
-
-        if (deleted > 0) {
-            log.info("旧转移记录清理完成: 删除 {} 条 (terminal旧记录 {} + 孤记录 {})",
-                deleted, stale.size(), orphanIds.size());
+            log.info("旧转移记录清理完成: 删除 {} 条 terminal 记录", staleIds.size());
         }
     }
 
