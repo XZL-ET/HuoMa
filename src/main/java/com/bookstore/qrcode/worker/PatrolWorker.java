@@ -54,6 +54,8 @@ public class PatrolWorker {
     private final AgentRepository agentRepo;
     private final WecomApiClient wecomApi;
     private final OperationLogRepository operationLogRepo;
+    private final CustomerTransferRepository transferRepo;
+    private final CustomerRepository customerRepo;
     private final QrCodeService qrCodeService;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
@@ -122,6 +124,13 @@ public class PatrolWorker {
             }
         } catch (Exception e) {
             log.debug("DLQ 重放跳过: {}", e.getMessage());
+        }
+
+        // 5. 清理旧转移记录（每天执行一次，约 03:xx 批次）
+        try {
+            self.cleanStaleTransferRecords();
+        } catch (Exception e) {
+            log.error("旧转移记录清理异常", e);
         }
 
         log.debug("定时巡检完成");
@@ -431,6 +440,55 @@ public class PatrolWorker {
                         anomalyCount, affectedQrIds.size()),
                     AgentAlert.AutoAction.none, null);
             }
+        }
+    }
+
+    /**
+     * 清理陈旧转移记录。
+     *
+     * <p>由 {@link #patrol()} 每 5 分钟调用，但实际每天仅执行一次
+     * （仅在小时数 = 3 且分钟数 &lt; 5 时执行，即约 03:00 批次），
+     * 避免频繁扫描大表。</p>
+     *
+     * <p>清理策略：
+     * <ul>
+     *   <li>terminal 状态（timeout/rejected/retry_limit）且超过 30 天的记录 → 物理删除</li>
+     *   <li>对应的 Customer 已不存在的记录 → 物理删除（不限状态，不限时间）</li>
+     * </ul>
+     * </p>
+     */
+    @Transactional
+    void cleanStaleTransferRecords() {
+        LocalDateTime now = LocalDateTime.now();
+        // 每天只在 03:00-03:04 批次执行一次
+        if (now.getHour() != 3 || now.getMinute() >= 5) return;
+
+        int deleted = 0;
+
+        // 1. 清理 terminal 状态的旧记录（30 天前）
+        List<CustomerTransfer> stale = transferRepo.findTerminalOlderThan(now.minusDays(30));
+        if (!stale.isEmpty()) {
+            List<Long> staleIds = stale.stream().map(CustomerTransfer::getId).toList();
+            transferRepo.deleteAllByIdIn(staleIds);
+            deleted += staleIds.size();
+        }
+
+        // 2. 清理 Customer 已不存在的孤记录
+        List<CustomerTransfer> all = transferRepo.findAll();
+        List<Long> orphanIds = new ArrayList<>();
+        for (CustomerTransfer t : all) {
+            if (!customerRepo.existsById(t.getCustomerId())) {
+                orphanIds.add(t.getId());
+            }
+        }
+        if (!orphanIds.isEmpty()) {
+            transferRepo.deleteAllByIdIn(orphanIds);
+            deleted += orphanIds.size();
+        }
+
+        if (deleted > 0) {
+            log.info("旧转移记录清理完成: 删除 {} 条 (terminal旧记录 {} + 孤记录 {})",
+                deleted, stale.size(), orphanIds.size());
         }
     }
 

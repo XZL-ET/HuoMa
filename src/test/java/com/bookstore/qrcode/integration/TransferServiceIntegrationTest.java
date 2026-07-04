@@ -117,16 +117,16 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     // ================================================================
 
     @Test
-    @DisplayName("trackResults：retryCount >= 10 标记为 retry_limit")
+    @DisplayName("trackResults：pollCount >= 48 标记为 retry_limit")
     void shouldMarkRetryLimitWhenExhausted() {
-        // given: pending_confirm 且 retryCount = 10
+        // given: pending_confirm 且 pollCount = 48
         CustomerTransfer exhausted = CustomerTransfer.builder()
             .customerId(testCustomerId)
             .fromUserid(TEST_USER_A)
             .toUserid(TEST_USER_B)
             .status(CustomerTransfer.TransferStatus.pending_confirm)
             .transferTime(LocalDateTime.now())
-            .retryCount(10)
+            .pollCount(48)
             .build();
         transferRepo.save(exhausted);
 
@@ -137,7 +137,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
             // 预期企微 API 不可用导致异常，但不应影响 retry_limit 标记
         }
 
-        // then: retryCount >= 10 的记录应被标记
+        // then: pollCount >= 48 的记录应被标记
         List<CustomerTransfer> retryLimited = transferRepo
             .findByStatus(CustomerTransfer.TransferStatus.retry_limit);
         assertThat(retryLimited).isNotEmpty();
@@ -145,7 +145,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("trackResults：retryCount < 10 不被标记为 retry_limit")
+    @DisplayName("trackResults：pollCount < 48 不被标记为 retry_limit")
     void shouldNotMarkRetryLimitWhenBelowThreshold() {
         CustomerTransfer pending = CustomerTransfer.builder()
             .customerId(testCustomerId)
@@ -153,7 +153,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
             .toUserid(TEST_USER_B)
             .status(CustomerTransfer.TransferStatus.pending_confirm)
             .transferTime(LocalDateTime.now())
-            .retryCount(5)
+            .pollCount(5)
             .build();
         transferRepo.save(pending);
 
@@ -169,7 +169,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
         List<CustomerTransfer> retryLimited = transferRepo
             .findByStatus(CustomerTransfer.TransferStatus.retry_limit);
         assertThat(retryLimited).noneMatch(t -> t.getCustomerId().equals(testCustomerId)
-                                             && t.getRetryCount() < 10);
+                                             && t.getRetryCount() < 48);
     }
 
     // ================================================================

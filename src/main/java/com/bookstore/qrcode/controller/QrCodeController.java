@@ -1110,6 +1110,14 @@ public class QrCodeController {
                     .map(SystemConfig::getConfigValue)
                     .orElse("{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}"));
 
+        // 转接成功通知消息
+        model.addAttribute("transferSuccessMsgOverride", qr.getTransferSuccessMsg() != null);
+        model.addAttribute("effectiveTransferSuccessMsg",
+            qr.getTransferSuccessMsg() != null ? qr.getTransferSuccessMsg()
+                : systemConfigRepo.findByConfigKey("transfer_success_msg_default")
+                    .map(SystemConfig::getConfigValue)
+                    .orElse(""));
+
         // 时间窗口说明
         model.addAttribute("dayStartHour", dayStartHour);
         model.addAttribute("dayEndHour", dayEndHour);
@@ -1463,6 +1471,7 @@ public class QrCodeController {
                                           @RequestParam(required = false) String transferFilledNote,
                                           @RequestParam(required = false) String transferFilledGreeting,
                                           @RequestParam(required = false) String transferUnfilledGreeting,
+                                          @RequestParam(required = false) String transferSuccessMsg,
                                           RedirectAttributes redirect) {
         try {
             QrCode qr = qrCodeService.getById(id);
@@ -1476,6 +1485,9 @@ public class QrCodeController {
             }
             if (transferUnfilledGreeting != null) {
                 qr.setTransferUnfilledGreeting(transferUnfilledGreeting.isBlank() ? null : transferUnfilledGreeting);
+            }
+            if (transferSuccessMsg != null) {
+                qr.setTransferSuccessMsg(transferSuccessMsg.isBlank() ? null : transferSuccessMsg);
             }
             qrCodeRepo.save(qr);
             redirect.addFlashAttribute("message", "在职继承问候语配置已更新");
@@ -1857,6 +1869,9 @@ public class QrCodeController {
      *           <li>{@code error} —— 错误信息（仅在出错或缺少必要角色时出现）</li>
      *         </ul>
      */
+    /** 单次手动转移最大批量数，防止一次性涌入过多事件导致 Worker 过载 */
+    private static final int TRANSFER_TRIGGER_MAX_BATCH = 500;
+
     @PostMapping("/{id}/transfer/trigger")
     @ResponseBody
     public Map<String, Object> transferTrigger(@PathVariable Long id) {
@@ -1893,6 +1908,7 @@ public class QrCodeController {
                 .withHour(0).withMinute(0).withSecond(0).withNano(0);
 
             int totalTransfers = 0;
+            outer:
             for (QrAgent rec : receptionists) {
                 // 跳过自己转自己（dual 同时是接待员和服务老师）
                 if (rec.getAgentUserid().equals(serviceTeacher.getAgentUserid())) {
@@ -1903,6 +1919,11 @@ public class QrCodeController {
                         rec.getAgentUserid(), qr.getSchoolId(), todayStart);
 
                 for (Customer c : customers) {
+                    if (totalTransfers >= TRANSFER_TRIGGER_MAX_BATCH) {
+                        result.put("truncated", true);
+                        result.put("note", "达到单次上限 " + TRANSFER_TRIGGER_MAX_BATCH + " 条，剩余客户将在后续批次处理");
+                        break outer;
+                    }
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("customer_id", c.getId().toString());
                     event.put("from_userid", rec.getAgentUserid());
@@ -1964,6 +1985,7 @@ public class QrCodeController {
             }
 
             int totalTransfers = 0;
+            outer:
             for (QrAgent rec : receptionists) {
                 if (rec.getAgentUserid().equals(serviceTeacher.getAgentUserid())) {
                     continue;
@@ -1973,6 +1995,11 @@ public class QrCodeController {
                     rec.getAgentUserid(), qr.getSchoolId());
 
                 for (Customer c : customers) {
+                    if (totalTransfers >= TRANSFER_TRIGGER_MAX_BATCH) {
+                        result.put("truncated", true);
+                        result.put("note", "达到单次上限 " + TRANSFER_TRIGGER_MAX_BATCH + " 条，剩余客户将在后续批次处理");
+                        break outer;
+                    }
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("customer_id", c.getId().toString());
                     event.put("from_userid", rec.getAgentUserid());
@@ -2233,6 +2260,8 @@ public class QrCodeController {
                 row.put("name", c.getName() != null ? c.getName() : "未知");
                 row.put("addTime", c.getAddTime());
                 List<CustomerTransfer> transfers = transferRepo.findByCustomerId(c.getId());
+                // 优先找进行中/已完成的活跃记录，其次取最近一条终态记录，
+                // 避免将 api_failed/rejected/timeout/retry_limit 误显为"待转移"
                 CustomerTransfer active = transfers.stream()
                     .filter(t -> t.getStatus() == CustomerTransfer.TransferStatus.pending_confirm
                               || t.getStatus() == CustomerTransfer.TransferStatus.confirmed)
@@ -2242,8 +2271,17 @@ public class QrCodeController {
                     if (active.getStatus() == CustomerTransfer.TransferStatus.confirmed)
                         totalConfirmed++; else totalPending++;
                 } else {
-                    row.put("transferStatus", "waiting");
-                    totalWaiting++;
+                    CustomerTransfer terminal = transfers.stream()
+                        .filter(t -> t.getStatus() != CustomerTransfer.TransferStatus.pending_confirm
+                                  && t.getStatus() != CustomerTransfer.TransferStatus.confirmed)
+                        .findFirst().orElse(null);
+                    if (terminal != null) {
+                        row.put("transferStatus", terminal.getStatus().name());
+                        // 终态不计入 waiting（已不可重新发起）
+                    } else {
+                        row.put("transferStatus", "waiting");
+                        totalWaiting++;
+                    }
                 }
                 customerRows.add(row);
             }

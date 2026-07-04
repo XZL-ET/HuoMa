@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS qr_code (
     transfer_filled_note VARCHAR(500),
     transfer_filled_greeting VARCHAR(500),
     transfer_unfilled_greeting VARCHAR(500),
+    transfer_success_msg VARCHAR(200),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -220,6 +221,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     status VARCHAR(20) NOT NULL DEFAULT 'pending_confirm'
         CHECK (status IN ('pending_confirm','confirmed','rejected','timeout','api_failed','retry_limit')),
     retry_count INT NOT NULL DEFAULT 0,
+    poll_count INT NOT NULL DEFAULT 0,
     fail_reason VARCHAR(500),
     form_filled_at_transfer BOOLEAN,
     note_sent BOOLEAN NOT NULL DEFAULT FALSE,
@@ -228,12 +230,14 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
         CHECK (greeting_type IN ('filled','unfilled')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version INT NOT NULL DEFAULT 0,
     FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_transfer_customer ON customer_transfer (customer_id);
 CREATE INDEX IF NOT EXISTS idx_transfer_status ON customer_transfer (status);
 CREATE INDEX IF NOT EXISTS idx_transfer_time ON customer_transfer (transfer_time);
 CREATE INDEX IF NOT EXISTS idx_transfer_status_retry ON customer_transfer (status, retry_count);
+CREATE INDEX IF NOT EXISTS idx_transfer_status_poll ON customer_transfer (status, poll_count);
 
 -- daily_report：日报表
 CREATE TABLE IF NOT EXISTS daily_report (
@@ -376,7 +380,8 @@ VALUES ('global_contact_name', '火马客服'),
        ('transfer_greeting_enabled_default', 'true'),
        ('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
        ('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
-       ('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}');
+       ('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
+       ('transfer_success_msg_default', '');
 
 -- form_template：表单模板
 CREATE TABLE IF NOT EXISTS form_template (
@@ -418,7 +423,7 @@ CREATE TABLE IF NOT EXISTS qr_code_group (
     group_type VARCHAR(20) NOT NULL DEFAULT 'alliance',
     default_welcome_text VARCHAR(500),
     default_form_template_id BIGINT,
-    qr_code_id BIGINT,
+    qr_code_id BIGINT UNIQUE,
     school_list VARCHAR(2000),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP

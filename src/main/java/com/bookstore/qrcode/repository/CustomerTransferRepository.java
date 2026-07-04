@@ -4,6 +4,8 @@ import com.bookstore.qrcode.entity.CustomerTransfer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -45,10 +47,9 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     List<CustomerTransfer> findByStatus(CustomerTransfer.TransferStatus status);
 
     /**
-     * 查询指定状态下重试次数未超过上限的转移记录。
+     * 查询指定状态下 API 重试次数未超过上限的转移记录。
      * <p>
-     * 用于定时任务扫描「待重试」状态的转移，排除已达到最大重试次数的记录，
-     * 避免对已失败的转移无限重试。
+     * 用于 retryFailedTransfers：扫描 api_failed 状态、retryCount &lt; 3 的记录。
      * </p>
      *
      * @param status     转移状态
@@ -57,6 +58,19 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      */
     List<CustomerTransfer> findByStatusAndRetryCountLessThan(
             CustomerTransfer.TransferStatus status, int maxRetries);
+
+    /**
+     * 查询指定状态下轮询次数未超过上限的转移记录。
+     * <p>
+     * 用于 trackResults：扫描 pending_confirm 状态、pollCount &lt; 48 的记录。
+     * </p>
+     *
+     * @param status     转移状态
+     * @param maxPolls   最大允许轮询次数
+     * @return 可继续轮询的转移记录列表
+     */
+    List<CustomerTransfer> findByStatusAndPollCountLessThan(
+            CustomerTransfer.TransferStatus status, int maxPolls);
 
     /**
      * 统计指定时间范围内的客户转移总次数。
@@ -123,11 +137,65 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     long countByQrCodeIdAndStatus(Long qrCodeId, CustomerTransfer.TransferStatus status);
 
     /**
-     * 查询指定状态下重试次数已达上限的转移记录。
+     * 统计指定目标员工在指定状态下的转移记录总数。
      * <p>
-     * 用于将重试耗尽但仍处于 pending_confirm 的记录标记为 retry_limit。
+     * 用于检测某服务老师/双角色的转移失败是否已积累到告警阈值。
+     * 跨批次累积统计，而非仅看单次重试批量。
+     * </p>
+     *
+     * @param toUserid 目标员工企微 userid
+     * @param status   转移状态（通常为 retry_limit）
+     * @return 该目标在指定状态下的转移记录总数
+     */
+    long countByToUseridAndStatus(String toUserid, CustomerTransfer.TransferStatus status);
+
+    /**
+     * 查询指定状态下 API 重试次数已达上限的转移记录。
+     * <p>
+     * 用于将 retryCount 耗尽但仍处于 api_failed 的记录标记为 retry_limit。
+     * 注意：trackResults 的轮询耗尽使用 {@link #findByStatusAndPollCountGreaterThanEqual}。
      * </p>
      */
     List<CustomerTransfer> findByStatusAndRetryCountGreaterThanEqual(
             CustomerTransfer.TransferStatus status, int minRetries);
+
+    /**
+     * 查询指定状态下轮询次数已达上限的转移记录。
+     * <p>
+     * 用于 trackResults 安全网：将 pollCount ≥ 48 但仍处于 pending_confirm
+     * 的记录标记为 retry_limit。
+     * </p>
+     */
+    List<CustomerTransfer> findByStatusAndPollCountGreaterThanEqual(
+            CustomerTransfer.TransferStatus status, int minPolls);
+
+    /**
+     * 查询已确认但欢迎语未发送的转移记录，限定确认时间窗口以防止无限重试。
+     * <p>
+     * 用于定时补偿发送失败的交接欢迎语。仅重试 24 小时内的记录，
+     * 超过 24 小时的认为发送窗口已过，不再重试。
+     * </p>
+     *
+     * @param status       转移状态（通常为 confirmed）
+     * @param greetingSent 欢迎语是否已发送（false = 未发送）
+     * @param confirmSince 确认时间下限（含）
+     * @return 符合条件且未超期的记录列表
+     */
+    List<CustomerTransfer> findByStatusAndGreetingSentAndConfirmTimeAfter(
+        CustomerTransfer.TransferStatus status, boolean greetingSent,
+        java.time.LocalDateTime confirmSince);
+
+    /**
+     * 查询状态为 terminal（timeout/rejected/retry_limit）且更新时间超过指定天数的记录。
+     * <p>
+     * 用于定期清理已终结的旧转移记录，避免表无限膨胀。
+     * </p>
+     */
+    @Query("SELECT t FROM CustomerTransfer t WHERE t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt < :cutoff")
+    List<CustomerTransfer> findTerminalOlderThan(@Param("cutoff") LocalDateTime cutoff);
+
+    /**
+     * 删除指定 ID 列表中的记录。
+     */
+    void deleteAllByIdIn(List<Long> ids);
 }

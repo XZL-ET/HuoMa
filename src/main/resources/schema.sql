@@ -228,7 +228,8 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     transfer_time DATETIME COMMENT '发起时间',
     confirm_time DATETIME COMMENT '确认时间',
     status ENUM('pending_confirm','confirmed','rejected','timeout','api_failed','retry_limit') NOT NULL DEFAULT 'pending_confirm',  -- pending_confirm 待确认 / confirmed 已确认 / rejected 已拒绝 / timeout 超时 / api_failed 接口失败 / retry_limit 达重试上限
-    retry_count INT NOT NULL DEFAULT 0,
+    retry_count INT NOT NULL DEFAULT 0 COMMENT 'API重试次数 (api_failed状态)',
+    poll_count INT NOT NULL DEFAULT 0 COMMENT '轮询追踪次数 (pending_confirm状态)',
     fail_reason VARCHAR(500) COMMENT '失败原因',
     form_filled_at_transfer BOOLEAN COMMENT '继承时是否已填写收集表单',
     note_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '继承备注是否已写入',
@@ -236,6 +237,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     greeting_type ENUM('filled','unfilled') COMMENT '已填写版/未填写版',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
     FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE,
     INDEX idx_customer_transfer (customer_id),
     INDEX idx_status (status),
@@ -562,6 +564,14 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- customer_transfer: 按状态+轮询次数（trackResults 追踪）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND INDEX_NAME = 'idx_transfer_status_poll') = 0,
+    'CREATE INDEX idx_transfer_status_poll ON customer_transfer (status, poll_count)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- qr_code: 按学校名称搜索（管理后台搜索）
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
@@ -669,6 +679,14 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- qr_code_group.qr_code_id 唯一约束（一个活码只能属于一个联盟，MySQL UNIQUE 允许多个 NULL）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code_group' AND INDEX_NAME = 'uk_qr_code_id') = 0,
+    'CREATE UNIQUE INDEX uk_qr_code_id ON qr_code_group (qr_code_id)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- qr_code 新增字段（欢迎语+表单+分组）
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
@@ -731,12 +749,21 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- qr_code: transfer_success_msg（NULL=使用系统默认，空字符串=不发送通知）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qr_code' AND COLUMN_NAME = 'transfer_success_msg') = 0,
+    'ALTER TABLE qr_code ADD COLUMN transfer_success_msg VARCHAR(200) DEFAULT NULL COMMENT ''转接成功通知, NULL=使用系统默认, 空字符串=不发送''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 系统配置：在职继承问候语全局默认值
 INSERT IGNORE INTO system_config (config_key, config_value) VALUES
 ('transfer_greeting_enabled_default', 'true'),
 ('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
 ('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
-('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}');
+('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
+('transfer_success_msg_default', '');
 
 -- ============================================
 -- 场景分配优化：scene + department_id 字段

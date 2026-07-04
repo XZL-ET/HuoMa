@@ -1,12 +1,14 @@
 package com.bookstore.qrcode.job;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.service.AlertService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,8 +29,8 @@ import java.util.Map;
  * <p>
  * <b>白天（{@code dayStartHour}:00–{@code dayEndHour}:00）：</b>
  * 每 15 分钟执行一次（{@link #executeDaytimeBatch}），
- * 将过去 15 分钟内接待员添加的客户批量转移给服务老师。
- * 客户添加后延迟 15 分钟再转，避免即时打扰。
+ * 将 15～30 分钟前接待员添加的客户批量转移给服务老师。
+ * 客户添加后至少延迟 15 分钟再转（最多 30 分钟），避免即时打扰。
  * </p>
  * <p>
  * <b>夜间（{@code dayEndHour}:00–次日 {@code dayStartHour}:00）：</b>
@@ -59,11 +62,15 @@ public class InheritanceJob {
     private final CustomerRepository customerRepo;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final AlertService alertService;
 
     @org.springframework.beans.factory.annotation.Value("${app.inheritance.day-start-hour:8}")
     private int dayStartHour;
     @org.springframework.beans.factory.annotation.Value("${app.inheritance.day-end-hour:21}")
     private int dayEndHour;
+
+    /** 上次缺服务老师告警时间戳 — 限流：每小时最多告警一次 */
+    private long lastNoServiceAlertTime = 0L;
 
     /** Redis key: 自动在职继承开关，值 "true"=开启 "false"=暂停，key 不存在视为开启 */
     public static final String AUTO_ENABLED_KEY = "inheritance:auto:enabled";
@@ -115,16 +122,16 @@ public class InheritanceJob {
     }
 
     // ================================================================
-    //  白天：每 15 分钟批量转移（延迟 15 分钟）
+    //  白天：每 15 分钟批量转移（延迟 15～30 分钟）
     // ================================================================
 
     /**
      * 白天在职继承 — 每 15 分钟执行一次。
      * <p>
      * 仅在白天窗口内（{@code dayStartHour}:00–{@code dayEndHour}:00）生效。
-     * 将过去 15 分钟内接待员添加的客户批量 XADD 到 TRANSFER_STREAM。
-     * 首轮（如 08:00）会被跳过，因为前 15 分钟属于夜间窗口；
-     * 实际首轮为 08:15（处理 08:00–08:15 添加的客户）。
+     * 将 15～30 分钟前接待员添加的客户批量 XADD 到 TRANSFER_STREAM，
+     * 保证客户添加后至少延迟 15 分钟再转。
+     * 首轮为 08:30（处理 08:00–08:15 添加的客户）。
      * </p>
      */
     @Scheduled(cron = "0 */15 * * * *")
@@ -141,12 +148,12 @@ public class InheritanceJob {
             return;
         }
 
-        // 窗口起点 = 15 分钟前；若该时间仍在夜间则跳过（首轮保护）
-        LocalDateTime windowStart = LocalDateTime.now().minusMinutes(15);
+        // 窗口 = 30 分钟前 ~ 15 分钟前，保证客户添加后至少等 15 分钟
+        LocalDateTime windowStart = LocalDateTime.now().minusMinutes(30);
+        LocalDateTime windowEnd = LocalDateTime.now().minusMinutes(15);
         if (windowStart.toLocalTime().isBefore(dayStart)) {
-            return; // 前 15 分钟属于夜间，由夜间批量处理
+            return; // 窗口起点在夜间，跳过（由后续批次覆盖）
         }
-        LocalDateTime windowEnd = LocalDateTime.now();
 
         processTransferWindow(windowStart, windowEnd,
             String.format("白天 %02d:%02d 批次", now.getHour(), now.getMinute()));
@@ -159,18 +166,20 @@ public class InheritanceJob {
     /**
      * 夜间在职继承 — 每日 08:30 执行。
      * <p>
-     * 将前一日 {@code dayEndHour}:00 至今日 {@code dayStartHour}:00 之间
-     * 接待员添加的客户批量转移。白天窗口的客户已由 15 分钟批次处理，
-     * 本任务仅覆盖夜间延迟部分。
+     * 将前一日 {@code dayEndHour}:00 前 15 分钟至今日 {@code dayStartHour}:00 之间
+     * 接待员添加的客户批量转移（向前延伸 15 分钟兜底白天末班车缺口）。
+     * 白天窗口的客户已由 15 分钟批次处理，重叠部分由去重保证安全。
      * </p>
      */
     @Scheduled(cron = "${app.inheritance.cron:0 30 8 * * *}")
     public void executeNightBatch() {
         if (!isAutoEnabled()) { log.info("自动在职继承已暂停，跳过夜间批次"); return; }
         log.info("在职继承定时任务开始（夜间窗口批量转移）");
-        // 夜间窗口：前一日 dayEndHour:00 ~ 今日 (dayStartHour-1):59:59
+        // 夜间窗口：前一日 (dayEndHour:00 - 15min) ~ 今日 (dayStartHour-1):59:59
+        // 向前延伸 15 分钟兜底白天末班车缺口（20:45-21:00），重叠靠去重保安全
         LocalDateTime nightStart = LocalDateTime.now()
-            .minusDays(1).withHour(dayEndHour).withMinute(0).withSecond(0).withNano(0);
+            .minusDays(1).withHour(dayEndHour).withMinute(0).withSecond(0).withNano(0)
+            .minusMinutes(15);
         LocalDateTime nightEnd = LocalDateTime.now()
             .withHour(dayStartHour).withMinute(0).withSecond(0).withNano(0)
             .minusSeconds(1);
@@ -195,6 +204,8 @@ public class InheritanceJob {
         int totalTransfers = 0;
         int skippedNoReceptionist = 0;
         int skippedNoService = 0;
+        List<String> noServiceSchools = new ArrayList<>();
+        List<String> noReceptionistSchools = new ArrayList<>();
 
         for (QrCode qr : activeQrs) {
             try {
@@ -209,18 +220,25 @@ public class InheritanceJob {
                               || a.getRole() == QrAgent.AgentRole.dual)
                     .toList();
 
-                // 查找服务老师（service 或 dual 角色）
+                // 查找服务老师（优先 service，其次 dual）
+                // 必须显式排序：findFirst() 取决于迭代顺序（非确定性），
+                // 当自动提拔的 dual 排在 service 之前时会导致转移目标错误
                 QrAgent serviceTeacher = agents.stream()
-                    .filter(a -> a.getRole() == QrAgent.AgentRole.service
-                              || a.getRole() == QrAgent.AgentRole.dual)
-                    .findFirst().orElse(null);
+                    .filter(a -> a.getRole() == QrAgent.AgentRole.service)
+                    .findFirst()
+                    .orElseGet(() -> agents.stream()
+                        .filter(a -> a.getRole() == QrAgent.AgentRole.dual)
+                        .findFirst()
+                        .orElse(null));
 
                 if (receptionists.isEmpty()) {
                     skippedNoReceptionist++;
+                    noReceptionistSchools.add(qr.getSchoolName());
                     continue;
                 }
                 if (serviceTeacher == null) {
                     skippedNoService++;
+                    noServiceSchools.add(qr.getSchoolName());
                     continue;
                 }
 
@@ -228,8 +246,9 @@ public class InheritanceJob {
                     if (rec.getAgentUserid().equals(serviceTeacher.getAgentUserid())) {
                         continue; // 跳过自己转自己（dual 角色）
                     }
+                    // 使用过滤查询，排除已有进行中/已完成转移记录的客户，避免反复入队
                     List<Customer> customers = customerRepo
-                        .findByAddedAgentAndSchoolIdAndAddTimeBetween(
+                        .findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
                             rec.getAgentUserid(), qr.getSchoolId(), windowStart, windowEnd);
 
                     for (Customer c : customers) {
@@ -250,6 +269,25 @@ public class InheritanceJob {
                 log.error("在职继承失败: qrCodeId={}", qr.getId(), e);
             }
         }
+
+        // 缺服务老师时发送告警（每小时限流一次，防止告警风暴）
+        if (!noServiceSchools.isEmpty()) {
+            long now = System.currentTimeMillis();
+            if (now - lastNoServiceAlertTime > 3600_000L) {
+                lastNoServiceAlertTime = now;
+                alertService.createAlert(null, "inheritance_no_service",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("在职继承：%d 个活码缺少服务老师，新客户将无法被转移。缺少服务老师的学校: %s",
+                        noServiceSchools.size(),
+                        String.join("、", noServiceSchools.subList(0,
+                            Math.min(noServiceSchools.size(), 10)))),
+                    AgentAlert.AutoAction.none, null);
+            } else {
+                log.warn("在职继承缺服务老师（告警限流）: {} 个活码, 学校: {}",
+                    noServiceSchools.size(), String.join("、", noServiceSchools));
+            }
+        }
+
         if (totalTransfers > 0 || skippedNoReceptionist > 0 || skippedNoService > 0) {
             log.info("在职继承（{}）: 共发起 {} 条转移, 无接待员跳过 {} 条, 无服务老师跳过 {} 条, 窗口=[{}, {}]",
                 windowLabel, totalTransfers, skippedNoReceptionist, skippedNoService,

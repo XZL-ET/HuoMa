@@ -238,6 +238,27 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
         String addedAgent, String schoolId, LocalDateTime start, LocalDateTime end);
 
     /**
+     * 查询指定接待员在指定学校下、指定时间区间内<b>且无进行中/已完成转移记录</b>的客户，按添加时间升序。
+     * <p>
+     * 用于在职继承定时任务：只排除 pending_confirm / confirmed 状态的客户，
+     * timeout / rejected / api_failed / retry_limit 的客户允许重新入队发起转移。
+     * api_failed 的重试由 {@code TransferService.retryFailedTransfers()} 独立控制，不经过 Stream。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param start      添加时间下限（含）
+     * @param end        添加时间上限（不含）
+     * @return 无进行中/已完成转移记录的客户列表，按添加时间升序排列
+     */
+    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime BETWEEN :start AND :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed'))")
+    List<Customer> findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
+        @Param("addedAgent") String addedAgent,
+        @Param("schoolId") String schoolId,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end);
+
+    /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
      * 仅返回需要修复的记录，避免全表扫描。
      */

@@ -84,19 +84,26 @@ public class CustomerTransfer {
     private TransferStatus status = TransferStatus.pending_confirm;
 
     /**
-     * 重试次数，兼用两种上下文：
-     * <ul>
-     *   <li><b>转移结果追踪</b>（status=pending_confirm）：轮询 get_transfer_result 的次数，
-     *       达到 10 次标记为 retry_limit</li>
-     *   <li><b>发起重试</b>（status=api_failed）：重新调用 transfer_customer 的次数，
-     *       达到 3 次标记为 retry_limit</li>
-     * </ul>
-     * 注意：从 api_failed 重试成功后状态变为 pending_confirm，retryCount 不清零，
-     * 继续作为追踪轮询计数器使用。
+     * API 调用重试次数（仅用于 api_failed 状态的重试）。
+     * <p>
+     * 重新调用 transfer_customer 的次数，上限 3 次，达到后标记为 retry_limit。
+     * </p>
      */
     @Column(name = "retry_count")
     @Builder.Default
     private Integer retryCount = 0;
+
+    /**
+     * 转移结果轮询次数（仅用于 pending_confirm 状态的追踪）。
+     * <p>
+     * 调用 get_transfer_result 的次数，上限 48 次（对应 24h），
+     * 达到上限或超过 24 小时后标记为 timeout / retry_limit。
+     * 与 {@link #retryCount} 分离，互不干扰。
+     * </p>
+     */
+    @Column(name = "poll_count")
+    @Builder.Default
+    private Integer pollCount = 0;
 
     /**
      * 最后一次失败的原因。
@@ -108,16 +115,18 @@ public class CustomerTransfer {
     private String failReason;
 
     /**
-     * 转移发生时客户是否已填写过表单。
+     * 转移发生时客户是否已填写过表单（快照，仅用于数据分析）。
      * <p>
-     * 该字段在发起转移时根据客户当时的表单填写状态快照记录，而非实时查询。
-     * 作用：
-     * <ul>
-     *   <li>用于决定发送哪种类型的欢迎语（已填表 / 未填表）</li>
-     *   <li>避免因表单状态后续变化而影响欢迎语策略的一致性</li>
-     *   <li>可用于数据分析，统计已填表客户的转移比例</li>
-     * </ul>
-     * true = 转移时已填写过表单；false = 未填写；null = 未知。
+     * 该字段在发起转移时记录客户当时的表单填写状态，不影响欢迎语的选择。
+     * 实际发送欢迎语时，{@code sendTransferGreeting} 会实时查询表单状态
+     * 以决定走 A 分支（已填写）还是 B 分支（未填写），因为客户可能在
+     * pending_confirm 期间才完成填写。
+     * </p>
+     * <p>
+     * 用途：统计分析（已填表 vs 未填表客户的转移比例、转移成功率等）。
+     * </p>
+     *
+     * @see com.bookstore.qrcode.service.TransferService#sendTransferGreeting
      */
     @Column(name = "form_filled_at_transfer")
     private Boolean formFilledAtTransfer;
@@ -144,14 +153,13 @@ public class CustomerTransfer {
     private Boolean greetingSent = false;
 
     /**
-     * 欢迎语类型，决定发送哪种欢迎语给客户。
+     * 实际发送的欢迎语类型。
      * <ul>
      *   <li>{@link GreetingType#filled} — 已填表欢迎语：客户已填写过表单，发送侧重服务承接的问候</li>
      *   <li>{@link GreetingType#unfilled} — 未填表欢迎语：客户尚未填写表单，发送含表单填写引导的问候</li>
      * </ul>
-     * 此值与 {@link #formFilledAtTransfer} 联动决定：
-     * formFilledAtTransfer = true  → greetingType = filled；
-     * formFilledAtTransfer = false → greetingType = unfilled。
+     * 由 {@code sendTransferGreeting} 实时查询表单状态后设置，
+     * 而非读取 {@link #formFilledAtTransfer} 快照。
      */
     @Column(name = "greeting_type", length = 20)
     @Enumerated(EnumType.STRING)
@@ -164,6 +172,17 @@ public class CustomerTransfer {
     /** 记录最后更新时间 */
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /**
+     * 乐观锁版本号，防止并发更新覆盖。
+     * <p>
+     * 当两个线程（或两个实例）同时更新同一条 CustomerTransfer 记录时，
+     * 其中一方会因版本号不匹配而失败，确保状态转换的原子性。
+     * </p>
+     */
+    @Version
+    @Column(name = "version")
+    private Integer version;
 
     /**
      * 持久化前自动填充创建时间和更新时间。
