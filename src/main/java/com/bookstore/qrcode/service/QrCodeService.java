@@ -842,12 +842,12 @@ public class QrCodeService {
     /**
      * 移除活码联系人（软删除：标记为 removed 状态）。
      *
-     * <p>不移除服务老师角色（{@link QrAgent.AgentRole#service}），
-     * 因为服务老师是活码的核心配置，需要通过更换流程来替换。</p>
+     * <p>服务老师/双角色也可移除，移除后该活码将失去服务老师，
+     * 客户扫码后由接待员直接接待。操作会记录 WARN 日志以便追溯。</p>
      *
      * @param qrCodeId 活码主键 ID
      * @param agentId  联系人记录 ID（QrAgent 主键）
-     * @throws RuntimeException 联系人不存在、不属于该活码、或尝试移除服务老师时抛出
+     * @throws RuntimeException 联系人不存在、不属于该活码时抛出
      */
     @Transactional
     public void removeAgent(Long qrCodeId, Long agentId) {
@@ -856,11 +856,11 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
-        // 服务老师/双角色不允许直接移除：必须先指定新的服务老师，通过更换流程替换
-        // 这是为了防止活码失去服务老师导致客户无人接待
+        // 服务老师/双角色允许移除，但记录警告日志以便追溯
         if (agent.getRole() == QrAgent.AgentRole.service
             || agent.getRole() == QrAgent.AgentRole.dual) {
-            throw new RuntimeException("服务老师/双角色不能移除，请先更换服务老师");
+            log.warn("服务老师/双角色被移除: qrCodeId={}, agentUserid={}, role={}",
+                qrCodeId, agent.getAgentUserid(), agent.getRole());
         }
         // 软删除：标记为 removed 而非物理删除，保留历史记录
         agent.setStatus(QrAgent.AgentStatus.removed);

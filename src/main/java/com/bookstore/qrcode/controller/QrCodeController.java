@@ -969,13 +969,28 @@ public class QrCodeController {
         // ---- 2. 获取活码下所有联系人，按角色分类 ----
         List<QrAgent> agents = qrCodeService.getAgents(id);
 
+        // 构建去重集合：同一用户在同一活码上既有 active 又有非 active 记录时，
+        // 隐藏非 active 记录，避免详情页展示陈旧状态误导管理员
+        Set<String> activePairs = agents.stream()
+            .filter(a -> a.getStatus() == QrAgent.AgentStatus.active)
+            .map(a -> a.getAgentUserid() + "|" + a.getQrCodeId())
+            .collect(Collectors.toSet());
+
         // 2a. 接待员：role 为 receptionist 或 dual（兼具接待+服务角色）
         model.addAttribute("receptionists",
-            agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.receptionist
-                                   || a.getRole() == QrAgent.AgentRole.dual).toList());
+            agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.receptionist
+                          || a.getRole() == QrAgent.AgentRole.dual)
+                .filter(a -> a.getStatus() == QrAgent.AgentStatus.active
+                          || !activePairs.contains(a.getAgentUserid() + "|" + a.getQrCodeId()))
+                .toList());
         // 2b. 服务老师：role 为 service（仅服务角色）
         model.addAttribute("services",
-            agents.stream().filter(a -> a.getRole() == QrAgent.AgentRole.service).toList());
+            agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.service)
+                .filter(a -> a.getStatus() == QrAgent.AgentStatus.active
+                          || !activePairs.contains(a.getAgentUserid() + "|" + a.getQrCodeId()))
+                .toList());
 
         // ---- 3. 获取全局员工池（DB 分页 + COUNT 统计） ----
         int pageSize = 20;

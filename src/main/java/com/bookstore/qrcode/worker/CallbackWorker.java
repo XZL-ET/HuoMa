@@ -371,11 +371,17 @@ public class CallbackWorker {
             return;
         }
 
-        // ① 速率检测（防封）
-        try {
-            rateLimiterService.recordAdd(userId);
-        } catch (Exception e) {
-            log.error("速率检测失败: userid={}", userId, e);
+        // ① 速率检测（仅对有机新增计数 — state 非空表示客户扫码添加）
+        // 在职继承/离职继承等企微内部转移的回调 state 为空，不计入熔断
+        if (state != null && !state.isBlank()) {
+            try {
+                rateLimiterService.recordAdd(userId);
+            } catch (Exception e) {
+                log.error("速率检测失败: userid={}", userId, e);
+            }
+        } else {
+            log.debug("跳过熔断计数（state 为空，非有机新增）: userid={}, external={}",
+                userId, externalUserId);
         }
 
         // ② 记录/更新客户信息 — 关键路径，失败必须向上传播以触发重试/DLQ
@@ -396,11 +402,13 @@ public class CallbackWorker {
             }
         }
 
-        // ④ 员工日计数 +1
-        try {
-            rotationService.incrementDailyCount(userId, state);
-        } catch (Exception e) {
-            log.error("日计数失败: userid={}, state={}", userId, state, e);
+        // ④ 员工日计数（仅对有机新增计数 — state 非空表示客户扫码添加）
+        if (state != null && !state.isBlank()) {
+            try {
+                rotationService.incrementDailyCount(userId, state);
+            } catch (Exception e) {
+                log.error("日计数失败: userid={}, state={}", userId, state, e);
+            }
         }
 
         // ⑤ 发布欢迎语+表单事件 → OutboundMsgWorker 异步发送
@@ -414,7 +422,7 @@ public class CallbackWorker {
                         state, externalUserId, userId);
                 }
             } else {
-                log.warn("回调缺少 state 字段, 将使用系统默认欢迎语: external={}, userid={}",
+                log.debug("回调缺少 state 字段, 使用系统默认欢迎语: external={}, userid={}",
                     externalUserId, userId);
             }
             // 即使找不到活码或 state 为空，也发送系统默认欢迎语

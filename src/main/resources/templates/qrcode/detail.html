@@ -299,11 +299,28 @@
                                       th:text="${a.status.name() == 'active' ? '接待中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
                             <td class="text-nowrap">
-                                <!-- 编辑按钮，将联系人数据存放在 data-* 属性中供弹窗使用 -->
-                                <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
-                                        th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
-                                        data-bs-toggle="modal" data-bs-target="#editAgentModal"
-                                        title="编辑">✏️</button>
+                                <!-- 已移除状态：显示重新上码按钮 -->
+                                <th:block th:if="${a.status.name() != 'active'}">
+                                    <form th:action="@{/agents/restore}" method="post" class="d-inline"
+                                          onsubmit="return confirm('确定将该服务老师重新上码吗？\n\n恢复后该服务老师将重新参与该活码的客户服务。')">
+                                        <input type="hidden" name="userid" th:value="${a.agentUserid}">
+                                        <input type="hidden" name="view" value="pool">
+                                        <input type="hidden" name="redirectUrl" th:value="@{/qrcodes/{id}(id=${qr.id})}">
+                                        <button class="btn btn-sm btn-outline-success" title="重新上码">🔄 重新上码</button>
+                                    </form>
+                                </th:block>
+                                <!-- 活跃状态：显示编辑和移除按钮 -->
+                                <th:block th:if="${a.status.name() == 'active'}">
+                                    <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
+                                            th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
+                                            data-bs-toggle="modal" data-bs-target="#editAgentModal"
+                                            title="编辑">✏️</button>
+                                    <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
+                                          method="post" class="d-inline"
+                                          onsubmit="return confirm('⚠️ 确定要移除该服务老师吗？\n\n移除后该活码将失去服务老师，客户扫码后将由接待员直接接待。')">
+                                        <button class="btn btn-sm btn-outline-danger" title="移除服务老师">🗑️</button>
+                                    </form>
+                                </th:block>
                             </td>
                         </tr>
                         <!-- 已激活的接待员行 -->
@@ -610,7 +627,8 @@
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
-                <form method="post" id="editAgentForm">
+                <form th:action="@{/qrcodes/0/agents/0/update}" method="post" id="editAgentForm">
+                    <!-- CSRF token 由 th:action 自动注入；action 地址在 JS 中动态替换 -->
                     <div class="modal-body">
                         <!-- 字段：日添加上限 -->
                         <div class="mb-3">

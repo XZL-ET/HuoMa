@@ -1,7 +1,10 @@
 package com.bookstore.qrcode.config;
 
+import io.lettuce.core.ClientOptions;
+import io.lettuce.core.SocketOptions;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.data.redis.LettuceClientConfigurationBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -319,6 +322,47 @@ public class RedisConfig {
             redisTemplate.opsForStream().delete(TRANSFER_STREAM_KEY, initId);
         } catch (Exception e) { /* exists */ }
         return TRANSFER_CONSUMER_GROUP;
+    }
+
+    // ==================== Lettuce TCP Keepalive ====================
+
+    /**
+     * 启用 Lettuce TCP Keepalive，防止长时间阻塞读取（如 XREADGROUP BLOCK）
+     * 期间连接被网络中间设备或 Redis 服务器因空闲超时而关闭。
+     *
+     * <p><b>背景：</b>Worker 线程使用 {@code XREADGROUP BLOCK} 阻塞等待 Redis Stream
+     * 消息，阻塞时长 5-10 秒。在此阻塞期间 TCP 连接无数据交互，
+     * 云负载均衡器（如阿里云 SLB）、防火墙或 Redis 自身的 {@code timeout} 配置
+     * 可能将空闲连接关闭，导致所有 Worker 同时抛出 {@code Connection closed} 异常。</p>
+     *
+     * <p><b>参数说明：</b>
+     * <ul>
+     *   <li>{@code idle=5min} — 空闲 5 分钟后开始 keepalive 探测，
+     *       早于多数云 SLB 的空闲超时（通常 15min+）</li>
+     *   <li>{@code interval=75s} — 探测间隔</li>
+     *   <li>{@code count=3} — 连续 3 次无响应判定连接死亡</li>
+     * </ul>
+     *
+     * <p><b>兼容性：</b>自定义时序参数依赖 Netty epoll（Linux 默认启用），
+     * 在非 Linux 平台（如 Windows 开发环境）退化为普通 SO_KEEPALIVE，
+     * 使用 OS 默认时序。生产环境为阿里云 ECS（Linux），完全有效。</p>
+     *
+     * @return Lettuce 客户端配置定制器
+     */
+    @Bean
+    public LettuceClientConfigurationBuilderCustomizer lettuceKeepAliveCustomizer() {
+        return builder -> builder.clientOptions(
+            ClientOptions.builder()
+                .socketOptions(SocketOptions.builder()
+                    .keepAlive(SocketOptions.KeepAliveOptions.builder()
+                        .enable()
+                        .idle(Duration.ofMinutes(5))
+                        .interval(Duration.ofSeconds(75))
+                        .count(3)
+                        .build())
+                    .build())
+                .build()
+        );
     }
 
     // ==================== 限流 RedisTemplate ====================

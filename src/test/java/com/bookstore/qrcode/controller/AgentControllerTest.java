@@ -2,6 +2,9 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.service.GlobalAgentPoolService;
+import com.bookstore.qrcode.service.OperationLogService;
+import com.bookstore.qrcode.service.QrCodeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
@@ -23,11 +26,14 @@ class AgentControllerTest {
     void setUp() {
         AgentController controller = new AgentController(
                 mock(GlobalAgentPoolRepository.class),
+                mock(GlobalAgentPoolService.class),
                 mock(QrAgentRepository.class),
                 mock(QrCodeRepository.class),
+                mock(QrCodeService.class),
                 mock(EmployeeSyncService.class),
                 mock(EmployeeRepository.class),
-                mock(AgentRepository.class));
+                mock(AgentRepository.class),
+                mock(OperationLogService.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

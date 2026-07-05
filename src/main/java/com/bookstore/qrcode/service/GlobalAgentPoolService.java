@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -426,7 +427,7 @@ public class GlobalAgentPoolService {
      * @param agentUserid 企微员工 userid
      * @param errcode     企微 API 返回的错误码
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void blockAgentForWechatIssue(String agentUserid, int errcode) {
         // 标记 agent 为 blocked，记录原因
         Agent agent = agentRepo.findById(agentUserid).orElse(null);

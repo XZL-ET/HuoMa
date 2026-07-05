@@ -21,6 +21,10 @@ spring:
       max-request-size: 10MB
   transaction:
     default-timeout: 30s    # 全局事务超时，防止 DB 连接被长期占用
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 6
 
 server:
   forward-headers-strategy: native   # 信任 ALB/Nginx 透传的 X-Forwarded-Proto，生成 https 链接
@@ -167,6 +171,8 @@ spring:
   sql:
     init:
       mode: never             # 不用 schema.sql（MySQL 语法不兼容 H2）
+  flyway:
+    enabled: false            # H2 不兼容 Flyway MySQL 方言
   datasource:
     url: jdbc:h2:mem:testdb;MODE=MySQL;DATABASE_TO_LOWER=TRUE
     driver-class-name: org.h2.Driver

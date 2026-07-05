@@ -1,6 +1,7 @@
--- V7: 拆分 retryCount 语义 + 乐观锁（idempotent: INFORMATION_SCHEMA 守卫）
--- 将 CustomerTransfer.retryCount 的两种语义分离为 poll_count 和 retry_count
--- 同时添加 version 列用于乐观锁，防止并发更新覆盖
+-- V9: 确保 customer_transfer 的 poll_count 和 version 列存在（idempotent）
+-- V7 的非幂等 ALTER TABLE 在某些环境下可能未正确执行，
+-- 此迁移作为安全网，使用 INFORMATION_SCHEMA 守卫确保两列一定存在。
+-- 同时迁移可能遗漏的历史数据。
 
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
@@ -16,5 +17,5 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- 历史数据迁移：将现有 retry_count 值复制到 poll_count（idempotent: 只影响 pending_confirm 行）
+-- 历史数据迁移：将 retry_count 复制到 poll_count（仅影响 pending_confirm 且尚未迁移的行）
 UPDATE customer_transfer SET poll_count = retry_count WHERE status = 'pending_confirm' AND poll_count = 0;

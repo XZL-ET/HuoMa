@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (qr_code_id) REFERENCES qr_code(id) ON DELETE CASCADE,
     FOREIGN KEY (agent_userid) REFERENCES agent(userid),
-    INDEX idx_qr_agent (qr_code_id, agent_userid),
+    UNIQUE INDEX uq_qr_agent_unique (qr_code_id, agent_userid),
     INDEX idx_status (status),
     INDEX idx_agent_userid (agent_userid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活码-员工关联表';
@@ -243,6 +243,25 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     INDEX idx_status (status),
     INDEX idx_transfer_time (transfer_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户继承记录表';
+
+-- customer_transfer 新增字段（V7 迁移：拆解 retryCount 语义 + 乐观锁）
+-- 动态 SQL 检查 INFORMATION_SCHEMA 兼容旧版 MySQL（不支持 ADD COLUMN IF NOT EXISTS）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND COLUMN_NAME = 'poll_count') = 0,
+    'ALTER TABLE customer_transfer ADD COLUMN poll_count INT NOT NULL DEFAULT 0 COMMENT ''轮询追踪次数 (pending_confirm状态)'' AFTER retry_count',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND COLUMN_NAME = 'version') = 0,
+    'ALTER TABLE customer_transfer ADD COLUMN version INT NOT NULL DEFAULT 0 COMMENT ''乐观锁版本号'' AFTER updated_at',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 历史数据迁移：将现有 retry_count 值复制到 poll_count（仅影响 pending_confirm 行）
+UPDATE customer_transfer SET poll_count = retry_count WHERE status = 'pending_confirm' AND poll_count = 0;
 
 -- daily_report：日报表
 -- 日报表
@@ -830,3 +849,15 @@ SET @stmt = (SELECT IF(
     'ALTER TABLE school ADD COLUMN category_id BIGINT COMMENT ''FK→school_category.id，null=未分类''',
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ============================================
+-- 数据修复（幂等 — 每次启动执行，填补 V4/V6 未被 Flyway 覆盖的缺口）
+-- ============================================
+
+-- V4: 修复空字符串欢迎语阻断继承 — 将所有层级的空白欢迎语置 NULL
+UPDATE school_category SET default_welcome_text = NULL WHERE default_welcome_text = '';
+UPDATE qr_code_group   SET default_welcome_text = NULL WHERE default_welcome_text = '';
+UPDATE qr_code         SET welcome_text          = NULL WHERE welcome_text = '';
+
+-- V6: V4 遗漏 — system_config 表的空白欢迎语也需置 NULL
+UPDATE system_config   SET config_value = NULL WHERE config_key = 'default_welcome_text' AND config_value = '';

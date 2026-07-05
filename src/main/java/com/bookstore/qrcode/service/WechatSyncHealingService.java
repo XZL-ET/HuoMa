@@ -16,7 +16,11 @@ import com.bookstore.qrcode.wecom.WecomTransientException;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +45,13 @@ public class WechatSyncHealingService {
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
     private static final int MAX_HEAL_ATTEMPTS = 5;
+
+    /** Self-injection to enable {@code REQUIRES_NEW} transaction in {@code afterCommit} context.
+     *  Non-final so {@code @RequiredArgsConstructor} skips it, breaking the circular dependency.
+     *  {@code @Lazy} defers initialization until first use. */
+    @Lazy
+    @Autowired
+    private WechatSyncHealingService self;
 
     /**
      * 同步 QR 码的企微侧成员列表，含自愈。
@@ -125,7 +136,7 @@ public class WechatSyncHealingService {
                     } else {
                         if (failingAgent != null) {
                             failingAgent.setStatus(QrAgent.AgentStatus.removed);
-                            qrAgentRepo.save(failingAgent);
+                            self.persistAgentRemoval(failingAgent);
                         }
                         // ② 封锁 agent 并从全局池移除
                         poolService.blockAgentForWechatIssue(failing, 40098);
@@ -186,7 +197,7 @@ public class WechatSyncHealingService {
                         } else {
                             if (failingAgent2 != null) {
                                 failingAgent2.setStatus(QrAgent.AgentStatus.removed);
-                                qrAgentRepo.save(failingAgent2);
+                                self.persistAgentRemoval(failingAgent2);
                             }
                             poolService.blockAgentForWechatIssue(failing, errcode);
                             result.needReplacement = true;
@@ -300,7 +311,7 @@ public class WechatSyncHealingService {
      *
      * @param qrCodeId 活码主键 ID
      */
-    @org.springframework.transaction.annotation.Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void supplementReplacement(Long qrCodeId) {
         // 构建排除列表：当前活码上未移除的员工
         Set<String> excludeUserids = new java.util.HashSet<>();
@@ -429,13 +440,37 @@ public class WechatSyncHealingService {
             return;
         }
 
-        // 提拔为 dual
+        // 提拔 + 同步 Agent 表 + 告警（独立事务确保写入不受 afterCommit 幽灵事务影响）
+        self.persistServiceFallback(senior, qrCodeId, failingUserId);
+    }
+
+    // ── afterCommit 安全写入（REQUIRES_NEW 独立事务，不受幽灵事务影响） ──
+
+    /**
+     * 在独立事务中标记 QrAgent 为已移除。
+     *
+     * <p>必须在调用方已设置 {@code agent.setStatus(removed)} 之后再调用。
+     * 使用 {@code REQUIRES_NEW} 确保写入不受 {@code afterCommit} 上下文中
+     * 残留的 EntityManager 绑定影响。</p>
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void persistAgentRemoval(QrAgent agent) {
+        qrAgentRepo.save(agent);
+    }
+
+    /**
+     * 在独立事务中提拔替补 dual 并同步 Agent 表。
+     *
+     * <p>使用 {@code REQUIRES_NEW} 确保提拔写入不受 {@code afterCommit}
+     * 上下文中残留的 EntityManager 绑定影响。</p>
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void persistServiceFallback(QrAgent senior, Long qrCodeId, String failingUserId) {
         senior.setRole(QrAgent.AgentRole.dual);
         qrAgentRepo.save(senior);
         log.info("服务老师替补已提拔: qrCodeId={}, userid={}, receptionist → dual",
             qrCodeId, senior.getAgentUserid());
 
-        // 同步 Agent 表
         agentRepo.findById(senior.getAgentUserid()).ifPresent(a -> {
             if (a.getRole() == Agent.AgentRole.receptionist) {
                 a.setRole(Agent.AgentRole.dual);
@@ -443,7 +478,6 @@ public class WechatSyncHealingService {
             }
         });
 
-        // 告警通知
         alertService.createAlert(senior.getAgentUserid(), "service_fallback_promoted",
             AgentAlert.AlertSeverity.high,
             String.format("活码 %d 服务老师 %s 企微不可用，已将 %s 自动提拔为 dual 作为替补转接目标",
