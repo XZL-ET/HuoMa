@@ -24,6 +24,7 @@ import com.bookstore.qrcode.repository.QrRotateLogRepository;
 import com.bookstore.qrcode.repository.TagRepository;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
 import com.bookstore.qrcode.service.TagService;
@@ -38,6 +39,7 @@ import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -117,6 +119,7 @@ public class QrCodeController {
     private final SchoolRepository schoolRepo;
     private final SystemConfigRepository systemConfigRepo;
     private final StringRedisTemplate redisTemplate;
+    private final OperationLogService operationLogService;
     private final ObjectMapper objectMapper;
     private final SceneConfigProperties sceneConfig;
 
@@ -673,7 +676,9 @@ public class QrCodeController {
                 req.setSchoolId(autoId);
                 log.info("学校ID为空，已自动生成: {}", autoId);
             }
-            qrCodeService.create(req);
+            QrCode qr = qrCodeService.create(req);
+            operationLogService.log(getOperator(), "create", "qrcode",
+                    qr.getId().toString(), "创建活码：" + qr.getSchoolName());
             if (isAjax) {
                 return ResponseEntity.ok(Map.of("success", true, "message", "活码创建成功"));
             }
@@ -723,6 +728,8 @@ public class QrCodeController {
                                RedirectAttributes redirect) {
         try {
             String taskId = qrCodeService.asyncBatchImport(file);
+            operationLogService.log(getOperator(), "batch_import", "qrcode",
+                    taskId, "提交批量导入：" + file.getOriginalFilename());
             redirect.addFlashAttribute("message", "导入任务已启动");
             // 携带 taskId 跳转到进度页，前端通过 JS 轮询进度接口
             return "redirect:/qrcodes/batch-import/progress?taskId=" + taskId;
@@ -781,6 +788,11 @@ public class QrCodeController {
                        @RequestParam(required = false) Long groupId,
                        HttpServletResponse response) throws Exception {
 
+        String operator = SecurityContextHolder.getContext().getAuthentication() != null
+                ? SecurityContextHolder.getContext().getAuthentication().getName() : "anonymous";
+        log.info("导出活码列表: operator={}, keyword={}, city={}, district={}, status={}, scope={}, groupId={}",
+                operator, keyword, city, district, status, scope, groupId);
+
         // 空字符串 → null（前端链接参数为空串，破坏 JPQL IS NULL 判断）
         if (keyword != null && keyword.isEmpty()) keyword = null;
         if (city != null && city.isEmpty()) city = null;
@@ -813,31 +825,84 @@ public class QrCodeController {
         for (QrCodeGroup g : groupRepo.findAllByOrderByName()) groupNameMap.put(g.getId(), g.getName());
 
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setHeader("Content-Disposition", "attachment; filename=qr_codes_" + java.time.LocalDate.now() + ".xlsx");
+        String filename = "客户数据表_" + java.time.LocalDate.now() + ".xlsx";
+        String encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20");
+        response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
 
-        var wb = new org.apache.poi.xssf.streaming.SXSSFWorkbook(100);
-        var sheet = wb.createSheet("活码列表");
-        var header = sheet.createRow(0);
-        String[] headers = {"学校名称","学校ID","城市","区县","分组","状态","轮换模式","今日新增","累计客户","创建时间"};
-        for (int i = 0; i < headers.length; i++) header.createCell(i).setCellValue(headers[i]);
+        try {
+            var wb = new org.apache.poi.xssf.streaming.SXSSFWorkbook(100);
+            var sheet = wb.createSheet("活码列表");
 
-        int rowIdx = 1;
-        for (QrCode qr : qrs) {
-            var row = sheet.createRow(rowIdx++);
-            Long qid = qr.getId();
-            row.createCell(0).setCellValue(qr.getSchoolName() != null ? qr.getSchoolName() : "");
-            row.createCell(1).setCellValue(qr.getSchoolId() != null ? qr.getSchoolId() : "");
-            row.createCell(2).setCellValue(qr.getRegionCity() != null ? qr.getRegionCity() : "");
-            row.createCell(3).setCellValue(qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "");
-            row.createCell(4).setCellValue(qr.getGroupId() != null ? groupNameMap.getOrDefault(qr.getGroupId(), "") : "");
-            row.createCell(5).setCellValue(qr.getStatus() != null ? qr.getStatus().name() : "");
-            row.createCell(6).setCellValue(qr.getRotateMode() != null ? qr.getRotateMode().name() : "");
-            row.createCell(7).setCellValue(todayMap.getOrDefault(qid, 0L));
-            row.createCell(8).setCellValue(totalMap.getOrDefault(qid, 0L));
-            row.createCell(9).setCellValue(qr.getCreatedAt() != null ? qr.getCreatedAt().toString() : "");
+            // 表头样式：加粗 + 浅蓝背景 + 居中
+            var headerStyle = wb.createCellStyle();
+            var headerFont = wb.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(org.apache.poi.ss.usermodel.IndexedColors.PALE_BLUE.getIndex());
+            headerStyle.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
+            headerStyle.setAlignment(org.apache.poi.ss.usermodel.HorizontalAlignment.CENTER);
+
+            var header = sheet.createRow(0);
+            String[] headers = {"学校名称","城市","区县","分组","学生人数","今日新增客户","累计客户数","创建时间"};
+            for (int i = 0; i < headers.length; i++) {
+                var cell = header.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            // 数据列居中样式（数字列）
+            var numberStyle = wb.createCellStyle();
+            numberStyle.setAlignment(org.apache.poi.ss.usermodel.HorizontalAlignment.CENTER);
+
+            java.time.format.DateTimeFormatter dateFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+            int rowIdx = 1;
+            for (QrCode qr : qrs) {
+                var row = sheet.createRow(rowIdx++);
+                Long qid = qr.getId();
+                row.createCell(0).setCellValue(qr.getSchoolName() != null ? qr.getSchoolName() : "");
+                row.createCell(1).setCellValue(qr.getRegionCity() != null ? qr.getRegionCity() : "");
+                row.createCell(2).setCellValue(qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "");
+
+                var groupCell = row.createCell(3);
+                groupCell.setCellValue(qr.getGroupId() != null ? groupNameMap.getOrDefault(qr.getGroupId(), "") : "");
+
+                var studentCell = row.createCell(4);
+                studentCell.setCellValue(qr.getStudentCount() != null ? qr.getStudentCount() : 0);
+                studentCell.setCellStyle(numberStyle);
+
+                var todayCell = row.createCell(5);
+                todayCell.setCellValue(todayMap.getOrDefault(qid, 0L));
+                todayCell.setCellStyle(numberStyle);
+
+                var totalCell = row.createCell(6);
+                totalCell.setCellValue(totalMap.getOrDefault(qid, 0L));
+                totalCell.setCellStyle(numberStyle);
+
+                row.createCell(7).setCellValue(qr.getCreatedAt() != null ? qr.getCreatedAt().format(dateFmt) : "");
+            }
+
+            // 冻结首行
+            sheet.createFreezePane(0, 1);
+
+            // 自动列宽
+            for (int i = 0; i < headers.length; i++) {
+                sheet.trackColumnForAutoSizing(i);
+                sheet.autoSizeColumn(i);
+            }
+
+            try {
+                wb.write(response.getOutputStream());
+                log.info("导出完成: {} 条活码记录已写入 {}", qrs.size(), filename);
+            } finally {
+                wb.dispose();
+                wb.close();
+            }
+        } catch (Exception e) {
+            response.reset();
+            response.setContentType("text/plain; charset=UTF-8");
+            throw e;
         }
-        wb.write(response.getOutputStream());
-        wb.close();
     }
 
     // ==================== 批量操作 ====================
@@ -1317,10 +1382,10 @@ public class QrCodeController {
     }
 
     /**
-     * 删除活码（软删除）。
+     * 删除活码（物理删除，级联清理关联数据）。
      *
-     * <p>POST /qrcodes/{id}/delete —— 将活码及其关联数据标记为删除状态，
-     * 委托 {@link QrCodeService#delete(Long)} 处理。
+     * <p>POST /qrcodes/{id}/delete —— 删除活码及其关联的联系人、轮换日志，
+     * 委托 {@link QrCodeService#delete(Long)} 处理，并记录审计日志。
      *
      * @param id       活码 ID
      * @param redirect {@link RedirectAttributes}
@@ -1333,7 +1398,12 @@ public class QrCodeController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes redirect) {
         try {
+            // 先查出活码信息用于审计日志，再执行物理删除
+            QrCode qr = qrCodeRepo.findById(id).orElse(null);
+            String schoolName = qr != null ? qr.getSchoolName() : "unknown";
             qrCodeService.delete(id);
+            operationLogService.log(getOperator(), "delete", "qrcode",
+                    id.toString(), "删除活码：" + schoolName);
             redirect.addFlashAttribute("message", "活码已删除");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -2392,6 +2462,14 @@ public class QrCodeController {
             result.put("error", e.getMessage());
         }
         return result;
+    }
+
+    // ==================== 内部工具方法 ====================
+
+    private String getOperator() {
+        return SecurityContextHolder.getContext().getAuthentication() != null
+                ? SecurityContextHolder.getContext().getAuthentication().getName()
+                : "anonymous";
     }
 
 }
