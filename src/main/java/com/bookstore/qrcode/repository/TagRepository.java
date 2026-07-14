@@ -3,6 +3,7 @@ package com.bookstore.qrcode.repository;
 import com.bookstore.qrcode.entity.Tag;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 标签数据访问层。
@@ -45,8 +46,25 @@ public interface TagRepository extends JpaRepository<Tag, Long> {
      * 用于标签去重校验（创建/编辑标签时检查名称是否已存在）
      * 以及按名称快速查找标签。</p>
      *
+     * <p>使用 {@code findFirstByName} 而非 {@code findByName}，
+     * 防止表中意外存在同名记录时抛出
+     * {@link org.springframework.dao.IncorrectResultSizeDataAccessException}。
+     * 表上已有 {@code UNIQUE KEY uk_tag_name}，正常情况最多一条。</p>
+     *
      * @param name 标签名称
-     * @return 匹配的标签对象，未找到时返回 {@code null}
+     * @return 匹配的标签对象，未找到时返回 {@link Optional#empty()}
      */
-    Tag findByName(String name);
+    Optional<Tag> findFirstByName(String name);
+
+    /**
+     * 按标签名称和组关键词精确查询（复合唯一键查找）。
+     *
+     * <p>用于 getOrCreateTag 按 (name, groupKeyword) 定位标签，
+     * 支持同名标签在不同企微标签组下独立存在。</p>
+     *
+     * @param name 标签名称
+     * @param groupKeyword 企微标签组关键词
+     * @return 匹配的标签对象，未找到时返回 {@link Optional#empty()}
+     */
+    Optional<Tag> findFirstByNameAndGroupKeyword(String name, String groupKeyword);
 }

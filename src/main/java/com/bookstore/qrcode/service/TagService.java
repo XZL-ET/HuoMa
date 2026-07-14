@@ -4,6 +4,9 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomRateLimitException;
+import com.bookstore.qrcode.wecom.WecomTokenExpiredException;
+import com.bookstore.qrcode.wecom.WecomTransientException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +60,9 @@ public class TagService {
     private volatile java.time.LocalDateTime groupCacheTime = null;
     private static final long GROUP_CACHE_MINUTES = 10;
 
+    /** 标签创建锁，防止并发创建同名标签（配合 DB 唯一约束 uk_tag_name 双重保险） */
+    private final Object tagCreationLock = new Object();
+
     /**
      * 自动打标：客户扫码后根据活码配置，自动打地域标签和自定义标签。
      *
@@ -108,14 +114,19 @@ public class TagService {
             log.info("自动打标 本地关联已写入: customerId={}, tags=[{},{},{}]",
                 customer.getId(), cityTag.getName(), districtTag.getName(), schoolTag.getName());
 
-            // ===== 同步到企业微信（逐个调用，单个失败不影响其他）=====
+            // ===== 同步到企业微信（逐个调用，瞬态失败收集后重试，永久失败仅记日志）=====
+            List<String> transientFailures = new ArrayList<>();
             for (Tag t : new Tag[]{cityTag, districtTag, schoolTag}) {
                 if (t.getWecomTagId() != null) {
                     try {
                         wecomApi.markTag(externalUserId, userId, List.of(t.getWecomTagId()));
                         log.info("企微打标成功: tag={}, wecomTagId={}", t.getName(), t.getWecomTagId());
+                    } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
+                        transientFailures.add(t.getName());
+                        log.error("企微打标失败(可重试): tag={}, wecomTagId={}, errcode={}",
+                            t.getName(), t.getWecomTagId(), e.getErrcode(), e);
                     } catch (Exception e) {
-                        log.error("企微打标失败: tag={}, wecomTagId={}", t.getName(), t.getWecomTagId(), e);
+                        log.error("企微打标失败(永久): tag={}, wecomTagId={}", t.getName(), t.getWecomTagId(), e);
                     }
                 } else {
                     log.warn("企微打标跳过(无wecomTagId): tag={}", t.getName());
@@ -155,12 +166,24 @@ public class TagService {
                             wecomApi.markTag(externalUserId, userId, List.of(customTag.getWecomTagId()));
                             log.info("企微打标成功(自定义): tag={}, group={}, wecomTagId={}",
                                 customTag.getName(), groupKeyword, customTag.getWecomTagId());
+                        } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
+                            transientFailures.add(customTag.getName());
+                            log.error("企微打标失败(可重试): tag={}, group={}, wecomTagId={}, errcode={}",
+                                customTag.getName(), groupKeyword, customTag.getWecomTagId(),
+                                e.getErrcode(), e);
                         } catch (Exception e) {
-                            log.error("企微打标失败: tag={}, group={}, wecomTagId={}",
+                            log.error("企微打标失败(永久): tag={}, group={}, wecomTagId={}",
                                 customTag.getName(), groupKeyword, customTag.getWecomTagId(), e);
                         }
                     }
                 }
+            }
+
+            // 若有瞬态失败，向外抛出触发 TagWorker 指数退避重试
+            // （retry 时 DB 写入和 markTag 都是幂等的，不会产生重复数据）
+            if (!transientFailures.isEmpty()) {
+                throw new RuntimeException(
+                    "部分标签未同步到企微，将重试: " + String.join(",", transientFailures));
             }
 
             log.info("自动打标完成: external={}, state={}, school={}",
@@ -186,59 +209,61 @@ public class TagService {
      */
     @Transactional
     public Tag getOrCreateTag(String name, Tag.TagType type, Long parentId, String groupKeyword) {
-        // 优先查找本地数据库，避免重复创建
-        Tag existing = tagRepo.findByName(name);
-        if (existing != null) {
-            String storedId = existing.getWecomTagId();
-            // 缺少企微 ID → 补同步
-            if (storedId == null || storedId.isBlank()) {
-                syncExistingTagToWecom(existing, groupKeyword);
-                return existing;
+        // normalize: null/blank → ""，与非空值在唯一约束下各自独立
+        final String gk = (groupKeyword != null && !groupKeyword.isBlank()) ? groupKeyword : "";
+
+        // ===== Phase 1: 获取或创建本地 DB 记录（同步块防并发重复创建）=====
+        Tag tag;
+        synchronized (tagCreationLock) {
+            Tag existing = tagRepo.findFirstByNameAndGroupKeyword(name, gk).orElse(null);
+            if (existing != null) {
+                tag = existing;
+            } else {
+                // 先保存本地记录，再创建企微标签（防止企微创建成功但 DB 保存失败导致孤儿标签）
+                Tag newTag = Tag.builder()
+                    .name(name)
+                    .type(type)
+                    .parentId(parentId)
+                    .groupKeyword(gk)
+                    .wecomTagId(null)  // 先留空，企微创建成功后再回填
+                    .build();
+                try {
+                    tag = tagRepo.save(newTag);
+                } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                    // 并发创建保护（JVM 同步块 + DB 唯一约束双重保险）：
+                    // 多实例部署时另一个实例可能已抢先创建同名+同组标签
+                    Tag concurrent = tagRepo.findFirstByNameAndGroupKeyword(name, gk).orElse(null);
+                    if (concurrent != null) {
+                        log.info("标签并发创建冲突，复用已有记录: name={}, gk={}, id={}",
+                            name, gk, concurrent.getId());
+                        tag = concurrent;
+                    } else {
+                        throw e; // 不应该走到这里，但保持安全
+                    }
+                }
             }
+        }
+
+        // ===== Phase 2: 同步到企业微信（在锁外执行，避免网络 I/O 阻塞其他线程）=====
+        String storedId = tag.getWecomTagId();
+        if (storedId == null || storedId.isBlank()) {
+            // 缺少企微 ID：新创建的标签 或 之前同步失败的标签 → 补同步
+            syncExistingTagToWecom(tag, gk);
+        } else {
             // 校验本地 wecomTagId 在企微当前 Corp 下是否仍有效
             // （Corp ID 切换或标签被删除后，旧 ID 会变成无效的僵尸 ID）
-            String currentWecomId = getCachedTagId(name);
+            String currentWecomId = getCachedTagId(name, gk);
             if (currentWecomId == null) {
                 // 当前 Corp 企微标签列表中完全找不到该名称 → 需要完整重同步
-                log.warn("标签在当前 Corp 企微列表中未找到，触发重同步: name={}, oldWecomTagId={}",
-                    name, storedId);
-                syncExistingTagToWecom(existing, groupKeyword);
+                log.warn("标签在当前 Corp 企微列表中未找到，触发重同步: name={}, gk={}, oldWecomTagId={}",
+                    name, gk, storedId);
+                syncExistingTagToWecom(tag, gk);
             } else if (!currentWecomId.equals(storedId)) {
-                log.warn("标签 wecomTagId 已过期，更新: name={}, old={}, new={}",
-                    name, storedId, currentWecomId);
-                existing.setWecomTagId(currentWecomId);
-                tagRepo.save(existing);
+                log.warn("标签 wecomTagId 已过期，更新: name={}, gk={}, old={}, new={}",
+                    name, gk, storedId, currentWecomId);
+                tag.setWecomTagId(currentWecomId);
+                tagRepo.save(tag);
             }
-            return existing;
-        }
-
-        // ===== 先保存本地记录，再创建企微标签（防止企微创建成功但 DB 保存失败导致孤儿标签）=====
-        Tag tag = Tag.builder()
-            .name(name)
-            .type(type)
-            .parentId(parentId)
-            .wecomTagId(null)  // 先留空，企微创建成功后再回填
-            .build();
-        try {
-            tag = tagRepo.save(tag);
-        } catch (org.springframework.dao.DataIntegrityViolationException e) {
-            // 并发创建：另一个线程已抢先创建同名标签，重新查询返回
-            Tag concurrent = tagRepo.findByName(name);
-            if (concurrent != null) {
-                log.info("标签并发创建冲突，复用已有记录: name={}, id={}", name, concurrent.getId());
-                return concurrent;
-            }
-            throw e; // 不应该走到这里，但保持安全
-        }
-
-        // 创建企微标签并回填 wecomTagId
-        try {
-            String wecomTagId = createWecomTag(name, groupKeyword);
-            tag.setWecomTagId(wecomTagId);
-            tag = tagRepo.save(tag);
-        } catch (Exception e) {
-            // 企微创建失败：本地记录已存在（wecomTagId=null），后续可通过 syncExistingTagToWecom 补同步
-            log.warn("企微标签创建失败，本地记录已保留: name={}, 待后续补同步", name, e);
         }
         return tag;
     }
@@ -283,13 +308,14 @@ public class TagService {
                         if (!gn.isEmpty() && !gid.isEmpty()) {
                             groupMap.put(gn, gid);
                         }
-                        // 同时缓存所有标签名 → ID，用于后续校验本地 wecomTagId 是否仍有效
+                        // 同时缓存所有标签（组名|标签名 → ID），用于后续校验本地 wecomTagId 是否仍有效
+                        // 使用复合键 "groupName|tagName" 支持同名标签在不同组下独立存在
                         if (group.has("tag")) {
                             for (JsonNode t : group.get("tag")) {
                                 String tn = t.has("name") ? t.get("name").asText().trim() : "";
                                 String tid = t.has("id") ? t.get("id").asText().trim() : "";
-                                if (!tn.isEmpty() && !tid.isEmpty()) {
-                                    tagMap.put(tn, tid);
+                                if (!tn.isEmpty() && !tid.isEmpty() && !gn.isEmpty()) {
+                                    tagMap.put(gn + "|" + tn, tid);
                                 }
                             }
                         }
@@ -330,23 +356,26 @@ public class TagService {
     }
 
     /**
-     * 从缓存中按标签名获取企微标签 ID（不额外调用 API）。
+     * 从缓存中按标签名和组关键词获取企微标签 ID（不额外调用 API）。
+     * 使用复合键 {@code groupKeyword|tagName} 查找，支持同名标签在不同组下独立存在。
      * 若缓存过期或不存在则触发刷新。
      *
      * @param tagName 标签名称
+     * @param groupKeyword 企微标签组关键词
      * @return 企微标签 ID，未找到返回 null
      */
-    private String getCachedTagId(String tagName) {
+    private String getCachedTagId(String tagName, String groupKeyword) {
+        String cacheKey = (groupKeyword != null && !groupKeyword.isBlank() ? groupKeyword : "") + "|" + tagName;
         // 缓存有效则直接查询
         if (cachedTagNameToId != null && groupCacheTime != null
             && java.time.Duration.between(groupCacheTime, java.time.LocalDateTime.now())
                 .toMinutes() < GROUP_CACHE_MINUTES) {
-            return cachedTagNameToId.get(tagName);
+            return cachedTagNameToId.get(cacheKey);
         }
         // 缓存过期：触发一次刷新（通过 getGroupIdByKeyword 间接刷新两个缓存）
         getGroupIdByKeyword("学校");
         if (cachedTagNameToId != null) {
-            return cachedTagNameToId.get(tagName);
+            return cachedTagNameToId.get(cacheKey);
         }
         return null;
     }
@@ -545,7 +574,7 @@ public class TagService {
             }
             // 按 group_name → group_id 建立索引，后续创建标签时使用
             Map<String, String> groupIdMap = new LinkedHashMap<>();
-            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // tag_name → wecomTagId，防缓存不一致
+            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // "groupName|tagName" → wecomTagId，防缓存不一致
             for (JsonNode group : resp.get("tag_group")) {
                 String groupName = group.has("group_name") ? group.get("group_name").asText() : "";
                 String groupId = group.has("group_id") ? group.get("group_id").asText() : "";
@@ -556,31 +585,50 @@ public class TagService {
                     for (JsonNode t : group.get("tag")) {
                         String tagName = t.get("name").asText();
                         String wecomId = t.get("id").asText();
-                        tagNameToIdMap.put(tagName, wecomId);  // 同时记录 name→id 映射
-                        // 按名称查本地 DB
-                        Tag existing = tagRepo.findByName(tagName);
+                        tagNameToIdMap.put(groupName + "|" + tagName, wecomId);  // 复合键
+                        // 按 (name, groupKeyword) 查本地 DB
+                        Tag existing = tagRepo.findFirstByNameAndGroupKeyword(tagName, groupName).orElse(null);
+                        // 兼容旧数据：旧标签 groupKeyword 可能为 ""，升级到正确的组名
+                        if (existing == null) {
+                            Tag legacy = tagRepo.findFirstByNameAndGroupKeyword(tagName, "").orElse(null);
+                            if (legacy != null) {
+                                log.info("标签 groupKeyword 升级: name={}, '' → {}", tagName, groupName);
+                                legacy.setGroupKeyword(groupName);
+                                legacy.setWecomTagId(wecomId);
+                                tagRepo.save(legacy);
+                                existing = legacy;
+                            }
+                        }
                         if (existing != null) {
                             // 企微 API 是唯一数据源：若 wecomTagId 与 API 不一致则更新
+                            boolean changed = false;
                             if (!wecomId.equals(existing.getWecomTagId())) {
                                 String oldId = existing.getWecomTagId();
                                 existing.setWecomTagId(wecomId);
-                                tagRepo.save(existing);
+                                changed = true;
                                 if (oldId != null && !oldId.isBlank()) {
-                                    log.info("标签 wecomTagId 已更新: name={}, old={}, new={}",
-                                        tagName, oldId, wecomId);
+                                    log.info("标签 wecomTagId 已更新: name={}, gk={}, old={}, new={}",
+                                        tagName, groupName, oldId, wecomId);
                                 }
                             }
+                            // 旧标签 groupKeyword 可能为空串，回填正确的值
+                            if (!groupName.equals(existing.getGroupKeyword())) {
+                                existing.setGroupKeyword(groupName);
+                                changed = true;
+                            }
+                            if (changed) tagRepo.save(existing);
                             skipped++;
                         } else {
                             // 新标签写入本地 DB
                             Tag tag = Tag.builder()
                                 .name(tagName)
                                 .type(Tag.TagType.system)
+                                .groupKeyword(groupName)
                                 .wecomTagId(wecomId)
                                 .build();
                             tagRepo.save(tag);
                             imported++;
-                            log.info("标签已同步: name={}, wecomTagId={}", tagName, wecomId);
+                            log.info("标签已同步: name={}, gk={}, wecomTagId={}", tagName, groupName, wecomId);
                         }
                     }
                 }
@@ -615,7 +663,7 @@ public class TagService {
                 return Map.of("skipped", skipped, "imported", imported);
             }
             Map<String, String> groupIdMap = new LinkedHashMap<>();
-            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // tag_name → wecomTagId，防缓存不一致
+            Map<String, String> tagNameToIdMap = new LinkedHashMap<>();  // "groupName|tagName" → wecomTagId，防缓存不一致
             for (JsonNode group : resp.get("tag_group")) {
                 String groupName = group.has("group_name") ? group.get("group_name").asText() : "";
                 String groupId = group.has("group_id") ? group.get("group_id").asText() : "";
@@ -626,30 +674,38 @@ public class TagService {
                     for (JsonNode t : group.get("tag")) {
                         String tagName = t.get("name").asText();
                         String wecomId = t.get("id").asText();
-                        tagNameToIdMap.put(tagName, wecomId);  // 同时记录 name→id 映射
-                        Tag existing = tagRepo.findByName(tagName);
+                        tagNameToIdMap.put(groupName + "|" + tagName, wecomId);  // 复合键
+                        Tag existing = tagRepo.findFirstByNameAndGroupKeyword(tagName, groupName).orElse(null);
                         if (existing != null) {
                             // 企微 API 是唯一数据源：若 wecomTagId 与 API 不一致则更新
                             // （企业切换 Corp ID 后，旧 ID 需替换为新 ID）
+                            boolean changed = false;
                             if (!wecomId.equals(existing.getWecomTagId())) {
                                 String oldId = existing.getWecomTagId();
                                 existing.setWecomTagId(wecomId);
-                                tagRepo.save(existing);
+                                changed = true;
                                 if (oldId != null && !oldId.isBlank()) {
-                                    log.info("标签 wecomTagId 已更新: name={}, old={}, new={}",
-                                        tagName, oldId, wecomId);
+                                    log.info("标签 wecomTagId 已更新: name={}, gk={}, old={}, new={}",
+                                        tagName, groupName, oldId, wecomId);
                                 }
                             }
+                            // 旧标签 groupKeyword 可能为空串，回填正确的值
+                            if (!groupName.equals(existing.getGroupKeyword())) {
+                                existing.setGroupKeyword(groupName);
+                                changed = true;
+                            }
+                            if (changed) tagRepo.save(existing);
                             skipped++;
                         } else {
                             Tag tag = Tag.builder()
                                 .name(tagName)
                                 .type(Tag.TagType.system)
+                                .groupKeyword(groupName)
                                 .wecomTagId(wecomId)
                                 .build();
                             tagRepo.save(tag);
                             imported++;
-                            log.info("标签已同步: name={}, wecomTagId={}", tagName, wecomId);
+                            log.info("标签已同步: name={}, gk={}, wecomTagId={}", tagName, groupName, wecomId);
                         }
                     }
                 }
@@ -695,6 +751,95 @@ public class TagService {
             // 标签尚未同步到企微，仅记录警告，不影响本地关联
             log.warn("标签 {} 未同步到企微，跳过企微打标", tag.getName());
         }
+    }
+
+    /**
+     * 修复指定学校下所有客户的企微标签（批量补打）。
+     *
+     * <p>场景：当系统异常（如标签重复导致 {@code autoTag} 崩溃）导致本地 DB 已写入
+     * 客户标签关联，但企微侧 {@code markTag} API 未调用时，使用此方法批量补打。</p>
+     *
+     * <p><b>安全性：</b>{@code markTag} 是幂等操作 — 对已有标签的客户重复调用返回
+     * {@code errcode=0}，不会产生副作用。每个客户独立 try-catch，一个失败不影响其他。</p>
+     *
+     * <p><b>限频保护：</b>每 100 次 API 调用后休眠 10 秒，避免触发企微
+     * 600 次/分钟的限频阈值。</p>
+     *
+     * @param schoolId 学校 ID
+     * @return 修复结果统计（总数 / 成功 / 跳过 / 失败）
+     */
+    public java.util.Map<String, Integer> repairMissingWecomTags(String schoolId) {
+        List<Customer> customers = customerRepo.findBySchoolId(schoolId);
+        if (customers.isEmpty()) {
+            log.info("标签修复: schoolId={} 下无客户，跳过", schoolId);
+            return java.util.Map.of("total", 0, "success", 0, "skipped", 0, "failed", 0);
+        }
+
+        int total = customers.size();
+        int success = 0;
+        int skipped = 0;
+        int failed = 0;
+        int apiCalls = 0;
+
+        log.info("标签修复开始: schoolId={}, 客户数={}", schoolId, total);
+
+        // 大批量时提醒管理员：此操作在 HTTP 请求线程中同步执行，客户数过多可能超时
+        if (total > 200) {
+            log.warn("标签修复: schoolId={} 客户数 {} 超过 200，可能需要较长时间，"
+                + "建议分批次执行或改为异步任务", schoolId, total);
+        }
+
+        for (Customer c : customers) {
+            // 必须有服务员工才能调 markTag
+            if (c.getCurrentAgent() == null || c.getCurrentAgent().isBlank()) {
+                log.warn("标签修复跳过(无currentAgent): customerId={}, external={}",
+                    c.getId(), c.getExternalUserid());
+                skipped++;
+                continue;
+            }
+
+            // 收集该客户的所有标签（必须有企微 tag ID）
+            List<CustomerTag> customerTags = customerTagRepo.findByCustomerId(c.getId());
+            List<String> wecomTagIds = new java.util.ArrayList<>();
+            List<String> tagNames = new java.util.ArrayList<>();
+            for (CustomerTag ct : customerTags) {
+                Tag t = tagRepo.findById(ct.getTagId()).orElse(null);
+                if (t != null && t.getWecomTagId() != null && !t.getWecomTagId().isBlank()) {
+                    wecomTagIds.add(t.getWecomTagId());
+                    tagNames.add(t.getName());
+                }
+            }
+
+            if (wecomTagIds.isEmpty()) {
+                log.debug("标签修复跳过(无有效企微标签): customerId={}", c.getId());
+                skipped++;
+                continue;
+            }
+
+            // 限频保护：每 100 次 API 调用后休眠 10 秒
+            if (apiCalls > 0 && apiCalls % 100 == 0) {
+                log.info("标签修复 限频休眠: apiCalls={}", apiCalls);
+                try { Thread.sleep(10_000); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+
+            try {
+                wecomApi.markTag(c.getExternalUserid(), c.getCurrentAgent(), wecomTagIds);
+                apiCalls++;
+                success++;
+                log.info("标签修复成功: customerId={}, external={}, tags={}",
+                    c.getId(), c.getExternalUserid(), tagNames);
+            } catch (Exception e) {
+                apiCalls++;
+                failed++;
+                log.error("标签修复失败: customerId={}, external={}, tags={}, error={}",
+                    c.getId(), c.getExternalUserid(), tagNames, e.getMessage());
+            }
+        }
+
+        log.info("标签修复完成: schoolId={}, total={}, success={}, skipped={}, failed={}, apiCalls={}",
+            schoolId, total, success, skipped, failed, apiCalls);
+        return java.util.Map.of("total", total, "success", success, "skipped", skipped, "failed", failed);
     }
 
     /**
@@ -758,6 +903,16 @@ public class TagService {
             Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
             if (customer == null) { log.warn("客户不存在: {}", externalUserId); return; }
 
+            // 解析城市名，确保表单打的学校标签和 autoTag 打的学区分入同一个 "学校-{城市}" 企微标签组
+            String schoolGroupKeyword = "学校"; // fallback
+            FormSubmission formSub = formSubmissionRepo.findById(submissionId).orElse(null);
+            if (formSub != null && formSub.getQrCodeId() != null) {
+                QrCode qr = qrCodeRepo.findById(formSub.getQrCodeId()).orElse(null);
+                if (qr != null && qr.getRegionCity() != null && !qr.getRegionCity().isBlank()) {
+                    schoolGroupKeyword = "学校-" + qr.getRegionCity();
+                }
+            }
+
             JsonNode fieldData = objectMapper.readTree(fieldDataJson);
             JsonNode tagMapping = objectMapper.readTree(tpl.getTagMapping());
 
@@ -766,7 +921,7 @@ public class TagService {
 
             // 区域联盟：客户选择的学校也打成标签
             if (schoolName != null && !schoolName.isBlank()) {
-                Tag schoolTag = getOrCreateTag(schoolName, Tag.TagType.form, null, "学校");
+                Tag schoolTag = getOrCreateTag(schoolName, Tag.TagType.form, null, schoolGroupKeyword);
                 bindCustomerTag(customer.getId(), schoolTag.getId(), "form");
                 if (schoolTag.getWecomTagId() != null) {
                     wecomApi.markTag(externalUserId, userId, List.of(schoolTag.getWecomTagId()));
@@ -785,15 +940,15 @@ public class TagService {
                 if (action == null) continue;
 
                 // 支持 "tag" 和 "tag:标签组名" 两种格式
-                //   "tag"           → 默认归入"学校"标签组（向后兼容）
+                //   "tag"           → 默认归入 "学校-{城市}" 标签组（与 autoTag 保持一致）
                 //   "tag:客户等级"   → 归入"客户等级"标签组
                 if ("tag".equals(action) || action.startsWith("tag:")) {
                     final String groupKeyword;
                     if (action.startsWith("tag:") && action.length() > 4) {
                         String extracted = action.substring(4).trim();
-                        groupKeyword = extracted.isEmpty() ? "学校" : extracted;
+                        groupKeyword = extracted.isEmpty() ? schoolGroupKeyword : extracted;
                     } else {
-                        groupKeyword = "学校";
+                        groupKeyword = schoolGroupKeyword;
                     }
                     Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, groupKeyword);
                     bindCustomerTag(customer.getId(), tag.getId(), "form");

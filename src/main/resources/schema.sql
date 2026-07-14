@@ -172,9 +172,11 @@ CREATE TABLE IF NOT EXISTS tag (
     name VARCHAR(100) NOT NULL COMMENT '标签名',
     type ENUM('system','form','manual') NOT NULL DEFAULT 'manual',    -- system 系统自动 / form 表单收集 / manual 手动创建
     parent_id BIGINT COMMENT '父标签ID',
+    group_keyword VARCHAR(100) NOT NULL DEFAULT '' COMMENT '企微标签组关键词（市州/县区/学校-xxx）',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (parent_id) REFERENCES tag(id),
-    INDEX idx_type (type)
+    INDEX idx_type (type),
+    UNIQUE INDEX uk_tag_name_group (name, group_keyword)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标签表';
 
 -- tag 新增字段（企微标签同步）
@@ -182,6 +184,30 @@ SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tag' AND COLUMN_NAME = 'wecom_tag_id') = 0,
     'ALTER TABLE tag ADD COLUMN wecom_tag_id VARCHAR(50) COMMENT ''企业微信标签ID''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- tag 新增字段（group_keyword — 支持同名标签在不同企微组）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tag' AND COLUMN_NAME = 'group_keyword') = 0,
+    'ALTER TABLE tag ADD COLUMN group_keyword VARCHAR(100) NOT NULL DEFAULT ''''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- tag (name, group_keyword) 复合唯一约束（idempotent）
+-- 先删旧的 uk_tag_name（如果还存在），再建新的 uk_tag_name_group
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tag' AND INDEX_NAME = 'uk_tag_name') > 0,
+    'ALTER TABLE tag DROP INDEX uk_tag_name',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tag' AND INDEX_NAME = 'uk_tag_name_group') = 0,
+    'ALTER TABLE tag ADD UNIQUE INDEX uk_tag_name_group (name, group_keyword)',
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
