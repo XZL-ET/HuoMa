@@ -36,6 +36,17 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByExternalUserid(String externalUserid);
 
     /**
+     * 根据学校 ID 查询该学校下的所有客户。
+     * <p>
+     * 用于标签修复等批量操作场景，按学校维度获取客户列表。
+     * </p>
+     *
+     * @param schoolId 学校 ID，不可为 null
+     * @return 该学校下的所有客户列表
+     */
+    List<Customer> findBySchoolId(String schoolId);
+
+    /**
      * 判断指定 externalUserid 是否已存在客户记录。
      * <p>
      * 通常用于从企微回调或批量同步时判断客户是否已入库，避免重复创建。
@@ -240,6 +251,10 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     /**
      * 查询指定接待员在指定学校下、指定时间区间内<b>且无进行中/已完成转移记录</b>的客户，按添加时间升序。
      * <p>
+     * 时间区间为左闭右开（{@code addTime >= start AND addTime < end}），
+     * 确保相邻批次窗口不重叠，避免同一边界客户被重复入队。
+     * </p>
+     * <p>
      * 用于在职继承定时任务：只排除 pending_confirm / confirmed 状态的客户，
      * timeout / rejected / api_failed / retry_limit 的客户允许重新入队发起转移。
      * api_failed 的重试由 {@code TransferService.retryFailedTransfers()} 独立控制，不经过 Stream。
@@ -251,7 +266,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      * @param end        添加时间上限（不含）
      * @return 无进行中/已完成转移记录的客户列表，按添加时间升序排列
      */
-    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime BETWEEN :start AND :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed'))")
+    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime >= :start AND c.addTime < :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed'))")
     List<Customer> findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
         @Param("addedAgent") String addedAgent,
         @Param("schoolId") String schoolId,
@@ -315,4 +330,27 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
            "GROUP BY c.sourceQrId")
     List<Object[]> countTotalAndTodayByQrIds(@Param("qrIds") List<Long> qrIds,
                                               @Param("todayStart") LocalDateTime todayStart);
+
+    /**
+     * 批量统计活码在指定日期范围内的新增客户数和截止范围末日的累计客户数。
+     * <p>
+     * 与 {@link #countTotalAndTodayByQrIds} 的区别在于本方法对累计数和新增
+     * 均施加了 {@code addTime <= dateEnd} 上限，确保历史导出时统计数据不会包含
+     * 指定日期之后的数据。当 {@code dateStart} 为 null 时不设下限，
+     * "期间新增"即为从最开始到 dateEnd 的总数。
+     * </p>
+     *
+     * @param qrIds     活码 ID 列表
+     * @param dateStart 范围起始日 00:00:00（可为 null，表示不设下限）
+     * @param dateEnd   范围结束日 23:59:59（累计数上限和新增上限）
+     * @return 每行格式：[sourceQrId, totalUpToEndDate, rangeNewCount]
+     */
+    @Query("SELECT c.sourceQrId, COUNT(c), " +
+           "SUM(CASE WHEN (:dateStart IS NULL OR c.addTime >= :dateStart) "
+                  + "AND c.addTime <= :dateEnd THEN 1 ELSE 0 END) " +
+           "FROM Customer c WHERE c.sourceQrId IN :qrIds AND c.addTime <= :dateEnd " +
+           "GROUP BY c.sourceQrId")
+    List<Object[]> countTotalAndRangeByQrIds(@Param("qrIds") List<Long> qrIds,
+                                              @Param("dateStart") LocalDateTime dateStart,
+                                              @Param("dateEnd") LocalDateTime dateEnd);
 }

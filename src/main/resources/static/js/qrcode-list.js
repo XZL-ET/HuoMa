@@ -250,7 +250,29 @@
         /* ── 页面加载时初始化树 ── */
         document.addEventListener('DOMContentLoaded', function() {
             loadTree();
+            initExportDateDefaults();
         });
+
+        /* 初始化导出日期默认值 + radio 切换 + 手动改日期监听 */
+        function initExportDateDefaults() {
+            // 结束日期默认昨天
+            const endInput = document.getElementById('exportDateEnd');
+            if (endInput) endInput.value = localDateStr(-1);
+
+            // radio 切换：实时 ↔ 历史 → 显隐日期区域
+            document.querySelectorAll('input[name="exportMode"]').forEach(r => {
+                r.addEventListener('change', function() {
+                    const dateGroup = document.getElementById('exportDateGroup');
+                    if (dateGroup) dateGroup.style.display = (this.value === 'history') ? '' : 'none';
+                });
+            });
+
+            // 手动修改日期时取消所有预设高亮
+            ['exportDateStart', 'exportDateEnd'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('change', clearRangeHighlight);
+            });
+        }
 
         /* ── 批量操作模式 ── */
         let batchMode = false;
@@ -375,6 +397,92 @@
                     alert('成功更新 ' + d.count + ' 个活码'); location.reload();
                 } else alert('操作失败');
             });
+        }
+
+        /* ── 导出预览与确认 ── */
+
+        /* 返回相对今天偏移 N 天的本地时区日期字符串 (yyyy-MM-dd) */
+        function localDateStr(offsetDays) {
+            const d = new Date();
+            d.setDate(d.getDate() + offsetDays);
+            return d.getFullYear() + '-' +
+                String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getDate()).padStart(2, '0');
+        }
+
+        /* 快捷预设：填充日期范围并高亮对应按钮 */
+        function setExportRange(type) {
+            const yStr = localDateStr(-1);
+            const startInput = document.getElementById('exportDateStart');
+            const endInput = document.getElementById('exportDateEnd');
+            endInput.value = yStr;
+
+            if (type === 'all') {
+                startInput.value = '';
+            } else if (type === 'yesterday') {
+                startInput.value = yStr;
+            } else if (type === '7days') {
+                startInput.value = localDateStr(-7);
+            }
+
+            // 高亮当前按钮，取消其他
+            const btns = document.querySelectorAll('#exportRangePresets .btn');
+            btns.forEach(b => b.classList.remove('active'));
+            const target = document.querySelector('#exportRangePresets [onclick="setExportRange(\'' + type + '\')"]');
+            if (target) target.classList.add('active');
+        }
+
+        /* 手动修改日期时取消所有预设高亮 */
+        function clearRangeHighlight() {
+            const btns = document.querySelectorAll('#exportRangePresets .btn');
+            btns.forEach(b => b.classList.remove('active'));
+        }
+
+        function previewExport() {
+            // 收集当前页面筛选参数
+            const params = new URLSearchParams(window.location.search);
+
+            // 读取导出模式：实时 / 历史
+            const isHistory = document.getElementById('exportModeHistory').checked;
+            if (isHistory) {
+                const dateStart = document.getElementById('exportDateStart').value;
+                const dateEnd = document.getElementById('exportDateEnd').value;
+                if (dateStart) params.set('dateStart', dateStart);
+                if (dateEnd) params.set('dateEnd', dateEnd);
+            }
+            // 实时模式：不传日期参数
+
+            const previewUrl = '/qrcodes/export/preview?' + params.toString();
+
+            // 按钮置灰，显示加载中
+            const exportBtn = document.querySelector('[onclick="previewExport()"]');
+            const originalHtml = exportBtn.innerHTML;
+            exportBtn.disabled = true;
+            exportBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>加载中…';
+
+            fetch(previewUrl)
+                .then(r => r.json())
+                .then(data => {
+                    exportBtn.disabled = false;
+                    exportBtn.innerHTML = originalHtml;
+
+                    document.getElementById('exportFilters').textContent = data.filters;
+                    document.getElementById('exportCount').textContent = data.count;
+
+                    // 存储导出 URL 供确认按钮使用
+                    document.getElementById('exportConfirmBtn').onclick = function() {
+                        bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide();
+                        window.location.href = '/qrcodes/export?' + params.toString();
+                    };
+
+                    new bootstrap.Modal(document.getElementById('exportModal')).show();
+                })
+                .catch(err => {
+                    exportBtn.disabled = false;
+                    exportBtn.innerHTML = originalHtml;
+                    console.error('导出预览失败:', err);
+                    alert('获取导出预览失败，请重试');
+                });
         }
 
         /* ── 批量切换场景弹窗 ── */

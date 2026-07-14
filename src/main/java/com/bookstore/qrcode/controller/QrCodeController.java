@@ -65,8 +65,10 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -99,6 +101,8 @@ import java.util.zip.ZipOutputStream;
 @RequestMapping("/qrcodes")
 @RequiredArgsConstructor
 public class QrCodeController {
+
+    private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
 
     private final QrCodeService qrCodeService;
     private final WecomApiClient wecomApiClient;
@@ -202,7 +206,7 @@ public class QrCodeController {
         List<Long> pageIds = qrCodes.getContent().stream()
             .map(QrCode::getId).collect(Collectors.toList());
 
-        LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
+        LocalDateTime todayStart = LocalDateTime.now(ZONE).withHour(0).withMinute(0).withSecond(0);
         Map<Long, Long> todayCountMap = new HashMap<>();
         Map<Long, Long> totalCountMap = new HashMap<>();
 
@@ -778,22 +782,17 @@ public class QrCodeController {
 
     // ==================== 导出 ====================
 
-    /** 导出活码列表为 Excel（SXSSFWorkbook 流式写入）。 */
-    @GetMapping("/export")
-    public void export(@RequestParam(required = false) String keyword,
-                       @RequestParam(required = false) String city,
-                       @RequestParam(required = false) String district,
-                       @RequestParam(required = false) String status,
-                       @RequestParam(required = false) String scope,
-                       @RequestParam(required = false) Long groupId,
-                       HttpServletResponse response) throws Exception {
-
-        String operator = SecurityContextHolder.getContext().getAuthentication() != null
-                ? SecurityContextHolder.getContext().getAuthentication().getName() : "anonymous";
-        log.info("导出活码列表: operator={}, keyword={}, city={}, district={}, status={}, scope={}, groupId={}",
-                operator, keyword, city, district, status, scope, groupId);
-
-        // 空字符串 → null（前端链接参数为空串，破坏 JPQL IS NULL 判断）
+    /** 导出预览：返回即将导出的记录数和当前筛选条件。 */
+    @GetMapping("/export/preview")
+    @ResponseBody
+    public Map<String, Object> exportPreview(@RequestParam(required = false) String keyword,
+                                            @RequestParam(required = false) String city,
+                                            @RequestParam(required = false) String district,
+                                            @RequestParam(required = false) String status,
+                                            @RequestParam(required = false) String scope,
+                                            @RequestParam(required = false) Long groupId,
+                                            @RequestParam(required = false) String dateStart,
+                                            @RequestParam(required = false) String dateEnd) {
         if (keyword != null && keyword.isEmpty()) keyword = null;
         if (city != null && city.isEmpty()) city = null;
         if (district != null && district.isEmpty()) district = null;
@@ -810,22 +809,131 @@ public class QrCodeController {
 
         List<QrCode> qrs = qrCodeRepo.findAllForExport(keyword, city, district, qrStatus, groupId, allianceOnly);
 
+        // 构建可读的筛选条件摘要
+        List<String> filters = new java.util.ArrayList<>();
+        if (keyword != null) filters.add("关键词：" + keyword);
+        if (city != null) filters.add("城市：" + city);
+        if (district != null) filters.add("区县：" + district);
+        if (qrStatus != null) filters.add("状态：" + qrStatus.name());
+        if ("alliance".equals(scope)) filters.add("范围：联盟活码");
+        else if ("school".equals(scope)) filters.add("范围：学校活码");
+        if (groupId != null) {
+            groupRepo.findById(groupId).ifPresent(g -> filters.add("分组：" + g.getName()));
+        }
+        // 日期范围摘要
+        if (dateEnd != null && !dateEnd.isEmpty()) {
+            if (dateStart != null && !dateStart.isEmpty())
+                filters.add("日期：" + dateStart + " ~ " + dateEnd);
+            else
+                filters.add("日期：截止 " + dateEnd);
+        } else {
+            filters.add("实时数据");
+        }
+
+        return Map.of("count", qrs.size(),
+                      "filters", filters.isEmpty() ? "全部活码" : String.join("，", filters));
+    }
+
+    /** 导出活码列表为 Excel（SXSSFWorkbook 流式写入）。 */
+    @GetMapping("/export")
+    public void export(@RequestParam(required = false) String keyword,
+                       @RequestParam(required = false) String city,
+                       @RequestParam(required = false) String district,
+                       @RequestParam(required = false) String status,
+                       @RequestParam(required = false) String scope,
+                       @RequestParam(required = false) Long groupId,
+                       @RequestParam(required = false) String dateStart,
+                       @RequestParam(required = false) String dateEnd,
+                       HttpServletResponse response) throws Exception {
+
+        String operator = SecurityContextHolder.getContext().getAuthentication() != null
+                ? SecurityContextHolder.getContext().getAuthentication().getName() : "anonymous";
+        log.info("导出活码列表: operator={}, keyword={}, city={}, district={}, status={}, scope={}, groupId={}, dateStart={}, dateEnd={}",
+                operator, keyword, city, district, status, scope, groupId, dateStart, dateEnd);
+
+        // 空字符串 → null（前端链接参数为空串，破坏 JPQL IS NULL 判断）
+        if (keyword != null && keyword.isEmpty()) keyword = null;
+        if (city != null && city.isEmpty()) city = null;
+        if (district != null && district.isEmpty()) district = null;
+
+        QrCode.QrCodeStatus qrStatus = null;
+        if (status != null && !status.isEmpty()) {
+            try { qrStatus = QrCode.QrCodeStatus.valueOf(status); }
+            catch (IllegalArgumentException ignored) {}
+        }
+
+        Boolean allianceOnly = null;
+        if ("alliance".equals(scope)) allianceOnly = true;
+        else if ("school".equals(scope)) allianceOnly = false;
+
+        // 历史日期参数解析（使用统一时区）
+        LocalDate startDate = null, endDate = null;
+        LocalDateTime startDateTime = null, endDateTime = null;
+        if (dateEnd != null && !dateEnd.isEmpty()) {
+            try {
+                endDate = LocalDate.parse(dateEnd);
+                endDateTime = endDate.atTime(23, 59, 59);
+            } catch (java.time.format.DateTimeParseException e) {
+                log.warn("无效的日期格式 dateEnd={}, 降级为实时统计", dateEnd);
+            }
+        }
+        if (dateStart != null && !dateStart.isEmpty()) {
+            try {
+                startDate = LocalDate.parse(dateStart);
+                startDateTime = startDate.atStartOfDay();
+            } catch (java.time.format.DateTimeParseException e) {
+                log.warn("无效的日期格式 dateStart={}", dateStart);
+            }
+        }
+
+        List<QrCode> qrs = qrCodeRepo.findAllForExport(keyword, city, district, qrStatus, groupId, allianceOnly);
+
         List<Long> allIds = qrs.stream().map(QrCode::getId).collect(Collectors.toList());
         Map<Long, Long> totalMap = new HashMap<>();
         Map<Long, Long> todayMap = new HashMap<>();
         if (!allIds.isEmpty()) {
-            LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
-            for (Object[] row : customerRepo.countTotalAndTodayByQrIds(allIds, todayStart)) {
-                totalMap.put((Long) row[0], (Long) row[1]);
-                todayMap.put((Long) row[0], (Long) row[2]);
+            if (endDateTime != null) {
+                // 历史日期模式：使用带日期上限的查询
+                for (Object[] row : customerRepo.countTotalAndRangeByQrIds(allIds, startDateTime, endDateTime)) {
+                    totalMap.put((Long) row[0], (Long) row[1]);
+                    todayMap.put((Long) row[0], (Long) row[2]);
+                }
+            } else {
+                // 实时模式：保持原有行为
+                LocalDateTime todayStart = LocalDateTime.now(ZONE).withHour(0).withMinute(0).withSecond(0);
+                for (Object[] row : customerRepo.countTotalAndTodayByQrIds(allIds, todayStart)) {
+                    totalMap.put((Long) row[0], (Long) row[1]);
+                    todayMap.put((Long) row[0], (Long) row[2]);
+                }
             }
         }
 
         Map<Long, String> groupNameMap = new HashMap<>();
         for (QrCodeGroup g : groupRepo.findAllByOrderByName()) groupNameMap.put(g.getId(), g.getName());
 
+        // 判断是否为"截止昨天"模式（start 为空，两列数据重叠）
+        boolean mergedMode = (endDate != null && startDate == null);
+
+        // 动态列头
+        String newLabel;
+        if (endDate != null) {
+            if (startDate != null)
+                newLabel = startDate + " ~ " + endDate + " 新增";
+            else
+                newLabel = "客户总数（截止 " + endDate + "）";
+        } else {
+            newLabel = "今日新增客户";
+        }
+
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        String filename = "客户数据表_" + java.time.LocalDate.now() + ".xlsx";
+        String filename;
+        if (endDate != null && startDate != null && !startDate.equals(endDate)) {
+            filename = "客户数据表_" + startDate + "_" + endDate + ".xlsx";
+        } else if (endDate != null) {
+            filename = "客户数据表_" + endDate + ".xlsx";
+        } else {
+            filename = "客户数据表_" + LocalDate.now(ZONE) + "_实时.xlsx";
+        }
         String encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20");
         response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
 
@@ -843,7 +951,12 @@ public class QrCodeController {
             headerStyle.setAlignment(org.apache.poi.ss.usermodel.HorizontalAlignment.CENTER);
 
             var header = sheet.createRow(0);
-            String[] headers = {"学校名称","城市","区县","分组","学生人数","今日新增客户","累计客户数","创建时间"};
+            String[] headers;
+            if (mergedMode) {
+                headers = new String[]{"学校名称","城市","区县","分组","学生人数", newLabel, "创建时间"};
+            } else {
+                headers = new String[]{"学校名称","城市","区县","分组","学生人数", newLabel, "累计客户数","创建时间"};
+            }
             for (int i = 0; i < headers.length; i++) {
                 var cell = header.createCell(i);
                 cell.setCellValue(headers[i]);
@@ -860,26 +973,31 @@ public class QrCodeController {
             for (QrCode qr : qrs) {
                 var row = sheet.createRow(rowIdx++);
                 Long qid = qr.getId();
-                row.createCell(0).setCellValue(qr.getSchoolName() != null ? qr.getSchoolName() : "");
-                row.createCell(1).setCellValue(qr.getRegionCity() != null ? qr.getRegionCity() : "");
-                row.createCell(2).setCellValue(qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "");
+                int col = 0;
+                row.createCell(col++).setCellValue(qr.getSchoolName() != null ? qr.getSchoolName() : "");
+                row.createCell(col++).setCellValue(qr.getRegionCity() != null ? qr.getRegionCity() : "");
+                row.createCell(col++).setCellValue(qr.getRegionDistrict() != null ? qr.getRegionDistrict() : "");
 
-                var groupCell = row.createCell(3);
+                var groupCell = row.createCell(col++);
                 groupCell.setCellValue(qr.getGroupId() != null ? groupNameMap.getOrDefault(qr.getGroupId(), "") : "");
 
-                var studentCell = row.createCell(4);
+                var studentCell = row.createCell(col++);
                 studentCell.setCellValue(qr.getStudentCount() != null ? qr.getStudentCount() : 0);
                 studentCell.setCellStyle(numberStyle);
 
-                var todayCell = row.createCell(5);
-                todayCell.setCellValue(todayMap.getOrDefault(qid, 0L));
-                todayCell.setCellStyle(numberStyle);
+                // 新增列（合并模式下即为累计值）
+                var newCell = row.createCell(col++);
+                newCell.setCellValue(todayMap.getOrDefault(qid, 0L));
+                newCell.setCellStyle(numberStyle);
 
-                var totalCell = row.createCell(6);
-                totalCell.setCellValue(totalMap.getOrDefault(qid, 0L));
-                totalCell.setCellStyle(numberStyle);
+                // 累计客户数列（合并模式下跳过）
+                if (!mergedMode) {
+                    var totalCell = row.createCell(col++);
+                    totalCell.setCellValue(totalMap.getOrDefault(qid, 0L));
+                    totalCell.setCellStyle(numberStyle);
+                }
 
-                row.createCell(7).setCellValue(qr.getCreatedAt() != null ? qr.getCreatedAt().format(dateFmt) : "");
+                row.createCell(col++).setCellValue(qr.getCreatedAt() != null ? qr.getCreatedAt().format(dateFmt) : "");
             }
 
             // 冻结首行

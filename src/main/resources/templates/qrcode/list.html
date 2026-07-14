@@ -63,8 +63,8 @@
                 </div>
                 <div class="col-md-4">
                     <div class="d-flex gap-2">
-                        <a th:href="@{/qrcodes/export(keyword=${keyword},city=${city},district=${district},status=${status},scope=${scope},groupId=${groupId})}"
-                           class="btn btn-outline-success"><i class="bi bi-download"></i> 导出 Excel</a>
+                        <button type="button" class="btn btn-outline-success"
+                                onclick="previewExport()"><i class="bi bi-download"></i> 导出 Excel</button>
                         <button type="button" class="btn btn-sm btn-outline-warning" id="batchModeBtn" onclick="toggleBatchMode()">🔧 批量操作</button>
                     </div>
                 </div>
@@ -457,5 +457,67 @@
         .tree-group { color: #555; }
         .tree-root { font-size: 0.9rem; }
     </style>
+
+<!-- ── 导出确认弹窗 ── -->
+<div class="modal fade" id="exportModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-download me-2"></i>导出确认</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <span class="text-muted">筛选条件：</span>
+                    <span id="exportFilters" class="fw-bold"></span>
+                </div>
+                <!-- 数据类型切换 -->
+                <div class="mb-3">
+                    <label class="form-label text-muted" style="font-size:0.875rem;">数据类型：</label>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="exportMode" id="exportModeRealtime" value="realtime">
+                        <label class="form-check-label" for="exportModeRealtime">实时</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="exportMode" id="exportModeHistory" value="history" checked>
+                        <label class="form-check-label" for="exportModeHistory">历史</label>
+                    </div>
+                </div>
+                <!-- 日期范围区域（选"历史"时显示） -->
+                <div id="exportDateGroup">
+                    <label class="form-label text-muted" style="font-size:0.875rem;">导出日期范围：</label>
+                    <div class="mb-2">
+                        <div class="btn-group btn-group-sm" role="group" id="exportRangePresets">
+                            <button type="button" class="btn btn-outline-secondary active" onclick="setExportRange('all')">截止昨天</button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="setExportRange('yesterday')">昨天</button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="setExportRange('7days')">近7天</button>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <input type="date" id="exportDateStart" class="form-control form-control-sm"
+                               style="max-width:160px;" placeholder="开始(可选)">
+                        <span class="text-muted">～</span>
+                        <input type="date" id="exportDateEnd" class="form-control form-control-sm"
+                               style="max-width:160px;">
+                    </div>
+                    <small class="text-muted">
+                        "新增"列为该范围内的新增客户数，"累计"列为截至结束日期的总数
+                    </small>
+                </div>
+                <div class="alert alert-info mb-0 mt-3">
+                    <i class="bi bi-info-circle me-1"></i>
+                    即将导出 <strong id="exportCount">0</strong> 条活码记录
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-success" id="exportConfirmBtn">
+                    <i class="bi bi-file-earmark-excel"></i> 确认导出
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 </main>
 </html>
