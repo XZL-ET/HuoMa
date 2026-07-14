@@ -82,5 +82,6 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
     /** 批量重置熔断计数（每日凌晨调用，防止跨天累积永久封禁） */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query("UPDATE Agent a SET a.meltedCount24h = 0 WHERE a.meltedCount24h > 0")
+    @org.springframework.transaction.annotation.Transactional
     int batchResetMeltedCount();
 }

@@ -104,6 +104,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("全局池日重置失败; ");
+            log.error("全局池日重置失败", e);
         }
 
         // 3. 恢复 full 状态的员工（通过代理调用确保 @Transactional 生效）
@@ -112,6 +113,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("full员工恢复失败; ");
+            log.error("full员工恢复失败", e);
         }
 
         // 4. 生成昨日日报（通过代理调用确保 @Transactional 生效）
@@ -120,6 +122,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("日报生成失败; ");
+            log.error("日报生成失败", e);
         }
 
         // 5. 清零熔断计数，防止跨天累积永久封禁
@@ -129,6 +132,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("熔断计数清零失败; ");
+            log.error("熔断计数清零失败", e);
         }
 
         // 任一步骤失败均告警
