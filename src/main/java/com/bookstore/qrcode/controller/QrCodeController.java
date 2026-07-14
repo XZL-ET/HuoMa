@@ -917,8 +917,10 @@ public class QrCodeController {
         // 动态列头
         String newLabel;
         if (endDate != null) {
-            if (startDate != null)
+            if (startDate != null && !startDate.equals(endDate))
                 newLabel = startDate + " ~ " + endDate + " 新增";
+            else if (startDate != null)
+                newLabel = "当日新增";
             else
                 newLabel = "客户总数（截止 " + endDate + "）";
         } else {

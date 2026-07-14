@@ -259,18 +259,23 @@
             const endInput = document.getElementById('exportDateEnd');
             if (endInput) endInput.value = localDateStr(-1);
 
-            // radio 切换：实时 ↔ 历史 → 显隐日期区域
+            // radio 切换：实时 ↔ 历史 → 显隐日期区域 + 刷新预览
             document.querySelectorAll('input[name="exportMode"]').forEach(r => {
                 r.addEventListener('change', function() {
                     const dateGroup = document.getElementById('exportDateGroup');
                     if (dateGroup) dateGroup.style.display = (this.value === 'history') ? '' : 'none';
+                    // 刷新预览（如果函数已定义）
+                    if (typeof refreshExportPreview === 'function') refreshExportPreview();
                 });
             });
 
-            // 手动修改日期时取消所有预设高亮
+            // 手动修改日期时取消所有预设高亮 + 刷新预览
             ['exportDateStart', 'exportDateEnd'].forEach(function(id) {
                 var el = document.getElementById(id);
-                if (el) el.addEventListener('change', clearRangeHighlight);
+                if (el) el.addEventListener('change', function() {
+                    clearRangeHighlight();
+                    if (typeof refreshExportPreview === 'function') refreshExportPreview();
+                });
             });
         }
 
@@ -401,6 +406,8 @@
 
         /* ── 导出预览与确认 ── */
 
+        let _exportListenersBound = false;
+
         /* 返回相对今天偏移 N 天的本地时区日期字符串 (yyyy-MM-dd) */
         function localDateStr(offsetDays) {
             const d = new Date();
@@ -410,7 +417,7 @@
                 String(d.getDate()).padStart(2, '0');
         }
 
-        /* 快捷预设：填充日期范围并高亮对应按钮 */
+        /* 快捷预设：填充日期范围并高亮对应按钮，同时刷新预览 */
         function setExportRange(type) {
             const yStr = localDateStr(-1);
             const startInput = document.getElementById('exportDateStart');
@@ -430,6 +437,11 @@
             btns.forEach(b => b.classList.remove('active'));
             const target = document.querySelector('#exportRangePresets [onclick="setExportRange(\'' + type + '\')"]');
             if (target) target.classList.add('active');
+
+            // 刷新预览（如果弹窗已打开）
+            if (typeof refreshExportPreview === 'function') {
+                refreshExportPreview();
+            }
         }
 
         /* 手动修改日期时取消所有预设高亮 */
@@ -438,11 +450,9 @@
             btns.forEach(b => b.classList.remove('active'));
         }
 
-        function previewExport() {
-            // 收集当前页面筛选参数
+        /* 构建导出 URL 参数 —— 实时读取弹窗内的日期/模式状态 */
+        function buildExportParams() {
             const params = new URLSearchParams(window.location.search);
-
-            // 读取导出模式：实时 / 历史
             const isHistory = document.getElementById('exportModeHistory').checked;
             if (isHistory) {
                 const dateStart = document.getElementById('exportDateStart').value;
@@ -450,15 +460,51 @@
                 if (dateStart) params.set('dateStart', dateStart);
                 if (dateEnd) params.set('dateEnd', dateEnd);
             }
-            // 实时模式：不传日期参数
+            return params;
+        }
 
-            const previewUrl = '/qrcodes/export/preview?' + params.toString();
+        let _exportPreviewSeq = 0;  // 竞态控制：仅应用最新一次刷新的响应
 
+        /* 刷新导出预览数字并更新确认按钮的导出 URL */
+        function refreshExportPreview() {
+            const seq = ++_exportPreviewSeq;
+            const params = buildExportParams();
+
+            // 显示加载中状态
+            const countEl = document.getElementById('exportCount');
+            const filtersEl = document.getElementById('exportFilters');
+            const originalCount = countEl.textContent;
+            countEl.textContent = '…';
+
+            fetch('/qrcodes/export/preview?' + params.toString())
+                .then(r => r.json())
+                .then(data => {
+                    // 忽略过期的响应（用户已触发更新的刷新）
+                    if (seq !== _exportPreviewSeq) return;
+                    filtersEl.textContent = data.filters;
+                    countEl.textContent = data.count;
+                    // 同步更新确认按钮的导出 URL
+                    document.getElementById('exportConfirmBtn').onclick = function() {
+                        bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide();
+                        window.location.href = '/qrcodes/export?' + buildExportParams().toString();
+                    };
+                })
+                .catch(err => {
+                    if (seq !== _exportPreviewSeq) return;  // 忽略过期请求的错误
+                    countEl.textContent = originalCount;     // 恢复原数字
+                    console.error('导出预览刷新失败:', err);
+                });
+        }
+
+        function previewExport() {
             // 按钮置灰，显示加载中
             const exportBtn = document.querySelector('[onclick="previewExport()"]');
             const originalHtml = exportBtn.innerHTML;
             exportBtn.disabled = true;
             exportBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>加载中…';
+
+            const params = buildExportParams();
+            const previewUrl = '/qrcodes/export/preview?' + params.toString();
 
             fetch(previewUrl)
                 .then(r => r.json())
@@ -469,11 +515,14 @@
                     document.getElementById('exportFilters').textContent = data.filters;
                     document.getElementById('exportCount').textContent = data.count;
 
-                    // 存储导出 URL 供确认按钮使用
+                    // 确认导出：实时读取弹窗内的日期状态
                     document.getElementById('exportConfirmBtn').onclick = function() {
                         bootstrap.Modal.getInstance(document.getElementById('exportModal')).hide();
-                        window.location.href = '/qrcodes/export?' + params.toString();
+                        window.location.href = '/qrcodes/export?' + buildExportParams().toString();
                     };
+
+                    // 绑定弹窗内日期/模式变化监听（仅首次绑定）
+                    bindExportModalListeners();
 
                     new bootstrap.Modal(document.getElementById('exportModal')).show();
                 })
@@ -483,6 +532,13 @@
                     console.error('导出预览失败:', err);
                     alert('获取导出预览失败，请重试');
                 });
+        }
+
+        /* 确保弹窗初始化已完成（首次打开弹窗时调用） */
+        function bindExportModalListeners() {
+            // initExportDateDefaults 已在 DOMContentLoaded 时绑定了所有监听器，
+            // 此处仅标记弹窗已就绪，防止重复初始化
+            _exportListenersBound = true;
         }
 
         /* ── 批量切换场景弹窗 ── */
