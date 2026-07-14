@@ -42,7 +42,11 @@ public class SecurityConfig {
                         .ignoringRequestMatchers("/api/qrcodes/**")
                         .ignoringRequestMatchers("/api/inheritance/**")
                         .ignoringRequestMatchers("/qrcodes/*/transfer/**")
-                        .ignoringRequestMatchers("/qrcodes/*/agents/batch-recycle"))
+                        .ignoringRequestMatchers("/qrcodes/*/agents/batch-recycle")
+                        // 客户标签修复：管理后台表单提交
+                        .ignoringRequestMatchers("/customers/repair-tags")
+                        // 企微标签同步：部署后一键触发
+                        .ignoringRequestMatchers("/admin/tags/sync"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
@@ -65,6 +69,8 @@ public class SecurityConfig {
                         .requestMatchers("/admin/form-templates/**").hasRole("ADMIN")
                         // 学校分类管理：仅 admin 可访问
                         .requestMatchers("/admin/categories/**").hasRole("ADMIN")
+                        // 企微标签同步：仅 admin 可访问
+                        .requestMatchers("/admin/tags/sync").hasRole("ADMIN")
                         // 系统配置管理：仅 admin 可访问
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问

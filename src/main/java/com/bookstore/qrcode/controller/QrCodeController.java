@@ -1781,19 +1781,6 @@ public class QrCodeController {
     }
 
     /**
-     * 从企微同步全部标签到本地 DB，并刷新标签组缓存。
-     *
-     * <p>POST /admin/tags/sync —— 部署后一键运行，将旧标签的 group_keyword 从空串升级为正确的企微组名。
-     *
-     * @return JSON 格式同步结果 {@code {"skipped": N, "imported": N}}
-     */
-    @PostMapping("/admin/tags/sync")
-    @ResponseBody
-    public java.util.Map<String, Integer> syncTags() {
-        return tagService.syncTagsFromWecom();
-    }
-
-    /**
      * 更新活码外观样式。
      *
      * <p>POST /qrcodes/{id}/style —— 修改活码二维码的展示外观，包括主题配色、
