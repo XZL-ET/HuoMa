@@ -151,6 +151,42 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     long countByToUseridAndStatus(String toUserid, CustomerTransfer.TransferStatus status);
 
     /**
+     * 查找 retry_limit 积累达到告警阈值的服务老师/双角色及其记录数。
+     * <p>
+     * 一次 JOIN 查询覆盖所有到达 {@code retry_limit} 的路径
+     * （{@code initiate()} 终端错误 + {@code api_failed} 重试耗尽）。
+     * 使用子查询而非 JOIN 避免一个老师挂多个活码时笛卡尔积导致 COUNT 虚高。
+     * </p>
+     *
+     * <p><b>三层防护：</b>
+     * <ol>
+     *   <li>排除客户侧错误码（84061/84073/84096/84100/45035），只统计服务老师侧问题</li>
+     *   <li>7 天时间窗口，防止历史记录导致永久重复告警</li>
+     *   <li>HAVING COUNT &ge; 3，在数据库侧完成阈值过滤</li>
+     * </ol>
+     * </p>
+     *
+     * @param since 统计起始时间（transferTime &ge; since），调用方传入 7 天前
+     * @return 每行 [toUserid, count]，仅包含 count &ge; 3 的老师
+     */
+    @Query("SELECT t.toUserid, COUNT(t) FROM CustomerTransfer t "
+        + "WHERE t.status = 'retry_limit' "
+        + "AND t.transferTime >= :since "
+        + "AND t.toUserid IN ("
+        + "  SELECT a.agentUserid FROM QrAgent a "
+        + "  WHERE a.role IN ('service', 'dual') "
+        + "  AND a.status <> 'removed') "
+        + "AND (t.failReason IS NULL OR t.failReason = '' "
+        + "  OR (t.failReason NOT LIKE '%errcode=84061%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84073%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84096%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84100%' "
+        + "    AND t.failReason NOT LIKE '%errcode=45035%')) "
+        + "GROUP BY t.toUserid "
+        + "HAVING COUNT(t) >= 3")
+    List<Object[]> findRetryLimitTeachers(@Param("since") LocalDateTime since);
+
+    /**
      * 查询指定状态下 API 重试次数已达上限的转移记录。
      * <p>
      * 用于将 retryCount 耗尽但仍处于 api_failed 的记录标记为 retry_limit。

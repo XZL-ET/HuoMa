@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -23,7 +25,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 在职继承 — 发起转移、追踪结果、发送交接欢迎语。
@@ -55,6 +56,7 @@ public class TransferService {
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redisTemplate;
     private final AlertService alertService;
+    private final AgentAlertRepository alertRepo;
 
     /** 超时阈值：发起转移后等待 24 小时 */
     private static final Duration TRANSFER_TIMEOUT = Duration.ofHours(24);
@@ -105,91 +107,101 @@ public class TransferService {
             log.info("客户 {} 继承正在处理中（锁占用），稍后重试", customerId);
             throw new RuntimeException("客户 " + customerId + " 继承锁占用，稍后重试");
         }
+        // 将锁释放注册到事务完成后：@Transactional 在方法返回后才提交，
+        // 若在 finally 中提前释放，其他线程可能在事务可见前查到空记录并重复发起转移
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCompletion(int status) {
+                        redisTemplate.delete(lockKey);
+                    }
+                });
+        }
+        // ---- 去重：避免同一客户重复发起继承 ----
+        // 只排除进行中/已完成的转移（pending_confirm / confirmed），
+        // timeout / rejected / api_failed / retry_limit 的客户允许重新转移。
+        // api_failed 的重试由 retryFailedTransfers() 独立控制（最多 3 次），不经过 Stream。
+        List<CustomerTransfer.TransferStatus> dedupStatuses = List.of(
+            CustomerTransfer.TransferStatus.pending_confirm,
+            CustomerTransfer.TransferStatus.confirmed);
+        if (transferRepo.existsByCustomerIdAndStatusIn(customerId, dedupStatuses)) {
+            log.info("客户 {} 已有进行中/已完成继承记录，跳过", customerId);
+            return;
+        }
+
+        // ---- 冷却期：7 天内 timeout/rejected/retry_limit 的客户不重转 ----
+        // 防止僵尸客户陷入 "发起 → 超时 → 再发起" 的死循环，浪费 API 配额
+        if (transferRepo.existsRecentTerminalByCustomerId(customerId,
+                LocalDateTime.now().minus(TRANSFER_COOLDOWN))) {
+            log.info("客户 {} 在冷却期内（{} 天内有 terminal 记录），跳过",
+                customerId, TRANSFER_COOLDOWN.toDays());
+            return;
+        }
+
+        // 根据 state（schoolId）查找活码，无对应活码则跳过
+        QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
+        if (qr == null) {
+            log.warn("继承发起跳过: 找不到对应活码, state={}, customerId={}", state, customerId);
+            return;
+        }
+
+        // 查找服务老师时包含 active/full（full 仍可接收转移），仅排除 removed
+        List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId()).stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .toList();
+
+        // 确定目标服务老师：优先使用传入的 toUserid（若仍为活跃 service/dual），否则自动查找
+        QrAgent serviceAgent = null;
+        if (toUserid != null) {
+            final String finalToUserid = toUserid;
+            serviceAgent = agents.stream()
+                .filter(a -> (a.getRole() == QrAgent.AgentRole.service
+                           || a.getRole() == QrAgent.AgentRole.dual)
+                           && a.getAgentUserid().equals(finalToUserid))
+                .findFirst().orElse(null);
+            if (serviceAgent == null) {
+                log.info("指定的服务老师 {} 已不是活跃 service/dual，改为自动查找", toUserid);
+            }
+        }
+        if (serviceAgent == null) {
+            serviceAgent = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                          || a.getRole() == QrAgent.AgentRole.dual)
+                .findFirst().orElse(null);
+        }
+
+        if (serviceAgent == null) {
+            log.info("活码 {} 未配置服务老师，跳过继承", qr.getId());
+            return;
+        }
+
+        // 跳过自己转自己（dual 角色场景）
+        if (serviceAgent.getAgentUserid().equals(fromUserid)) {
+            log.info("服务老师与接待员为同一人 (dual)，跳过继承: userid={}", fromUserid);
+            return;
+        }
+
+        // 校验服务老师企微状态：异常时跳过转移并记录告警
+        Agent svcAgentRecord = agentRepo.findById(serviceAgent.getAgentUserid()).orElse(null);
+        Employee svcEmpRecord = employeeRepo.findByUserid(serviceAgent.getAgentUserid()).orElse(null);
+        String anomaly = QrCodeService.getAnomalyLabel(svcAgentRecord, svcEmpRecord);
+        if (anomaly != null) {
+            log.warn("服务老师 {} 状态异常 ({}), 跳过转移: customerId={}",
+                serviceAgent.getAgentUserid(), anomaly, customerId);
+            transferRepo.save(CustomerTransfer.builder()
+                .customerId(customerId)
+                .fromUserid(fromUserid)
+                .toUserid(serviceAgent.getAgentUserid())
+                .qrCodeId(qr.getId())
+                .transferTime(LocalDateTime.now())
+                .status(CustomerTransfer.TransferStatus.api_failed)
+                .failReason("目标服务老师异常: " + anomaly)
+                .build());
+            return;
+        }
+
         try {
-            // ---- 去重：避免同一客户重复发起继承 ----
-            // 只排除进行中/已完成的转移（pending_confirm / confirmed），
-            // timeout / rejected / api_failed / retry_limit 的客户允许重新转移。
-            // api_failed 的重试由 retryFailedTransfers() 独立控制（最多 3 次），不经过 Stream。
-            List<CustomerTransfer.TransferStatus> dedupStatuses = List.of(
-                CustomerTransfer.TransferStatus.pending_confirm,
-                CustomerTransfer.TransferStatus.confirmed);
-            if (transferRepo.existsByCustomerIdAndStatusIn(customerId, dedupStatuses)) {
-                log.info("客户 {} 已有进行中/已完成继承记录，跳过", customerId);
-                return;
-            }
-
-            // ---- 冷却期：7 天内 timeout/rejected/retry_limit 的客户不重转 ----
-            // 防止僵尸客户陷入 "发起 → 超时 → 再发起" 的死循环，浪费 API 配额
-            if (transferRepo.existsRecentTerminalByCustomerId(customerId,
-                    LocalDateTime.now().minus(TRANSFER_COOLDOWN))) {
-                log.info("客户 {} 在冷却期内（{} 天内有 terminal 记录），跳过",
-                    customerId, TRANSFER_COOLDOWN.toDays());
-                return;
-            }
-
-            // 根据 state（schoolId）查找活码，无对应活码则跳过
-            QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
-            if (qr == null) {
-                log.warn("继承发起跳过: 找不到对应活码, state={}, customerId={}", state, customerId);
-                return;
-            }
-
-            // 查找服务老师时包含 active/full（full 仍可接收转移），仅排除 removed
-            List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId()).stream()
-                .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
-                .toList();
-
-            // 确定目标服务老师：优先使用传入的 toUserid（若仍为活跃 service/dual），否则自动查找
-            QrAgent serviceAgent = null;
-            if (toUserid != null) {
-                final String finalToUserid = toUserid;
-                serviceAgent = agents.stream()
-                    .filter(a -> (a.getRole() == QrAgent.AgentRole.service
-                               || a.getRole() == QrAgent.AgentRole.dual)
-                               && a.getAgentUserid().equals(finalToUserid))
-                    .findFirst().orElse(null);
-                if (serviceAgent == null) {
-                    log.info("指定的服务老师 {} 已不是活跃 service/dual，改为自动查找", toUserid);
-                }
-            }
-            if (serviceAgent == null) {
-                serviceAgent = agents.stream()
-                    .filter(a -> a.getRole() == QrAgent.AgentRole.service
-                              || a.getRole() == QrAgent.AgentRole.dual)
-                    .findFirst().orElse(null);
-            }
-
-            if (serviceAgent == null) {
-                log.info("活码 {} 未配置服务老师，跳过继承", qr.getId());
-                return;
-            }
-
-            // 跳过自己转自己（dual 角色场景）
-            if (serviceAgent.getAgentUserid().equals(fromUserid)) {
-                log.info("服务老师与接待员为同一人 (dual)，跳过继承: userid={}", fromUserid);
-                return;
-            }
-
-            // 校验服务老师企微状态：异常时跳过转移并记录告警
-            Agent svcAgentRecord = agentRepo.findById(serviceAgent.getAgentUserid()).orElse(null);
-            Employee svcEmpRecord = employeeRepo.findByUserid(serviceAgent.getAgentUserid()).orElse(null);
-            String anomaly = QrCodeService.getAnomalyLabel(svcAgentRecord, svcEmpRecord);
-            if (anomaly != null) {
-                log.warn("服务老师 {} 状态异常 ({}), 跳过转移: customerId={}",
-                    serviceAgent.getAgentUserid(), anomaly, customerId);
-                transferRepo.save(CustomerTransfer.builder()
-                    .customerId(customerId)
-                    .fromUserid(fromUserid)
-                    .toUserid(serviceAgent.getAgentUserid())
-                    .qrCodeId(qr.getId())
-                    .transferTime(LocalDateTime.now())
-                    .status(CustomerTransfer.TransferStatus.api_failed)
-                    .failReason("目标服务老师异常: " + anomaly)
-                    .build());
-                return;
-            }
-
-            try {
                 // 调企微 API 发起继承（含可配置的转接成功通知消息）
                 String transferSuccessMsg = resolveTransferSuccessMsg(qr);
                 wecomApi.transferCustomer(
@@ -218,21 +230,51 @@ public class TransferService {
             } catch (WecomApiException e) {
                 // 可重试异常（token 过期/限流/网络错误）→ 往上抛给 TransferWorker，
                 // 由其 classifyWecomError 决定具体重试策略（刷新 token / 等待退避 / DLQ）
-                if (e instanceof WecomTokenExpiredException
-                    || e instanceof WecomRateLimitException
-                    || e instanceof WecomTransientException) {
+                // 例外：45035（操作冲突）在转移上下文中为终端错误——表示客户已有进行中的转移
+                if (e.getErrcode() != WecomErrorCodes.TRANSFER_CONFLICT
+                    && (e instanceof WecomTokenExpiredException
+                        || e instanceof WecomRateLimitException
+                        || e instanceof WecomTransientException)) {
                     throw e;
                 }
 
                 // 永久性错误 → 落库，不阻塞主流程
-                // 84061 在继承场景下表示"客户已不是好友"，直接标记终端
-                boolean notExternalContact = e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT;
-                CustomerTransfer.TransferStatus failStatus = notExternalContact
+                // 以下错误码重试无法修复，直接标记 retry_limit：
+                //   - 84061: 客户已不是好友 → 无法发起继承
+                //   - 40205: 接管员工企微 ticket 过期 → 需员工手动登录刷新
+                //   - 84096: 客户无法发起在职继承
+                //   - 84097: 接替成员客户数已达上限
+                //   - 84100: 已有正在继承的员工（极端竞态）
+                //   - 84073: 客户已删除服务人员
+                //   - 45035: 操作冲突（客户已有进行中的转移）
+                boolean terminal = e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
+                    || e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
+                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT;
+                CustomerTransfer.TransferStatus failStatus = terminal
                     ? CustomerTransfer.TransferStatus.retry_limit
                     : CustomerTransfer.TransferStatus.api_failed;
-                String failReason = notExternalContact
-                    ? "客户已不是好友(errcode=84061)，无法发起继承"
-                    : "errcode=" + e.getErrcode() + " " + e.getErrmsg();
+                String failReason;
+                if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                    failReason = "客户已不是好友(errcode=84061)，无法发起继承";
+                } else if (e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED) {
+                    failReason = "接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权";
+                } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE) {
+                    failReason = "客户无法发起在职继承(errcode=84096)";
+                } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED) {
+                    failReason = "接替成员客户数已达上限(errcode=84097)";
+                } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS) {
+                    failReason = "已有正在继承的员工(errcode=84100)";
+                } else if (e.getErrcode() == WecomErrorCodes.DELETED_BY_USER) {
+                    failReason = "客户已删除服务人员(errcode=84073)，无法发起继承";
+                } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
+                    failReason = "操作冲突(errcode=45035)，客户已有进行中的转移";
+                } else {
+                    failReason = "errcode=" + e.getErrcode() + " " + e.getErrmsg();
+                }
 
                 transferRepo.save(CustomerTransfer.builder()
                     .customerId(customerId)
@@ -244,9 +286,9 @@ public class TransferService {
                     .failReason(failReason)
                     .build());
 
-                if (notExternalContact) {
-                    log.warn("继承发起跳过: 客户已不是好友, customerId={}, from={}, external={}",
-                        customerId, fromUserid, externalUserid);
+                if (terminal) {
+                    log.warn("继承发起跳过: 终端错误, customerId={}, from={}, external={}, errcode={}",
+                        customerId, fromUserid, externalUserid, e.getErrcode());
                 } else {
                     log.error("继承发起失败: errcode={}, errmsg={}", e.getErrcode(), e.getErrmsg());
                 }
@@ -264,9 +306,6 @@ public class TransferService {
                     .failReason(e.getMessage())
                     .build());
             }
-        } finally {
-            redisTemplate.delete(lockKey);
-        }
     }
 
     /**
@@ -299,8 +338,13 @@ public class TransferService {
      * API 参考: https://developer.work.weixin.qq.com/document/path/96327
      * </p>
      */
-    @Transactional
-    public void trackResults() {
+    /**
+     * 注意：此方法不标注 @Transactional，每条记录独立事务提交，避免长事务超时。
+     * 每条记录的 save()/find*() 由 Spring Data JPA 默认的事务机制各自包裹，
+     * 防止大量 pending_confirm 记录在单次 30s 事务中超时。
+     */
+    public List<Long> trackResults() {
+        List<Long> newlyConfirmed = new ArrayList<>();
         // 取出所有待确认且未超过最大轮询次数的记录
         List<CustomerTransfer> pendings = transferRepo
             .findByStatusAndPollCountLessThan(CustomerTransfer.TransferStatus.pending_confirm, 48);
@@ -326,7 +370,7 @@ public class TransferService {
                     case 1: // 接替完毕 → confirmed
                         t.setStatus(CustomerTransfer.TransferStatus.confirmed);
                         t.setConfirmTime(LocalDateTime.now());
-                        sendTransferGreeting(t);
+                        newlyConfirmed.add(t.getId());
                         break;
                     case 2: // 等待接替（客户尚未确认）→ 继续轮询
                         t.setPollCount(t.getPollCount() + 1);
@@ -402,6 +446,32 @@ public class TransferService {
         if (!exhausted.isEmpty()) {
             log.info("标记 {} 条轮询耗尽记录为 retry_limit", exhausted.size());
         }
+        return newlyConfirmed;
+    }
+
+    /**
+     * 发送新确认转移的交接欢迎语。
+     * <p>
+     * 从 {@link #trackResults()} 返回后单独调用，欢迎语发送（企微 API 网络 I/O）
+     * 在独立的处理周期内完成，避免阻塞轮询主流程。
+     * </p>
+     * 每条记录独立 try-catch，单条失败不影响其他。
+     * </p>
+     *
+     * @param transferIds 新确认的转移记录 ID 列表
+     */
+    public void sendGreetingsForNewlyConfirmed(List<Long> transferIds) {
+        if (transferIds == null || transferIds.isEmpty()) return;
+        for (Long id : transferIds) {
+            try {
+                CustomerTransfer transfer = transferRepo.findById(id).orElse(null);
+                if (transfer != null) {
+                    sendTransferGreeting(transfer);
+                }
+            } catch (Exception e) {
+                log.error("发送交接欢迎语失败: transferId={}", id, e);
+            }
+        }
     }
 
     /**
@@ -411,8 +481,12 @@ public class TransferService {
      * 重新调用企微 {@code transfer_customer} API。成功后状态变为 pending_confirm，
      * 失败则累加重试次数，达到上限（≥3）标记为 retry_limit。
      * </p>
+     * <p>
+     * 注意：此方法不标注 @Transactional，每条失败记录独立事务提交，避免长事务超时。
+     * 每条记录的 save()/exists*() 由 Spring Data JPA 默认的事务机制各自包裹，
+     * 防止大量失败记录在单次 30s 事务中超时。
+     * </p>
      */
-    @Transactional
     public void retryFailedTransfers() {
         List<CustomerTransfer> failed = transferRepo
             .findByStatusAndRetryCountLessThan(CustomerTransfer.TransferStatus.api_failed, 3);
@@ -436,13 +510,34 @@ public class TransferService {
                     transferRepo.save(t);
                     continue;
                 }
-                // 84061 为永久性错误（客户已不是好友），重试无效，直接标记终端
+                // 84061/40205/84096/84097/84100/84073/45035 为永久性错误，重试无效，直接标记终端
                 if (t.getFailReason() != null
-                    && t.getFailReason().contains("errcode=84061")) {
+                    && (t.getFailReason().contains("errcode=84061")
+                        || t.getFailReason().contains("errcode=40205")
+                        || t.getFailReason().contains("errcode=84096")
+                        || t.getFailReason().contains("errcode=84097")
+                        || t.getFailReason().contains("errcode=84100")
+                        || t.getFailReason().contains("errcode=84073")
+                        || t.getFailReason().contains("errcode=45035"))) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                    t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
+                    if (t.getFailReason().contains("errcode=84061")) {
+                        t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
+                    } else if (t.getFailReason().contains("errcode=40205")) {
+                        t.setFailReason("接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权");
+                    } else if (t.getFailReason().contains("errcode=84096")) {
+                        t.setFailReason("客户无法发起在职继承(errcode=84096)");
+                    } else if (t.getFailReason().contains("errcode=84097")) {
+                        t.setFailReason("接替成员客户数已达上限(errcode=84097)");
+                    } else if (t.getFailReason().contains("errcode=84100")) {
+                        t.setFailReason("已有正在继承的员工(errcode=84100)");
+                    } else if (t.getFailReason().contains("errcode=84073")) {
+                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
+                    } else {
+                        t.setFailReason("操作冲突(errcode=45035)，客户已有进行中的转移");
+                    }
                     transferRepo.save(t);
-                    log.warn("api_failed 跳过重试: 客户已不是好友, transferId={}", t.getId());
+                    log.warn("api_failed 跳过重试: transferId={}, reason={}",
+                        t.getId(), t.getFailReason());
                     continue;
                 }
                 Customer customer = customerRepo.findById(t.getCustomerId()).orElse(null);
@@ -460,12 +555,33 @@ public class TransferService {
                 transferRepo.save(t);
                 log.info("api_failed 重试成功: transferId={}", t.getId());
             } catch (WecomApiException e) {
-                // 84061 为永久性错误，不累加重试次数，直接标记终端
-                if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                // 84061/40205/84096/84097/84100/84073/45035 为永久性错误，不累加重试次数，直接标记终端
+                if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
+                    || e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
+                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER
+                    || e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                    t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
+                    if (e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED) {
+                        t.setFailReason("接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权");
+                    } else if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                        t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
+                    } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE) {
+                        t.setFailReason("客户无法发起在职继承(errcode=84096)");
+                    } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED) {
+                        t.setFailReason("接替成员客户数已达上限(errcode=84097)");
+                    } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS) {
+                        t.setFailReason("已有正在继承的员工(errcode=84100)");
+                    } else if (e.getErrcode() == WecomErrorCodes.DELETED_BY_USER) {
+                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
+                    } else {
+                        t.setFailReason("操作冲突(errcode=45035)，客户已有进行中的转移");
+                    }
                     transferRepo.save(t);
-                    log.warn("api_failed 重试终止: 客户已不是好友, transferId={}", t.getId());
+                    log.warn("api_failed 重试终止: {}, transferId={}",
+                        resolveTerminalReason(e.getErrcode()), t.getId());
                 } else {
                     t.setRetryCount(t.getRetryCount() + 1);
                     t.setFailReason("重试失败: errcode=" + e.getErrcode() + " " + e.getErrmsg());
@@ -484,46 +600,67 @@ public class TransferService {
                 transferRepo.save(t);
                 log.error("api_failed 重试异常: transferId={}", t.getId(), e);
             } finally {
+                // 每条记录处理完成后立即释放 Redis 锁（不再依赖外层事务同步），
+                // 因为每条记录已在各自的 save() 事务中提交，锁可以安全释放
                 redisTemplate.delete(retryLockKey);
             }
         }
         if (!failed.isEmpty()) {
             log.info("api_failed 重试完成: 处理 {} 条", failed.size());
+        }
 
-            // 检查是否有服务老师/双角色的转移目标出现大量 retry_limit，
-            // 若同一目标 ≥3 条则表示该服务老师可能存在企微不可用等系统性问题
-            Set<String> exhaustedTargets = failed.stream()
-                .filter(t -> t.getStatus() == CustomerTransfer.TransferStatus.retry_limit)
-                .filter(t -> t.getToUserid() != null)
-                .map(CustomerTransfer::getToUserid)
-                .collect(java.util.stream.Collectors.toSet());
+        // 无条件检查 retry_limit 累积（覆盖所有路径：initiate 终端错误 + 重试耗尽 + 轮询耗尽）
+        checkRetryLimitAccumulation();
+    }
 
-            if (!exhaustedTargets.isEmpty()) {
-                // 确认这些目标是服务老师/双角色
-                List<QrAgent> svcAgents = qrAgentRepo.findByAgentUseridIn(
-                    new ArrayList<>(exhaustedTargets));
-                Set<String> svcUserids = svcAgents.stream()
-                    .filter(a -> a.getRole() == QrAgent.AgentRole.service
-                              || a.getRole() == QrAgent.AgentRole.dual)
-                    .map(QrAgent::getAgentUserid)
-                    .collect(java.util.stream.Collectors.toSet());
+    /**
+     * 检查服务老师/双角色的 retry_limit 累积情况，达到阈值时告警。
+     * <p>
+     * 用一条 GROUP BY 查询覆盖所有到达 {@code retry_limit} 的路径：
+     * {@code initiate()} 中的终端错误（40205/84097 等直接创建 retry_limit）、
+     * {@code retryFailedTransfers()} 中的重试耗尽、
+     * {@code trackResults()} 中的轮询耗尽。
+     * </p>
+     *
+     * <p><b>三层防护：</b>
+     * <ol>
+     *   <li>子查询匹配 service/dual 角色，避免多次 JOIN 放大 COUNT</li>
+     *   <li>7 天时间窗口，防止历史问题已修复后仍重复告警</li>
+     *   <li>24h 去重：同一老师相同告警类型未处理期间不再重复创建</li>
+     * </ol>
+     * </p>
+     */
+    private void checkRetryLimitAccumulation() {
+        LocalDateTime since = LocalDateTime.now().minusDays(7);
+        List<Object[]> results = transferRepo.findRetryLimitTeachers(since);
 
-                // 跨批次累积统计：查 DB 中该目标所有 retry_limit 记录数，
-                // 而非仅看当次批量（否则分批耗尽时告警永远不触发）
-                for (String targetUserId : svcUserids) {
-                    long totalExhausted = transferRepo.countByToUseridAndStatus(
-                        targetUserId, CustomerTransfer.TransferStatus.retry_limit);
-                    if (totalExhausted >= 3) {
-                        alertService.createAlert(targetUserId,
-                            "transfer_retry_exhausted_svc",
-                            AgentAlert.AlertSeverity.high,
-                            String.format("服务老师/双角色 %s 有 %d 条继承转移已达重试上限，"
-                                + "可能存在企微不可用或账号异常，请检查",
-                                targetUserId, totalExhausted),
-                            AgentAlert.AutoAction.none, null);
-                    }
-                }
+        if (results.isEmpty()) {
+            return;
+        }
+
+        LocalDateTime dedupSince = LocalDateTime.now().minusHours(24);
+
+        for (Object[] row : results) {
+            String toUserid = (String) row[0];
+            long count = ((Number) row[1]).longValue();
+
+            // 24h 去重：已有未处理同类告警则跳过
+            List<AgentAlert> existing = alertRepo
+                .findByAgentUseridAndAlertTypeAndStatusAndCreatedAtAfter(
+                    toUserid, "transfer_retry_exhausted_svc",
+                    AgentAlert.AlertStatus.open, dedupSince);
+            if (!existing.isEmpty()) {
+                log.info("服务老师 {} 24h 内已有未处理告警，跳过重复告警", toUserid);
+                continue;
             }
+
+            alertService.createAlert(toUserid,
+                "transfer_retry_exhausted_svc",
+                AgentAlert.AlertSeverity.high,
+                String.format("服务老师/双角色 %s 近 7 天有 %d 条继承转移已达重试上限，"
+                    + "可能存在企微不可用或账号异常，请检查",
+                    toUserid, count),
+                AgentAlert.AutoAction.none, null);
         }
     }
 
@@ -662,6 +799,8 @@ public class TransferService {
 
             transfer.setGreetingSent(true);
             transfer.setNoteSent(true);
+            // 立即落库，防止调用方后续异常导致 greetingSent 标记丢失而重复发送
+            transferRepo.save(transfer);
         } catch (Exception e) {
             log.error("发送交接欢迎语失败: transferId={}", transfer.getId(), e);
         }
@@ -804,5 +943,19 @@ public class TransferService {
         return employeeRepo.findByUserid(userid)
             .map(Employee::getName)
             .orElse(userid);
+    }
+
+    /** 终端错误码 → 可读原因（用于日志） */
+    private static String resolveTerminalReason(int errcode) {
+        return switch (errcode) {
+            case WecomErrorCodes.NOT_EXTERNAL_CONTACT -> "客户已不是好友";
+            case WecomErrorCodes.TICKET_EXPIRED -> "企微票据过期";
+            case WecomErrorCodes.TRANSFER_NOT_AVAILABLE -> "客户无法发起继承";
+            case WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED -> "接替成员达上限";
+            case WecomErrorCodes.TRANSFER_PENDING_EXISTS -> "已有继承中的员工";
+            case WecomErrorCodes.DELETED_BY_USER -> "客户已删除服务人员";
+            case WecomErrorCodes.TRANSFER_CONFLICT -> "操作冲突(已有进行中转移)";
+            default -> "errcode=" + errcode;
+        };
     }
 }
