@@ -444,6 +444,13 @@ public class TagService {
                 JsonNode tagNode = group.get("tag");
                 if (tagNode.isArray() && tagNode.size() > 0) {
                     String wecomTagId = tagNode.get(0).get("id").asText();
+                    // 创建成功后同步更新缓存，避免后续请求做无意义的"重同步"
+                    if (group.has("group_name") && cachedTagNameToId != null) {
+                        String actualGroupName = group.get("group_name").asText().trim();
+                        if (!actualGroupName.isEmpty()) {
+                            cachedTagNameToId.put(actualGroupName + "|" + tagName, wecomTagId);
+                        }
+                    }
                     log.info("企微标签已创建: name={}, wecomTagId={}, groupKeyword={}",
                         tagName, wecomTagId, groupKeyword);
                     return wecomTagId;
