@@ -266,7 +266,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      * @param end        添加时间上限（不含）
      * @return 无进行中/已完成转移记录的客户列表，按添加时间升序排列
      */
-    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime >= :start AND c.addTime < :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed'))")
+    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime >= :start AND c.addTime < :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed', 'api_failed'))")
     List<Customer> findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
         @Param("addedAgent") String addedAgent,
         @Param("schoolId") String schoolId,

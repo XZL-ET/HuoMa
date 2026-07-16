@@ -101,7 +101,7 @@ public class TransferService {
         // ---- Redis 分布式锁：防止同一客户并发发起重复继承 ----
         String lockKey = "lock:transfer:" + customerId;
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(lockKey, "1", Duration.ofSeconds(30));
+            .setIfAbsent(lockKey, "1", Duration.ofSeconds(120));
         if (!Boolean.TRUE.equals(locked)) {
             // 锁被占用说明另一线程正在处理同一客户，抛异常让 TransferWorker 重试而非静默跳过
             log.info("客户 {} 继承正在处理中（锁占用），稍后重试", customerId);
@@ -345,48 +345,61 @@ public class TransferService {
      */
     public List<Long> trackResults() {
         List<Long> newlyConfirmed = new ArrayList<>();
-        // 取出所有待确认且未超过最大轮询次数的记录
         List<CustomerTransfer> pendings = transferRepo
             .findByStatusAndPollCountLessThan(CustomerTransfer.TransferStatus.pending_confirm, 48);
 
         for (CustomerTransfer t : pendings) {
             try {
-                // 调企微 API 查询继承结果，需传原接待员、目标接待员和外部联系人 ID
-                JsonNode result = wecomApi.getTransferResult(
-                    t.getFromUserid(), t.getToUserid(),
-                    customerRepo.findById(t.getCustomerId())
-                        .map(Customer::getExternalUserid).orElse(""));
+                // 获取客户的 external_userid 用于在 API 返回数组中匹配
+                String externalUserid = customerRepo.findById(t.getCustomerId())
+                    .map(Customer::getExternalUserid).orElse("");
 
-                // 企微 get_transfer_result 返回 customer[].status 整数:
-                //   1=接替完毕  2=等待接替(客户未确认)  3=客户拒绝
-                //   4=接替成员客户达上限  5=无接替记录
-                // 参考: https://developer.work.weixin.qq.com/document/path/96327
-                int apiStatus = result.has("customer")
-                    && result.get("customer").isArray()
-                    && result.get("customer").size() > 0
-                    ? result.get("customer").get(0).get("status").asInt(-1) : -1;
+                // 调企微 API 查询继承结果（不再传 external_userid 给 API，
+                // 改为遍历返回的 customer 数组按 external_userid 匹配目标客户）
+                JsonNode result = wecomApi.getTransferResult(
+                    t.getFromUserid(), t.getToUserid(), externalUserid);
+                int apiStatus = findCustomerStatus(result, externalUserid);
+
+                // 第一页未找到目标客户时，翻页查找（最多 5 页）
+                String cursor = (apiStatus == -1 && result.has("next_cursor"))
+                    ? result.get("next_cursor").asText() : null;
+                int pageCount = 0;
+                while (apiStatus == -1 && cursor != null && !cursor.isEmpty() && pageCount < 5) {
+                    result = wecomApi.getTransferResult(
+                        t.getFromUserid(), t.getToUserid(), externalUserid, cursor);
+                    apiStatus = findCustomerStatus(result, externalUserid);
+                    cursor = (apiStatus == -1 && result.has("next_cursor"))
+                        ? result.get("next_cursor").asText() : null;
+                    pageCount++;
+                }
+
+                // 统一的超时基准时间
+                LocalDateTime refTime = t.getTransferTime() != null
+                    ? t.getTransferTime()
+                    : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
+                boolean expired = refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now());
 
                 switch (apiStatus) {
                     case 1: // 接替完毕 → confirmed
                         t.setStatus(CustomerTransfer.TransferStatus.confirmed);
                         t.setConfirmTime(LocalDateTime.now());
                         newlyConfirmed.add(t.getId());
+                        log.info("转移已确认: transferId={}, customerId={}, pollCount={}",
+                            t.getId(), t.getCustomerId(), t.getPollCount());
                         break;
-                    case 2: // 等待接替（客户尚未确认）→ 继续轮询
+                    case 2: // 等待接替（客户尚未确认）
                         t.setPollCount(t.getPollCount() + 1);
-                        LocalDateTime waitRefTime = t.getTransferTime() != null
-                            ? t.getTransferTime()
-                            : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
-                        if (waitRefTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
-                            t.setStatus(CustomerTransfer.TransferStatus.timeout);
-                            t.setFailReason("客户超时未确认 (24h)");
-                        } else if (t.getPollCount() >= 48) {
-                            t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                            t.setFailReason("轮询次数耗尽 (≥48 次)");
+                        if (expired) {
+                            // 企微静默 24h 后自动完成转移，标记 confirmed
+                            t.setStatus(CustomerTransfer.TransferStatus.confirmed);
+                            t.setConfirmTime(LocalDateTime.now());
+                            newlyConfirmed.add(t.getId());
+                            log.info("转移超时自动确认(API status=2): transferId={}, customerId={}",
+                                t.getId(), t.getCustomerId());
                         }
                         break;
                     case 3: // 客户拒绝 → rejected
-                    case 4: // 接替成员客户数达上限（终态，重试无用）
+                    case 4: // 接替成员客户数达上限（终态）
                         t.setStatus(CustomerTransfer.TransferStatus.rejected);
                         t.setConfirmTime(LocalDateTime.now());
                         if (apiStatus == 4) {
@@ -394,59 +407,103 @@ public class TransferService {
                         }
                         break;
                     default:
-                        // 状态码 5（无接替记录）/ -1（customer 数组为空）/ 未知码
-                        log.warn("getTransferResult 返回非预期状态: apiStatus={}, transferId={}",
-                            apiStatus, t.getId());
+                        // 状态码 5（无此转移记录）/ -1（未找到目标客户）/ 未知码
                         t.setPollCount(t.getPollCount() + 1);
-                        LocalDateTime referenceTime = t.getTransferTime() != null
-                            ? t.getTransferTime()
-                            : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
-                        if (referenceTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
-                            t.setStatus(CustomerTransfer.TransferStatus.timeout);
-                            t.setFailReason("转移超时 (24h)");
-                        } else if (t.getPollCount() >= 48) {
-                            t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                            t.setFailReason("轮询次数耗尽 (≥48 次)");
+                        if (expired) {
+                            // 企微静默 24h 后自动完成，API 可能已不返回该记录
+                            t.setStatus(CustomerTransfer.TransferStatus.confirmed);
+                            t.setConfirmTime(LocalDateTime.now());
+                            t.setFailReason("企微24h自动完成(API未找到记录)");
+                            newlyConfirmed.add(t.getId());
+                            log.info("转移超时自动确认(API未找到): transferId={}, customerId={}",
+                                t.getId(), t.getCustomerId());
+                        } else {
+                            log.debug("getTransferResult 未找到目标客户: transferId={}, apiStatus={}",
+                                t.getId(), apiStatus);
                         }
                 }
                 transferRepo.save(t);
             } catch (WecomApiException e) {
-                // API 调用失败，累加轮询次数
                 t.setPollCount(t.getPollCount() + 1);
-                if (t.getPollCount() >= 48) {
-                    t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                    t.setFailReason("API 追踪失败耗尽: " + e.getErrmsg());
+                LocalDateTime refTime = t.getTransferTime() != null
+                    ? t.getTransferTime()
+                    : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
+                if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
+                    // 超时且 API 异常 → 企微侧大概率已完成
+                    t.setStatus(CustomerTransfer.TransferStatus.confirmed);
+                    t.setConfirmTime(LocalDateTime.now());
+                    t.setFailReason("企微24h自动完成(API异常:" + e.getErrmsg() + ")");
+                    newlyConfirmed.add(t.getId());
+                    log.info("转移超时自动确认(API异常): transferId={}, errcode={}",
+                        t.getId(), e.getErrcode());
                 }
                 transferRepo.save(t);
                 log.error("追踪继承结果 API 失败: transferId={}, errcode={}, errmsg={}",
                     t.getId(), e.getErrcode(), e.getErrmsg());
             } catch (Exception e) {
-                // 单条追踪异常不中断批量处理，计数后继续下一条
                 t.setPollCount(t.getPollCount() + 1);
-                if (t.getPollCount() >= 48) {
-                    t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                    t.setFailReason("追踪异常耗尽: " + e.getMessage());
+                LocalDateTime refTime = t.getTransferTime() != null
+                    ? t.getTransferTime()
+                    : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
+                if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
+                    t.setStatus(CustomerTransfer.TransferStatus.confirmed);
+                    t.setConfirmTime(LocalDateTime.now());
+                    t.setFailReason("企微24h自动完成(异常:" + e.getMessage() + ")");
+                    newlyConfirmed.add(t.getId());
                 }
                 transferRepo.save(t);
                 log.error("追踪继承结果异常: transferId={}", t.getId(), e);
             }
         }
 
-        // 安全网：处理主循环前就已耗尽（pollCount ≥48）的 pending_confirm 记录（历史遗留数据）
-        // 新产生的 retry_limit 已在主循环内联标记，此处仅兜底
+        // 安全网：历史遗留 pollCount ≥48 的 pending_confirm 记录
+        // 修复前这些会被标记 retry_limit，修复后按超时逻辑处理
         List<CustomerTransfer> exhausted = transferRepo
             .findByStatusAndPollCountGreaterThanEqual(
                 CustomerTransfer.TransferStatus.pending_confirm, 48);
         for (CustomerTransfer t : exhausted) {
-            t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-            t.setFailReason("轮询次数耗尽 (≥48 次)");
+            LocalDateTime refTime = t.getTransferTime() != null
+                ? t.getTransferTime()
+                : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
+            if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
+                // 已超 24h → 企微应已完成自动转移
+                // confirmTime 取实际完成时间（transferTime+24h）而非 now，
+                // 避免欢迎语窗口误判：老记录的实际完成时间远早于 now，
+                // 用 now 会导致 sendGreetingsForNewlyConfirmed 跳不过旧记录
+                t.setStatus(CustomerTransfer.TransferStatus.confirmed);
+                t.setConfirmTime(refTime.plus(TRANSFER_TIMEOUT));
+                t.setFailReason("企微24h自动完成(历史兜底)");
+                newlyConfirmed.add(t.getId());
+                log.info("历史转移自动确认: id={}, customerId={}", t.getId(), t.getCustomerId());
+            }
+            // 未超 24h 但 pollCount ≥48 的情况极罕见，保留 retry_limit 作为安全阀
             transferRepo.save(t);
-            log.warn("转移记录标记为 retry_limit: id={}, customerId={}", t.getId(), t.getCustomerId());
         }
         if (!exhausted.isEmpty()) {
-            log.info("标记 {} 条轮询耗尽记录为 retry_limit", exhausted.size());
+            log.info("历史安全网处理: {} 条记录, confirmed={}",
+                exhausted.size(),
+                exhausted.stream().filter(t -> t.getStatus() == CustomerTransfer.TransferStatus.confirmed).count());
         }
         return newlyConfirmed;
+    }
+
+    /**
+     * 在 get_transfer_result 返回的 customer 数组中匹配目标客户。
+     *
+     * @param result         企微 API 返回的 JsonNode
+     * @param externalUserid 目标客户的 external_userid
+     * @return 匹配到的 status 值，未找到返回 -1
+     */
+    private int findCustomerStatus(JsonNode result, String externalUserid) {
+        if (result.has("customer") && result.get("customer").isArray()) {
+            for (JsonNode c : result.get("customer")) {
+                if (c.has("external_userid")
+                    && externalUserid.equals(c.get("external_userid").asText())) {
+                    return c.has("status") ? c.get("status").asInt(-1) : -1;
+                }
+            }
+        }
+        return -1;
     }
 
     /**
@@ -462,15 +519,33 @@ public class TransferService {
      */
     public void sendGreetingsForNewlyConfirmed(List<Long> transferIds) {
         if (transferIds == null || transferIds.isEmpty()) return;
+        // 超过 24h 确认的旧记录不发欢迎语，避免对历史客户造成骚扰
+        LocalDateTime greetingCutoff = LocalDateTime.now().minusHours(24);
+        int sentCount = 0;
+        int skippedOld = 0;
         for (Long id : transferIds) {
             try {
                 CustomerTransfer transfer = transferRepo.findById(id).orElse(null);
-                if (transfer != null) {
-                    sendTransferGreeting(transfer);
+                if (transfer == null) continue;
+                if (transfer.getConfirmTime() != null
+                    && transfer.getConfirmTime().isBefore(greetingCutoff)) {
+                    // 欢迎语发送窗口已过（确认时间超过 24h），跳过
+                    skippedOld++;
+                    continue;
+                }
+                sendTransferGreeting(transfer);
+                sentCount++;
+                // 限速保护：每 10 条间隔 200ms，避免冲击企微消息 API
+                if (sentCount % 10 == 0) {
+                    try { Thread.sleep(200); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
                 }
             } catch (Exception e) {
                 log.error("发送交接欢迎语失败: transferId={}", id, e);
             }
+        }
+        if (skippedOld > 0) {
+            log.info("跳过 {} 条超 24h 旧记录的欢迎语发送", skippedOld);
         }
     }
 
@@ -495,7 +570,7 @@ public class TransferService {
             // ---- Redis 分布式锁：防止同客户两条 api_failed 记录并发重试 ----
             String retryLockKey = "lock:transfer:" + t.getCustomerId();
             Boolean retryLocked = redisTemplate.opsForValue()
-                .setIfAbsent(retryLockKey, "1", Duration.ofSeconds(30));
+                .setIfAbsent(retryLockKey, "1", Duration.ofSeconds(120));
             if (!Boolean.TRUE.equals(retryLocked)) {
                 // 锁占用，跳过本次重试（下次周期再试）
                 continue;
@@ -609,6 +684,22 @@ public class TransferService {
             log.info("api_failed 重试完成: 处理 {} 条", failed.size());
         }
 
+        // 安全网：retryCount ≥3 但仍为 api_failed 的记录（极端崩溃场景兜底）
+        List<CustomerTransfer> exhaustedRetries = transferRepo
+            .findByStatusAndRetryCountGreaterThanEqual(
+                CustomerTransfer.TransferStatus.api_failed, 3);
+        for (CustomerTransfer t : exhaustedRetries) {
+            t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
+            if (t.getFailReason() == null || t.getFailReason().isBlank()) {
+                t.setFailReason("重试耗尽(安全网兜底)");
+            }
+            transferRepo.save(t);
+            log.warn("api_failed 安全网兜底: transferId={}, retryCount={}", t.getId(), t.getRetryCount());
+        }
+        if (!exhaustedRetries.isEmpty()) {
+            log.info("api_failed 安全网处理: {} 条 → retry_limit", exhaustedRetries.size());
+        }
+
         // 无条件检查 retry_limit 累积（覆盖所有路径：initiate 终端错误 + 重试耗尽 + 轮询耗尽）
         checkRetryLimitAccumulation();
     }
@@ -616,10 +707,14 @@ public class TransferService {
     /**
      * 检查服务老师/双角色的 retry_limit 累积情况，达到阈值时告警。
      * <p>
-     * 用一条 GROUP BY 查询覆盖所有到达 {@code retry_limit} 的路径：
-     * {@code initiate()} 中的终端错误（40205/84097 等直接创建 retry_limit）、
-     * {@code retryFailedTransfers()} 中的重试耗尽、
-     * {@code trackResults()} 中的轮询耗尽。
+     * retry_limit 的三大来源（按常见程度排序）：
+     * <ol>
+     *   <li>{@code initiate()} 终端错误 — errcode=40205 企微票据过期 / 84097 客户数上限</li>
+     *   <li>{@code retryFailedTransfers()} 重试耗尽 — API 调用经 3 次重试仍失败</li>
+     *   <li>{@code trackResults()} 轮询耗尽 — 仅未满 24h 但 pollCount 已 ≥48 的极端情况</li>
+     * </ol>
+     * 注意：24h 超时的 pending_confirm 记录在 trackResults 中已直接标记 confirmed，
+     * 不再落入 retry_limit，因此告警主要针对真实的 API 层问题。
      * </p>
      *
      * <p><b>三层防护：</b>
@@ -654,12 +749,16 @@ public class TransferService {
                 continue;
             }
 
-            alertService.createAlert(toUserid,
-                "transfer_retry_exhausted_svc",
-                AgentAlert.AlertSeverity.high,
-                String.format("服务老师/双角色 %s 近 7 天有 %d 条继承转移已达重试上限，"
-                    + "可能存在企微不可用或账号异常，请检查",
-                    toUserid, count),
+            // 不同原因给不同的告警文案，帮助运维快速判断
+            String alertType = "transfer_retry_exhausted_svc";
+            String message = String.format(
+                "服务老师/双角色 %s 近 7 天有 %d 条继承转移已达重试上限。"
+                + "常见原因：企微票据过期需重新登录(40205)、客户数达上限(84097)、操作冲突(45035)。"
+                + "请检查该老师企微状态及客户配额。",
+                toUserid, count);
+
+            alertService.createAlert(toUserid, alertType,
+                AgentAlert.AlertSeverity.high, message,
                 AgentAlert.AutoAction.none, null);
         }
     }

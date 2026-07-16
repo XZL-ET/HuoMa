@@ -547,14 +547,43 @@ public class WecomApiClient {
      * @return JsonNode 包含 {@code customer} 数组，每个元素含 {@code external_userid} 和 {@code status}
      * @throws WecomApiException API 调用失败时抛出
      */
+    /**
+     * 查询在职继承结果（无 cursor，返回第一页）。
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 目标客户 external_userid（仅用于调用方匹配，不传给企微 API）
+     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
+     */
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
                                        String externalUserid) {
+        return getTransferResult(handoverUserid, takeoverUserid, externalUserid, null);
+    }
+
+    /**
+     * 查询在职继承结果（带 cursor 分页）。
+     * <p>
+     * 企微 API 只接受 {@code handover_userid}、{@code takeover_userid}、{@code cursor}
+     * 三个参数，{@code external_userid} 仅用于调用方在返回的 {@code customer} 数组中
+     * 匹配目标客户，不传给企微 API。
+     * </p>
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 目标客户 external_userid（不传给 API，仅供签名兼容）
+     * @param cursor         分页游标，{@code null} 或空字符串表示第一页
+     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
+     */
+    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
+                                       String externalUserid, String cursor) {
         String url = BASE_URL + "/externalcontact/get_transfer_result?access_token=" + getAccessToken();
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
-            bodyMap.put("external_userid", externalUserid);
+            if (cursor != null && !cursor.isEmpty()) {
+                bodyMap.put("cursor", cursor);
+            }
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
             return parseAndCheck(resp, "查询继承结果");
@@ -921,7 +950,7 @@ public class WecomApiClient {
      * <ul>
      *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
      *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
-     *   <li>-1（网络/解析异常）、≥50000（服务端错误）→ {@link WecomTransientException}</li>
+     *   <li>45035（操作冲突）、-1（网络/解析异常）、≥50000（服务端错误）→ {@link WecomTransientException}</li>
      *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
      * </ul>
      *
@@ -936,7 +965,7 @@ public class WecomApiClient {
         if (errcode == 45009) {
             throw new WecomRateLimitException(errcode, errmsg, body, 60);
         }
-        if (errcode == -1 || errcode >= 50000) {
+        if (errcode == 45035 || errcode == -1 || errcode >= 50000) {
             throw new WecomTransientException(errcode, errmsg, body);
         }
         throw new WecomPermanentException(errcode, errmsg, body);
