@@ -1,11 +1,14 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.Agent;
+import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,6 +48,8 @@ public class EmployeeSyncService {
     private final GlobalAgentPoolService poolService;
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
+    private final QrAgentRepository qrAgentRepo;
+    private final AlertService alertService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -143,7 +148,64 @@ public class EmployeeSyncService {
         // 标记已不在企微通讯录中的员工为离职
         int deactivated = 0;
         if (!activeUserIds.isEmpty()) {
+            // 级联清理：先查出即将被标记离职的 userid，再同步更新 agent / qr_agent
+            // 避免离职员工的 userid 继续被推送到企微 API 导致 60111
+            List<String> toDeactivate = employeeRepo.findAllByActiveTrueOrderByName().stream()
+                .map(Employee::getUserid)
+                .filter(uid -> !activeUserIds.contains(uid))
+                .toList();
+
             deactivated = employeeRepo.deactivateNotIn(activeUserIds);
+
+            if (!toDeactivate.isEmpty()) {
+                // 安全网：如果要标记离职的人数超过当前在职员工的 30%，可能是 API 返回异常
+                // 此时跳过级联清理，只标记 employee.active=false（可恢复），避免误伤 agent/qr_agent
+                // 注：activeBefore 在 deactivateNotIn 之后查询，实际值略小于真实值，
+                //     这会使比率偏高（更保守），不影响安全性
+                int activeAfterDeactivate = employeeRepo.findAllByActiveTrueOrderByName().size();
+                double ratio = (double) toDeactivate.size() / Math.max(activeAfterDeactivate + toDeactivate.size(), 1);
+                if (ratio > 0.30) {
+                    log.error("员工离职比例异常({}/{}={}%)，跳过级联清理防止误伤。userids={}",
+                        toDeactivate.size(), activeAfterDeactivate + toDeactivate.size(),
+                        (int)(ratio * 100),
+                        toDeactivate.size() <= 20 ? toDeactivate : toDeactivate.subList(0, 20) + "…");
+                } else {
+                    // 先找出服务老师（在下码之前查），后续单独发告警
+                    List<String> serviceUserIds = qrAgentRepo.findServiceUseridsIn(toDeactivate);
+
+                    // 所有离职员工统一封禁 agent + 下码（防止 60111）
+                    int blocked = agentRepo.batchBlockByUserids(toDeactivate);
+                    int removed = qrAgentRepo.batchRemoveByAgentUserids(toDeactivate);
+
+                    // 服务老师/双角色额外创建告警，提醒管理员做在职继承
+                    int alerted = 0;
+                    if (!serviceUserIds.isEmpty()) {
+                        for (String uid : serviceUserIds) {
+                            try {
+                                // 下码后查询该老师所有受影响活码（此时 status 已变为 removed）
+                                List<String> qrNames = qrAgentRepo.findByAgentUserid(uid).stream()
+                                    .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.removed
+                                        && toDeactivate.contains(qa.getAgentUserid()))
+                                    .map(qa -> "活码" + qa.getQrCodeId())
+                                    .distinct()
+                                    .toList();
+                                alertService.createAlert(uid, "employee_departed_service",
+                                    AgentAlert.AlertSeverity.high,
+                                    String.format("服务老师 %s 已从企微离职，已自动下码，请手动处理在职继承。关联活码: %s",
+                                        uid, String.join(", ", qrNames)),
+                                    AgentAlert.AutoAction.none, null);
+                                alerted++;
+                            } catch (Exception e) {
+                                log.error("服务老师离职告警失败: userid={}", uid, e);
+                            }
+                        }
+                    }
+
+                    log.info("员工离职级联清理: 标记离职{}人, agent封禁{}人, qr_agent移除{}人, 服务老师告警{}人, userids={}",
+                        deactivated, blocked, removed, alerted,
+                        toDeactivate.size() <= 10 ? toDeactivate : toDeactivate.subList(0, 10) + "…共" + toDeactivate.size() + "人");
+                }
+            }
         }
 
         log.info("员工同步结果: 新增{}人, 更新{}人, 标记离职{}人, 在职共{}人",

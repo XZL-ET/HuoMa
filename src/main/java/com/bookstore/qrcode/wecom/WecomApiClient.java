@@ -950,7 +950,7 @@ public class WecomApiClient {
      * <ul>
      *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
      *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
-     *   <li>45035（操作冲突）、-1（网络/解析异常）、≥50000（服务端错误）→ {@link WecomTransientException}</li>
+     *   <li>45035（操作冲突）、-1（网络/解析异常）、50000–59999（服务端错误）→ {@link WecomTransientException}</li>
      *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
      * </ul>
      *
@@ -965,7 +965,7 @@ public class WecomApiClient {
         if (errcode == 45009) {
             throw new WecomRateLimitException(errcode, errmsg, body, 60);
         }
-        if (errcode == 45035 || errcode == -1 || errcode >= 50000) {
+        if (errcode == 45035 || errcode == -1 || (errcode >= 50000 && errcode < 60000)) {
             throw new WecomTransientException(errcode, errmsg, body);
         }
         throw new WecomPermanentException(errcode, errmsg, body);

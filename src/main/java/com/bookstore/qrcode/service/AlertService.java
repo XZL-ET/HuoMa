@@ -10,6 +10,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
@@ -220,7 +221,7 @@ public class AlertService {
      * @param qrCodeId    关联的活码 ID（可为 null）
      * @return 持久化后的 {@link AgentAlert} 实体，若序列化失败则返回 null
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AgentAlert createAlert(String agentUserid, String alertType,
                                    AgentAlert.AlertSeverity severity,
                                    Object detail,
