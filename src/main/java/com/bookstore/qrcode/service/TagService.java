@@ -114,22 +114,28 @@ public class TagService {
             log.info("自动打标 本地关联已写入: customerId={}, tags=[{},{},{}]",
                 customer.getId(), cityTag.getName(), districtTag.getName(), schoolTag.getName());
 
-            // ===== 同步到企业微信（逐个调用，瞬态失败收集后重试，永久失败仅记日志）=====
+            // ===== 同步到企业微信（一次批量调用，避免并发 45035 冲突）=====
             List<String> transientFailures = new ArrayList<>();
+            List<String> batchTagIds = new ArrayList<>();
+            List<String> batchTagNames = new ArrayList<>();
             for (Tag t : new Tag[]{cityTag, districtTag, schoolTag}) {
                 if (t.getWecomTagId() != null) {
-                    try {
-                        wecomApi.markTag(externalUserId, userId, List.of(t.getWecomTagId()));
-                        log.info("企微打标成功: tag={}, wecomTagId={}", t.getName(), t.getWecomTagId());
-                    } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
-                        transientFailures.add(t.getName());
-                        log.error("企微打标失败(可重试): tag={}, wecomTagId={}, errcode={}",
-                            t.getName(), t.getWecomTagId(), e.getErrcode(), e);
-                    } catch (Exception e) {
-                        log.error("企微打标失败(永久): tag={}, wecomTagId={}", t.getName(), t.getWecomTagId(), e);
-                    }
+                    batchTagIds.add(t.getWecomTagId());
+                    batchTagNames.add(t.getName());
                 } else {
                     log.warn("企微打标跳过(无wecomTagId): tag={}", t.getName());
+                }
+            }
+            if (!batchTagIds.isEmpty()) {
+                try {
+                    wecomApi.markTag(externalUserId, userId, batchTagIds);
+                    log.info("企微打标成功(批量): tags={}, wecomTagIds={}", batchTagNames, batchTagIds);
+                } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
+                    transientFailures.addAll(batchTagNames);
+                    log.error("企微打标失败(可重试): tags={}, wecomTagIds={}, errcode={}",
+                        batchTagNames, batchTagIds, e.getErrcode(), e);
+                } catch (Exception e) {
+                    log.error("企微打标失败(永久): tags={}, wecomTagIds={}", batchTagNames, batchTagIds, e);
                 }
             }
 
@@ -137,6 +143,8 @@ public class TagService {
             // 支持两种格式：
             //   "标签名"              → 默认归入"学校"标签组（向后兼容）
             //   "标签组名:标签名"      → 归入指定标签组，如 "客户等级:VIP客户"
+            List<String> customTagIds = new ArrayList<>();
+            List<String> customTagNames = new ArrayList<>();
             if (qr.getCustomTags() != null && !qr.getCustomTags().isBlank()) {
                 for (String entry : qr.getCustomTags().split(",")) {
                     String trimmed = entry.trim();
@@ -162,19 +170,21 @@ public class TagService {
                     Tag customTag = getOrCreateTag(tagName, Tag.TagType.system, null, groupKeyword);
                     bindCustomerTag(customer.getId(), customTag.getId(), "system");
                     if (customTag.getWecomTagId() != null) {
-                        try {
-                            wecomApi.markTag(externalUserId, userId, List.of(customTag.getWecomTagId()));
-                            log.info("企微打标成功(自定义): tag={}, group={}, wecomTagId={}",
-                                customTag.getName(), groupKeyword, customTag.getWecomTagId());
-                        } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
-                            transientFailures.add(customTag.getName());
-                            log.error("企微打标失败(可重试): tag={}, group={}, wecomTagId={}, errcode={}",
-                                customTag.getName(), groupKeyword, customTag.getWecomTagId(),
-                                e.getErrcode(), e);
-                        } catch (Exception e) {
-                            log.error("企微打标失败(永久): tag={}, group={}, wecomTagId={}",
-                                customTag.getName(), groupKeyword, customTag.getWecomTagId(), e);
-                        }
+                        customTagIds.add(customTag.getWecomTagId());
+                        customTagNames.add(customTag.getName());
+                    }
+                }
+                // 一次性批量同步自定义标签到企微（避免并发 45035 冲突）
+                if (!customTagIds.isEmpty()) {
+                    try {
+                        wecomApi.markTag(externalUserId, userId, customTagIds);
+                        log.info("企微打标成功(自定义批量): tags={}, wecomTagIds={}", customTagNames, customTagIds);
+                    } catch (WecomTokenExpiredException | WecomRateLimitException | WecomTransientException e) {
+                        transientFailures.addAll(customTagNames);
+                        log.error("企微打标失败(可重试): tags={}, wecomTagIds={}, errcode={}",
+                            customTagNames, customTagIds, e.getErrcode(), e);
+                    } catch (Exception e) {
+                        log.error("企微打标失败(永久): tags={}, wecomTagIds={}", customTagNames, customTagIds, e);
                     }
                 }
             }
@@ -865,23 +875,20 @@ public class TagService {
             // 客户不存在时跳过（可能是回调异常或数据尚未同步）
             if (customer == null) return;
 
-            // 打年级标签（归入"学校"标签组）
+            // 收集年级和班级标签，批量同步到企微（避免并发 45035 冲突）
+            java.util.List<String> batchIds = new java.util.ArrayList<>();
             if (grade != null) {
                 Tag gradeTag = getOrCreateTag(grade, Tag.TagType.form, null, "学校");
                 bindCustomerTag(customer.getId(), gradeTag.getId(), "form");
-                // 同步到企微
-                if (gradeTag.getWecomTagId() != null) {
-                    wecomApi.markTag(externalUserId, userId, List.of(gradeTag.getWecomTagId()));
-                }
+                if (gradeTag.getWecomTagId() != null) batchIds.add(gradeTag.getWecomTagId());
             }
-            // 打班级标签（归入"学校"标签组）
             if (className != null) {
                 Tag classTag = getOrCreateTag(className, Tag.TagType.form, null, "学校");
                 bindCustomerTag(customer.getId(), classTag.getId(), "form");
-                // 同步到企微
-                if (classTag.getWecomTagId() != null) {
-                    wecomApi.markTag(externalUserId, userId, List.of(classTag.getWecomTagId()));
-                }
+                if (classTag.getWecomTagId() != null) batchIds.add(classTag.getWecomTagId());
+            }
+            if (!batchIds.isEmpty()) {
+                wecomApi.markTag(externalUserId, userId, batchIds);
             }
         } catch (Exception e) {
             // 表单打标是附加操作，异常不应影响主流程
@@ -918,13 +925,14 @@ public class TagService {
 
             List<String> appliedTags = new ArrayList<>();
             final String[] remarkText = { null };
+            java.util.List<String> pendingWecomTagIds = new java.util.ArrayList<>();
 
             // 区域联盟：客户选择的学校也打成标签
             if (schoolName != null && !schoolName.isBlank()) {
                 Tag schoolTag = getOrCreateTag(schoolName, Tag.TagType.form, null, schoolGroupKeyword);
                 bindCustomerTag(customer.getId(), schoolTag.getId(), "form");
                 if (schoolTag.getWecomTagId() != null) {
-                    wecomApi.markTag(externalUserId, userId, List.of(schoolTag.getWecomTagId()));
+                    pendingWecomTagIds.add(schoolTag.getWecomTagId());
                     appliedTags.add(schoolTag.getName());
                 }
             }
@@ -953,10 +961,15 @@ public class TagService {
                     Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, groupKeyword);
                     bindCustomerTag(customer.getId(), tag.getId(), "form");
                     if (tag.getWecomTagId() != null) {
-                        wecomApi.markTag(externalUserId, userId, List.of(tag.getWecomTagId()));
+                        pendingWecomTagIds.add(tag.getWecomTagId());
                         appliedTags.add(tag.getName());
                     }
                 }
+            }
+
+            // 一次性批量同步所有标签到企微（避免并发 45035 冲突）
+            if (!pendingWecomTagIds.isEmpty()) {
+                wecomApi.markTag(externalUserId, userId, pendingWecomTagIds);
             }
 
             // 按 remark_template 拼接备注
