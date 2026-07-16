@@ -552,7 +552,7 @@ public class WecomApiClient {
      *
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
-     * @param externalUserid 目标客户 external_userid（仅用于调用方匹配，不传给企微 API）
+     * @param externalUserid 目标客户 external_userid（传给企微 API 用于精确定位）
      * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
      */
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
@@ -563,14 +563,13 @@ public class WecomApiClient {
     /**
      * 查询在职继承结果（带 cursor 分页）。
      * <p>
-     * 企微 API 只接受 {@code handover_userid}、{@code takeover_userid}、{@code cursor}
-     * 三个参数，{@code external_userid} 仅用于调用方在返回的 {@code customer} 数组中
-     * 匹配目标客户，不传给企微 API。
+     * 企微 API 接受 {@code handover_userid}、{@code takeover_userid}、{@code external_userid}
+     * 和可选 {@code cursor} 四个参数。{@code external_userid} 用于精确定位目标客户。
      * </p>
      *
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
-     * @param externalUserid 目标客户 external_userid（不传给 API，仅供签名兼容）
+     * @param externalUserid 目标客户 external_userid
      * @param cursor         分页游标，{@code null} 或空字符串表示第一页
      * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
      */
@@ -581,6 +580,7 @@ public class WecomApiClient {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
+            bodyMap.put("external_userid", externalUserid);
             if (cursor != null && !cursor.isEmpty()) {
                 bodyMap.put("cursor", cursor);
             }

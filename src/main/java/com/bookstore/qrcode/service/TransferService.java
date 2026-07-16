@@ -392,7 +392,7 @@ public class TransferService {
                         if (expired) {
                             // 企微静默 24h 后自动完成转移，标记 confirmed
                             t.setStatus(CustomerTransfer.TransferStatus.confirmed);
-                            t.setConfirmTime(LocalDateTime.now());
+                            t.setConfirmTime(refTime.plus(TRANSFER_TIMEOUT));
                             newlyConfirmed.add(t.getId());
                             log.info("转移超时自动确认(API status=2): transferId={}, customerId={}",
                                 t.getId(), t.getCustomerId());
@@ -412,7 +412,7 @@ public class TransferService {
                         if (expired) {
                             // 企微静默 24h 后自动完成，API 可能已不返回该记录
                             t.setStatus(CustomerTransfer.TransferStatus.confirmed);
-                            t.setConfirmTime(LocalDateTime.now());
+                            t.setConfirmTime(refTime.plus(TRANSFER_TIMEOUT));
                             t.setFailReason("企微24h自动完成(API未找到记录)");
                             newlyConfirmed.add(t.getId());
                             log.info("转移超时自动确认(API未找到): transferId={}, customerId={}",
@@ -431,7 +431,7 @@ public class TransferService {
                 if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
                     // 超时且 API 异常 → 企微侧大概率已完成
                     t.setStatus(CustomerTransfer.TransferStatus.confirmed);
-                    t.setConfirmTime(LocalDateTime.now());
+                    t.setConfirmTime(refTime.plus(TRANSFER_TIMEOUT));
                     t.setFailReason("企微24h自动完成(API异常:" + e.getErrmsg() + ")");
                     newlyConfirmed.add(t.getId());
                     log.info("转移超时自动确认(API异常): transferId={}, errcode={}",
@@ -447,7 +447,7 @@ public class TransferService {
                     : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
                 if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
                     t.setStatus(CustomerTransfer.TransferStatus.confirmed);
-                    t.setConfirmTime(LocalDateTime.now());
+                    t.setConfirmTime(refTime.plus(TRANSFER_TIMEOUT));
                     t.setFailReason("企微24h自动完成(异常:" + e.getMessage() + ")");
                     newlyConfirmed.add(t.getId());
                 }

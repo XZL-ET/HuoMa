@@ -160,7 +160,7 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      *
      * <p><b>三层防护：</b>
      * <ol>
-     *   <li>排除客户侧错误码（84061/84073/84096/84100/45035），只统计服务老师侧问题</li>
+     *   <li>排除终端/不可操作类型（84061/84073/84096/84100/45035/60111/40003/轮询耗尽/已有进行中转移），只统计需人工介入的服务老师侧问题</li>
      *   <li>7 天时间窗口，防止历史记录导致永久重复告警</li>
      *   <li>HAVING COUNT &ge; 3，在数据库侧完成阈值过滤</li>
      * </ol>
@@ -181,7 +181,11 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
         + "    AND t.failReason NOT LIKE '%errcode=84073%' "
         + "    AND t.failReason NOT LIKE '%errcode=84096%' "
         + "    AND t.failReason NOT LIKE '%errcode=84100%' "
-        + "    AND t.failReason NOT LIKE '%errcode=45035%')) "
+        + "    AND t.failReason NOT LIKE '%errcode=45035%' "
+        + "    AND t.failReason NOT LIKE '%轮询次数耗尽%' "
+        + "    AND t.failReason NOT LIKE '%已有进行中的转移%' "
+        + "    AND t.failReason NOT LIKE '%errcode=60111%' "
+        + "    AND t.failReason NOT LIKE '%errcode=40003%')) "
         + "GROUP BY t.toUserid "
         + "HAVING COUNT(t) >= 3")
     List<Object[]> findRetryLimitTeachers(@Param("since") LocalDateTime since);
