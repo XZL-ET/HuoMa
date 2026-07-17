@@ -29,8 +29,8 @@ import java.util.Map;
  * <p>
  * <b>白天（{@code dayStartHour}:00–{@code dayEndHour}:00）：</b>
  * 每 15 分钟执行一次（{@link #executeDaytimeBatch}），
- * 将 15～30 分钟前接待员添加的客户批量转移给服务老师。
- * 客户添加后至少延迟 15 分钟再转（最多 30 分钟），避免即时打扰。
+ * 将 15～75 分钟前接待员添加的客户批量转移（1h 宽窗口兜底漏批）。
+ * 客户添加后至少延迟 15 分钟再转，避免即时打扰。
  * </p>
  * <p>
  * <b>夜间（{@code dayEndHour}:00–次日 {@code dayStartHour}:00）：</b>
@@ -151,11 +151,12 @@ public class InheritanceJob {
             return;
         }
 
-        // 窗口 = 30 分钟前 ~ 15 分钟前，保证客户添加后至少等 15 分钟
-        LocalDateTime windowStart = LocalDateTime.now().minusMinutes(30);
+        // 窗口 = 75 分钟前 ~ 15 分钟前（宽 1h），漏一批由后续 3 批兜底
+        LocalDateTime windowStart = LocalDateTime.now().minusMinutes(75);
         LocalDateTime windowEnd = LocalDateTime.now().minusMinutes(15);
         if (windowStart.toLocalTime().isBefore(dayStart)) {
-            return; // 窗口起点在夜间，跳过（由后续批次覆盖）
+            windowStart = LocalDateTime.now().withHour(dayStartHour)
+                .withMinute(0).withSecond(0).withNano(0);
         }
 
         processTransferWindow(windowStart, windowEnd,
@@ -178,11 +179,10 @@ public class InheritanceJob {
     public void executeNightBatch() {
         if (!isAutoEnabled()) { log.info("自动在职继承已暂停，跳过夜间批次"); return; }
         log.info("在职继承定时任务开始（夜间窗口批量转移）");
-        // 夜间窗口：前一日 (dayEndHour:00 - 15min) ~ 今日 (dayStartHour-1):59:59
-        // 向前延伸 15 分钟兜底白天末班车缺口（20:45-21:00），重叠靠去重保安全
+        // 夜间窗口：前一日 00:00:00 ~ 今日 (dayStartHour-1):59:59
+        // 覆盖全天遗漏（白天 1h 窗口已兜大部分，夜批做最后防线），重叠靠去重保安全
         LocalDateTime nightStart = LocalDateTime.now()
-            .minusDays(1).withHour(dayEndHour).withMinute(0).withSecond(0).withNano(0)
-            .minusMinutes(15);
+            .minusDays(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
         LocalDateTime nightEnd = LocalDateTime.now()
             .withHour(dayStartHour).withMinute(0).withSecond(0).withNano(0)
             .minusSeconds(1);
