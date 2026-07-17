@@ -7,6 +7,7 @@ import com.bookstore.qrcode.wecom.WecomApiException;
 import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.bookstore.qrcode.wecom.WecomTokenExpiredException;
 import com.bookstore.qrcode.wecom.WecomRateLimitException;
+import com.bookstore.qrcode.wecom.WecomPermanentException;
 import com.bookstore.qrcode.wecom.WecomTransientException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -202,8 +203,9 @@ public class TransferService {
         }
 
         try {
-                // 调企微 API 发起继承（含可配置的转接成功通知消息）
-                String transferSuccessMsg = resolveTransferSuccessMsg(qr);
+                // 调企微 API 发起继承（含可配置的转接成功通知消息，支持 {{teacher_name}} 变量）
+                String transferSuccessMsg = fillTransferSuccessMsg(
+                    resolveTransferSuccessMsg(qr), serviceAgent.getAgentUserid());
                 wecomApi.transferCustomer(
                     fromUserid, serviceAgent.getAgentUserid(), externalUserid,
                     transferSuccessMsg);
@@ -624,7 +626,7 @@ public class TransferService {
                 }
                 wecomApi.transferCustomer(t.getFromUserid(), t.getToUserid(),
                     customer.getExternalUserid(),
-                    resolveRetryTransferSuccessMsg(t));
+                    fillTransferSuccessMsg(resolveRetryTransferSuccessMsg(t), t.getToUserid()));
                 t.setStatus(CustomerTransfer.TransferStatus.pending_confirm);
                 t.setRetryCount(t.getRetryCount() + 1);
                 transferRepo.save(t);
@@ -780,8 +782,9 @@ public class TransferService {
         for (CustomerTransfer t : missed) {
             try {
                 sendTransferGreeting(t);
-                transferRepo.save(t);
-                log.info("欢迎语补发成功: transferId={}", t.getId());
+                if (Boolean.TRUE.equals(t.getGreetingSent())) {
+                    log.info("欢迎语补发成功: transferId={}", t.getId());
+                }
             } catch (Exception e) {
                 log.warn("欢迎语补发失败: transferId={}, err={}", t.getId(), e.getMessage());
             }
@@ -900,8 +903,14 @@ public class TransferService {
             transfer.setNoteSent(true);
             // 立即落库，防止调用方后续异常导致 greetingSent 标记丢失而重复发送
             transferRepo.save(transfer);
+        } catch (WecomPermanentException e) {
+            // 永久错误（如 48002 api forbidden）不可恢复，标记已完成避免每 30 分钟无效重试
+            transfer.setGreetingSent(true);
+            transferRepo.save(transfer);
+            log.warn("发送交接欢迎语永久失败(已标记): transferId={}, errcode={}, errmsg={}",
+                transfer.getId(), e.getErrcode(), e.getErrmsg());
         } catch (Exception e) {
-            log.error("发送交接欢迎语失败: transferId={}", transfer.getId(), e);
+            log.error("发送交接欢迎语失败(暂态): transferId={}", transfer.getId(), e);
         }
     }
 
@@ -999,6 +1008,24 @@ public class TransferService {
         return systemConfigRepo.findByConfigKey("transfer_success_msg_default")
                 .map(SystemConfig::getConfigValue)
                 .orElse(null);
+    }
+
+    /**
+     * 对转接成功通知消息做模板变量填充。
+     * <p>
+     * 支持的变量：{@code {{teacher_name}}} — 新服务老师（接管员工）的真实姓名。
+     * 若模板为 {@code null} 或空字符串则原样返回（保留"不发送"/"抑制通知"语义）。
+     * </p>
+     *
+     * @param template      解析后的通知消息模板（可能为 null）
+     * @param teacherUserid 接管员工的 userid
+     * @return 填充后的消息；template 为 null → null；template 为空串 → 空串
+     */
+    private String fillTransferSuccessMsg(String template, String teacherUserid) {
+        if (template == null || template.isEmpty()) {
+            return template;
+        }
+        return fillTemplate(template, Map.of("teacher_name", getTeacherName(teacherUserid)));
     }
 
     private String getGlobalConfig(String key, String fallback) {

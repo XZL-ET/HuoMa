@@ -116,9 +116,9 @@ class SchoolServiceTest {
         when(districtManagerRepository.findByRegionCityAndRegionDistrict("北京", "海淀区"))
                 .thenReturn(Optional.empty());
         when(systemConfigRepository.findById("global_contact_name"))
-                .thenReturn(Optional.of(new SystemConfig("global_contact_name", "火马客服", null)));
+                .thenReturn(Optional.of(new SystemConfig("global_contact_name", "全局联系人名称", "火马客服", null)));
         when(systemConfigRepository.findById("global_contact_qr_url"))
-                .thenReturn(Optional.of(new SystemConfig("global_contact_qr_url", "", null)));
+                .thenReturn(Optional.of(new SystemConfig("global_contact_qr_url", "全局联系人二维码URL", "", null)));
 
         SchoolDetailDTO detail = schoolService.getSchoolDetail("BJ-001");
 

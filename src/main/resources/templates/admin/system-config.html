@@ -23,7 +23,7 @@
                 </thead>
                 <tbody>
                     <tr th:each="c : ${configs}">
-                        <td><code th:text="${c.configKey}"></code></td>
+                        <td><code th:text="${c.configName} ?: ${c.configKey}"></code></td>
                         <td>
                             <form th:action="@{/admin/system-config/save}" method="post"
                                   class="d-flex align-items-start gap-2">

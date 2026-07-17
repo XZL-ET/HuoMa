@@ -349,6 +349,7 @@ CREATE INDEX IF NOT EXISTS idx_school_name ON school (school_name);
 -- system_config：系统配置表
 CREATE TABLE IF NOT EXISTS system_config (
     config_key VARCHAR(64) PRIMARY KEY,
+    config_name VARCHAR(100) DEFAULT NULL,
     config_value TEXT,
     updated_at TIMESTAMP DEFAULT NULL
 );
@@ -372,16 +373,16 @@ CREATE INDEX IF NOT EXISTS idx_qal_accessed ON qr_access_log (accessed_at);
 CREATE INDEX IF NOT EXISTS idx_qal_action ON qr_access_log (action);
 
 -- 初始数据（测试用）
-MERGE INTO system_config (config_key, config_value) KEY(config_key)
-VALUES ('global_contact_name', '火马客服'),
-       ('global_contact_qr_config_id', ''),
-       ('global_contact_qr_url', ''),
-       ('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！'),
-       ('transfer_greeting_enabled_default', 'true'),
-       ('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
-       ('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
-       ('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
-       ('transfer_success_msg_default', '');
+MERGE INTO system_config (config_key, config_name, config_value) KEY(config_key)
+VALUES ('global_contact_name',               '全局联系人名称',         '火马客服'),
+       ('global_contact_qr_config_id',       '全局联系人二维码配置ID', ''),
+       ('global_contact_qr_url',             '全局联系人二维码URL',     ''),
+       ('default_welcome_text',              '默认欢迎语',             '{{school_name}}家长您好～欢迎加入XX书店家校服务！'),
+       ('transfer_greeting_enabled_default', '默认启用交接欢迎语',     'true'),
+       ('transfer_filled_note_default',      '默认已填写客户备注',     '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
+       ('transfer_filled_greeting_default',  '默认已填写客户欢迎语',   '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
+       ('transfer_unfilled_greeting_default','默认未填写客户欢迎语',   '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
+       ('transfer_success_msg_default',      '默认转接成功通知',       '家长您好，已为您精准匹配到对应的服务专员，后续我的同事{{teacher_name}}将接替我的工作，继续为您服务。');
 
 -- form_template：表单模板
 CREATE TABLE IF NOT EXISTS form_template (

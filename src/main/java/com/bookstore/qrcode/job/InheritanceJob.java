@@ -75,6 +75,9 @@ public class InheritanceJob {
     /** Redis key: 自动在职继承开关，值 "true"=开启 "false"=暂停，key 不存在视为开启 */
     public static final String AUTO_ENABLED_KEY = "inheritance:auto:enabled";
 
+    /** Redis set key: 有新客户添加的学校 ID，供隔夜批量转移做增量扫描 */
+    public static final String DIRTY_SCHOOLS_KEY = "inheritance:dirty:schools";
+
     /**
      * 读取自动在职继承开关状态。
      * @return true=自动继承已开启，false=已暂停

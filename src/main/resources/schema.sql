@@ -403,9 +403,18 @@ CREATE TABLE IF NOT EXISTS school (
 -- 系统配置表（全局联系人等键值配置）
 CREATE TABLE IF NOT EXISTS system_config (
     config_key   VARCHAR(64) PRIMARY KEY COMMENT '配置键',
+    config_name  VARCHAR(100) DEFAULT NULL COMMENT '配置项中文名（后台展示用）',
     config_value TEXT         COMMENT '配置值',
     updated_at   DATETIME     DEFAULT NULL COMMENT '更新时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置表';
+
+-- 系统配置表 新增 config_name 列（兼容存量数据库）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_config' AND COLUMN_NAME = 'config_name') = 0,
+    'ALTER TABLE system_config ADD COLUMN config_name VARCHAR(100) DEFAULT NULL COMMENT ''配置项中文名（后台展示用）'' AFTER config_key',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 活码访问日志表（统一员工下载 + 学校自助查询审计）
 CREATE TABLE IF NOT EXISTS qr_access_log (
@@ -440,10 +449,10 @@ SET @stmt = (SELECT IF(
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 初始全局联系人配置
-INSERT IGNORE INTO system_config (config_key, config_value) VALUES
-('global_contact_name', '火马客服'),
-('global_contact_qr_config_id', ''),
-('global_contact_qr_url', '');
+INSERT IGNORE INTO system_config (config_key, config_name, config_value) VALUES
+('global_contact_name',      '全局联系人名称',         '火马客服'),
+('global_contact_qr_config_id', '全局联系人二维码配置ID', ''),
+('global_contact_qr_url',    '全局联系人二维码URL',     '');
 
 -- 从已有活码中提取学校数据，使用 school_id 避免重复
 INSERT IGNORE INTO school (school_id, school_name, region_city, region_district, has_qrcode)
@@ -755,8 +764,8 @@ SET @stmt = (SELECT IF(
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 系统配置：默认欢迎语
-INSERT IGNORE INTO system_config (config_key, config_value) VALUES
-('default_welcome_text', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
+INSERT IGNORE INTO system_config (config_key, config_name, config_value) VALUES
+('default_welcome_text', '默认欢迎语', '{{school_name}}家长您好～欢迎加入XX书店家校服务！');
 
 -- ============================================
 -- 在职继承问候语可配置化：qr_code 新增 4 列 + system_config 全局默认值
@@ -803,12 +812,12 @@ SET @stmt = (SELECT IF(
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 系统配置：在职继承问候语全局默认值
-INSERT IGNORE INTO system_config (config_key, config_value) VALUES
-('transfer_greeting_enabled_default', 'true'),
-('transfer_filled_note_default', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
-('transfer_filled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
-('transfer_unfilled_greeting_default', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
-('transfer_success_msg_default', '');
+INSERT IGNORE INTO system_config (config_key, config_name, config_value) VALUES
+('transfer_greeting_enabled_default', '默认启用交接欢迎语', 'true'),
+('transfer_filled_note_default', '默认已填写客户备注', '{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}'),
+('transfer_filled_greeting_default', '默认已填写客户欢迎语', '{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚'),
+('transfer_unfilled_greeting_default', '默认未填写客户欢迎语', '{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}'),
+('transfer_success_msg_default', '默认转接成功通知', '家长您好，已为您精准匹配到对应的服务专员，后续我的同事{{teacher_name}}将接替我的工作，继续为您服务。');
 
 -- ============================================
 -- 场景分配优化：scene + department_id 字段
