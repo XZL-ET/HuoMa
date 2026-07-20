@@ -243,14 +243,13 @@ public class TransferService {
                 // 永久性错误 → 落库，不阻塞主流程
                 // 以下错误码重试无法修复，直接标记 retry_limit：
                 //   - 84061: 客户已不是好友 → 无法发起继承
-                //   - 40205: 接管员工企微 ticket 过期 → 需员工手动登录刷新
                 //   - 84096: 客户无法发起在职继承
                 //   - 84097: 接替成员客户数已达上限
                 //   - 84100: 已有正在继承的员工（极端竞态）
                 //   - 84073: 客户已删除服务人员
                 //   - 45035: 操作冲突（客户已有进行中的转移）
+                // 注意：40205（票据过期）不再视为终端错误 —— ticket 间歇性恢复后重试即可成功
                 boolean terminal = e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
-                    || e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
@@ -587,10 +586,10 @@ public class TransferService {
                     transferRepo.save(t);
                     continue;
                 }
-                // 84061/40205/84096/84097/84100/84073/45035 为永久性错误，重试无效，直接标记终端
+                // 84061/84096/84097/84100/84073/45035 为永久性错误，重试无效，直接标记终端
+                // 40205 不在此列 —— ticket 可间歇恢复，允许重试
                 if (t.getFailReason() != null
                     && (t.getFailReason().contains("errcode=84061")
-                        || t.getFailReason().contains("errcode=40205")
                         || t.getFailReason().contains("errcode=84096")
                         || t.getFailReason().contains("errcode=84097")
                         || t.getFailReason().contains("errcode=84100")
@@ -599,8 +598,6 @@ public class TransferService {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
                     if (t.getFailReason().contains("errcode=84061")) {
                         t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
-                    } else if (t.getFailReason().contains("errcode=40205")) {
-                        t.setFailReason("接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权");
                     } else if (t.getFailReason().contains("errcode=84096")) {
                         t.setFailReason("客户无法发起在职继承(errcode=84096)");
                     } else if (t.getFailReason().contains("errcode=84097")) {
@@ -632,18 +629,16 @@ public class TransferService {
                 transferRepo.save(t);
                 log.info("api_failed 重试成功: transferId={}", t.getId());
             } catch (WecomApiException e) {
-                // 84061/40205/84096/84097/84100/84073/45035 为永久性错误，不累加重试次数，直接标记终端
+                // 84061/84096/84097/84100/84073/45035 为永久性错误，不累加重试次数，直接标记终端
+                // 40205 不在此列 —— ticket 可间歇恢复，累加重试次数走正常重试流程
                 if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
-                    || e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
                     || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
-                    if (e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED) {
-                        t.setFailReason("接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权");
-                    } else if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                    if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
                         t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
                     } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE) {
                         t.setFailReason("客户无法发起在职继承(errcode=84096)");

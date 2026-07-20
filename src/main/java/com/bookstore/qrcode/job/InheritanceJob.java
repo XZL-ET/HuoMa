@@ -17,6 +17,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
@@ -255,6 +256,20 @@ public class InheritanceJob {
                             rec.getAgentUserid(), qr.getSchoolId(), windowStart, windowEnd);
 
                     for (Customer c : customers) {
+                        // Redis 去重：防止 1h 宽窗口导致同一客户被多批次 XADD
+                        // SETNX TTL 2h，过期后允许重新入队
+                        String dedupKey = "transfer:queued:" + c.getId();
+                        try {
+                            Boolean alreadyQueued = redisTemplate.opsForValue()
+                                .setIfAbsent(dedupKey, "1", Duration.ofHours(2));
+                            if (Boolean.FALSE.equals(alreadyQueued)) {
+                                continue; // 已入队，跳过
+                            }
+                        } catch (Exception e) {
+                            // Redis 不可用时降级放行，避免整批阻塞
+                            log.warn("Redis 去重不可用，放行: customerId={}", c.getId());
+                        }
+
                         Map<String, Object> event = new LinkedHashMap<>();
                         event.put("customer_id", c.getId().toString());
                         event.put("from_userid", rec.getAgentUserid());
