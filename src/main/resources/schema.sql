@@ -260,6 +260,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     form_filled_at_transfer BOOLEAN COMMENT '继承时是否已填写收集表单',
     note_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '继承备注是否已写入',
     greeting_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '交接欢迎语是否已发送',
+    greeting_permanent_fail BOOLEAN NOT NULL DEFAULT FALSE COMMENT '欢迎语是否永久失败（区分真正成功和放弃重试）',
     greeting_type ENUM('filled','unfilled') COMMENT '已填写版/未填写版',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

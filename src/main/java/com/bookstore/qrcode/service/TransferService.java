@@ -790,7 +790,11 @@ public class TransferService {
             try {
                 sendTransferGreeting(t);
                 if (Boolean.TRUE.equals(t.getGreetingSent())) {
-                    log.info("欢迎语补发成功: transferId={}", t.getId());
+                    if (Boolean.TRUE.equals(t.getGreetingPermanentFail())) {
+                        log.info("欢迎语永久失败已标记(跳过后续重试): transferId={}", t.getId());
+                    } else {
+                        log.info("欢迎语补发成功: transferId={}", t.getId());
+                    }
                 }
             } catch (Exception e) {
                 log.warn("欢迎语补发失败: transferId={}, err={}", t.getId(), e.getMessage());
@@ -985,7 +989,9 @@ public class TransferService {
             transferRepo.saveAndFlush(transfer);
         } catch (WecomPermanentException e) {
             // 永久错误（如 48002 api forbidden）不可恢复，标记已完成避免每 30 分钟无效重试
+            // greetingPermanentFail=true 区分"真正发成功"和"放弃重试"，避免误导日志
             transfer.setGreetingSent(true);
+            transfer.setGreetingPermanentFail(true);
             transferRepo.saveAndFlush(transfer);
             log.warn("发送交接欢迎语永久失败(已标记): transferId={}, errcode={}, errmsg={}",
                 transfer.getId(), e.getErrcode(), e.getErrmsg());

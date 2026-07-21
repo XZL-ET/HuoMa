@@ -153,6 +153,22 @@ public class CustomerTransfer {
     private Boolean greetingSent = false;
 
     /**
+     * 欢迎语发送是否遇到不可恢复的永久错误（如 48002 api forbidden）。
+     * <p>
+     * 与 {@link #greetingSent} 协同工作：
+     * <ul>
+     *   <li>发送成功 → {@code greetingSent=true, greetingPermanentFail=false}</li>
+     *   <li>永久失败 → {@code greetingSent=true, greetingPermanentFail=true}</li>
+     *   <li>暂态失败（待重试） → {@code greetingSent=false, greetingPermanentFail=false}</li>
+     * </ul>
+     * 永久失败的记录不会被补发扫出（greetingSent=true），但可以通过此字段
+     * 在日志/审计中区分"真正发成功"和"放弃重试"。
+     */
+    @Column(name = "greeting_permanent_fail")
+    @Builder.Default
+    private Boolean greetingPermanentFail = false;
+
+    /**
      * 实际发送的欢迎语类型。
      * <ul>
      *   <li>{@link GreetingType#filled} — 已填表欢迎语：客户已填写过表单，发送侧重服务承接的问候</li>

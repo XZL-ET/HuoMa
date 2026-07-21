@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     form_filled_at_transfer BOOLEAN,
     note_sent BOOLEAN NOT NULL DEFAULT FALSE,
     greeting_sent BOOLEAN NOT NULL DEFAULT FALSE,
+    greeting_permanent_fail BOOLEAN NOT NULL DEFAULT FALSE,
     greeting_type VARCHAR(20)
         CHECK (greeting_type IN ('filled','unfilled')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
