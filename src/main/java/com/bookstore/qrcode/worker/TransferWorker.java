@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.service.TransferService;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
+import com.bookstore.qrcode.service.LockContentionException;
 import com.bookstore.qrcode.wecom.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +18,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -70,14 +73,29 @@ public class TransferWorker {
 
                 for (MapRecord<String, Object, Object> record : records) {
                     String msgId = record.getId().getValue();
-                    String eventJson = (String) record.getValue().get("event");
+                    Map<Object, Object> value = record.getValue();
+                    String eventJson = (String) value.get("event");
                     if (eventJson == null) {
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TRANSFER_STREAM_KEY,
                             RedisConfig.TRANSFER_CONSUMER_GROUP, msgId);
                         continue;
                     }
-                    Map<String, String> fields = Map.of("event", eventJson);
+                    Map<String, String> fields = new LinkedHashMap<>();
+                    fields.put("event", eventJson);
+
+                    // 检查 _retry_at 时间戳（锁竞争延迟重试 / 指数退避），未到时间则跳过
+                    String retryAt = (String) value.get("_retry_at");
+                    if (retryAt != null) {
+                        try {
+                            if (Long.parseLong(retryAt) > Instant.now().getEpochSecond()) {
+                                redisTemplate.opsForStream().acknowledge(
+                                    RedisConfig.TRANSFER_STREAM_KEY,
+                                    RedisConfig.TRANSFER_CONSUMER_GROUP, msgId);
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
 
                     try {
                         JsonNode event = objectMapper.readTree(eventJson);
@@ -104,6 +122,19 @@ public class TransferWorker {
                         ErrorAction action = MessageGuardService.classifyWecomError(e);
                         log.error("Transfer 失败 (action={}): msgId={}", action, msgId, e);
                         handleError(action, msgId, fields, e);
+                    } catch (LockContentionException e) {
+                        // 锁竞争是瞬态（锁 TTL 120s），延迟 30s 后重新入队，
+                        // 不计入 markRetryOrDead 的重试配额
+                        log.warn("Transfer 锁竞争，30s 后重试: msgId={}, customer={}",
+                            msgId, e.getMessage());
+                        Map<String, String> delayed = new LinkedHashMap<>(fields);
+                        delayed.put("_retry_at",
+                            String.valueOf(Instant.now().getEpochSecond() + 30));
+                        redisTemplate.opsForStream().add(
+                            RedisConfig.TRANSFER_STREAM_KEY, delayed);
+                        redisTemplate.opsForStream().acknowledge(
+                            RedisConfig.TRANSFER_STREAM_KEY,
+                            RedisConfig.TRANSFER_CONSUMER_GROUP, msgId);
                     } catch (Exception e) {
                         log.error("Transfer failed: msgId={}", msgId, e);
                         messageGuardService.markRetryOrDead(RedisConfig.TRANSFER_STREAM_KEY,

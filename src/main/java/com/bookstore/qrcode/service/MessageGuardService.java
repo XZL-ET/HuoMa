@@ -367,10 +367,12 @@ public class MessageGuardService {
     /**
      * 将 DLQ 中的所有消息重放到指定 Stream，然后逐条删除（防丢消息）。
      *
-     * <p>与 {@link #replayDlq(String)} 不同，此方法读取全部消息后用 XDEL 逐条删除，
+     * <p>每条消息优先使用 {@code _dlq_origin_stream} 元数据字段作为重放目标，
+     * 若该字段缺失或为空则回退到 {@code targetStreamKey}。
+     * 与 {@link #replayDlq(String)} 不同，此方法读取全部消息后用 XDEL 逐条删除，
      * 而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
-     * @param targetStreamKey 重放目标 Stream
+     * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
      * @return 重放的消息数量
      */
     public int replayAllDlq(String targetStreamKey) {
@@ -383,6 +385,10 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
+                    // 读取来源 Stream（剥离前），用于自动路由到正确的目标
+                    String originStream = fields.get("_dlq_origin_stream");
+                    String target = (originStream != null && !originStream.isBlank())
+                        ? originStream : targetStreamKey;
                     // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
@@ -392,11 +398,11 @@ public class MessageGuardService {
                     fields.remove("_retry_at");
                     // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String logicalId = computeLogicalId(fields);
-                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
                     // 添加静态标记
                     fields.put("_dlq_replayed", "true");
-                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
                     count++;
@@ -412,11 +418,13 @@ public class MessageGuardService {
     /**
      * 将 DLQ 中的消息重放到指定 Stream，逐条删除已重放的消息。
      *
-     * <p>重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
+     * <p>每条消息优先使用 {@code _dlq_origin_stream} 元数据字段作为重放目标，
+     * 若该字段缺失或为空则回退到 {@code targetStreamKey}。
+     * 重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
      * 一次最多重放 100 条死信，防止一次性压力过大。
      * 使用 XDEL 逐条删除而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
-     * @param targetStreamKey 重放目标 Stream（通常是原 Stream）
+     * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
      * @return 重放的消息数量
      */
     public int replayDlq(String targetStreamKey) {
@@ -429,6 +437,10 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
+                    // 读取来源 Stream（剥离前），用于自动路由到正确的目标
+                    String originStream = fields.get("_dlq_origin_stream");
+                    String target = (originStream != null && !originStream.isBlank())
+                        ? originStream : targetStreamKey;
                     // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
@@ -438,11 +450,11 @@ public class MessageGuardService {
                     fields.remove("_retry_at");
                     // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String logicalId = computeLogicalId(fields);
-                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
                     // 添加静态标记
                     fields.put("_dlq_replayed", "true");
-                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
                     count++;

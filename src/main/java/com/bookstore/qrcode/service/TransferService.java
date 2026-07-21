@@ -106,7 +106,7 @@ public class TransferService {
         if (!Boolean.TRUE.equals(locked)) {
             // 锁被占用说明另一线程正在处理同一客户，抛异常让 TransferWorker 重试而非静默跳过
             log.info("客户 {} 继承正在处理中（锁占用），稍后重试", customerId);
-            throw new RuntimeException("客户 " + customerId + " 继承锁占用，稍后重试");
+            throw new LockContentionException("客户 " + customerId + " 继承锁占用，稍后重试");
         }
         // 将锁释放注册到事务完成后：@Transactional 在方法返回后才提交，
         // 若在 finally 中提前释放，其他线程可能在事务可见前查到空记录并重复发起转移。
