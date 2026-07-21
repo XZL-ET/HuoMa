@@ -122,9 +122,17 @@ public class TransferMonitorWorker {
      *
      * <p>调用 {@link TransferService#retryFailedGreetings()} 扫描最近 24 小时内
      * 已确认但欢迎语发送失败的记录并重新发送。超过 24 小时的记录不再重试。</p>
+     *
+     * <p><b>时间窗口：</b>仅 08:30–21:00 内执行补发，避免深夜/凌晨打扰客户。</p>
      */
     @Scheduled(cron = "0 */30 * * * *")
     public void retryGreetings() {
+        // 时间窗口检查：仅 08:30–21:00 补发，避免深夜打扰
+        int hour = java.time.LocalTime.now().getHour();
+        int minute = java.time.LocalTime.now().getMinute();
+        if (hour < 8 || (hour == 8 && minute < 30) || hour >= 21) {
+            return;
+        }
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(RETRY_GREETINGS_LOCK_KEY, "1", RETRY_LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
