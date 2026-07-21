@@ -250,20 +250,40 @@ public class AgentRotationService {
 
     /**
      * 提前激活后备 — 在达到紧急阈值时触发，从全局池取人加入活码。
+     *
+     * <p><b>幂等性保护：</b>使用 Redis key {@code preactivate:done:{qrCodeId}}
+     * 确保每个活码每天最多触发一次预激活，防止接待员无限堆积。
+     * Key 的 TTL 为距离当日午夜的秒数，次日自动失效。</p>
      */
     @Transactional
     public void preActivateBackup(Long qrCodeId, QrCode qr) {
+        // ── 幂等性保护：当天已预激活过则跳过 ──
+        String doneKey = RedisConfig.PREACTIVATE_DONE_PREFIX + qrCodeId;
+        long ttlSeconds = getSecondsUntilMidnight();
+        Boolean firstAttempt = redisTemplate.opsForValue()
+            .setIfAbsent(doneKey, "1", Duration.ofSeconds(ttlSeconds));
+        if (Boolean.FALSE.equals(firstAttempt)) {
+            log.debug("当天已预激活，跳过: qr={}", qrCodeId);
+            return;
+        }
+
         String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
         String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, lockValue, Duration.ofSeconds(30));
         if (Boolean.FALSE.equals(locked)) {
             log.debug("轮换进行中（预激活等待），跳过: qr={}", qrCodeId);
+            // 并发冲突时删除幂等标记，允许后续回调重试
+            redisTemplate.delete(doneKey);
             return;
         }
 
         try {
-            if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
+            if (qr.getRotateMode() == QrCode.RotateMode.manual) {
+                // manual 模式下不回退 preactivate 标记 -
+                // 管理员明确关闭自动轮换，标记应该保留到明天
+                return;
+            }
 
             Set<String> excludeUserids = new HashSet<>();
             qrAgentRepo.findByQrCodeId(qrCodeId).stream()
@@ -275,6 +295,8 @@ public class AgentRotationService {
             if (backup == null) {
                 log.warn("全局池无 standby，活码 {} 无法预激活", qrCodeId);
                 alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
+                // 池空时删除标记，等池恢复后可以重试
+                redisTemplate.delete(doneKey);
                 return;
             }
             String backupUserid = backup.getAgentUserid();

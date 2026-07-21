@@ -61,6 +61,69 @@ public class WecomErrorCodes {
     public static final int NOT_EXTERNAL_CONTACT = 84061;
 
     /**
+     * 40205 — 在职继承场景：接管员工企微票据（userticket）过期。
+     * <p>
+     * 成因：接管员工（takeover_userid）长期未用微信授权方式登录企微、
+     * 或使用手机号注册未绑定微信、或客户联系权限被取消。
+     * 此状态为<b>永久性</b>——API 重试无法修复，需要员工手动登录企微客户端
+     * 刷新票据。应直接将转移记录标记为终端失败（{@code retry_limit}），
+     * 由管理员确认员工恢复后手动重触发。
+     * </p>
+     *
+     * @since 2.x
+     */
+    public static final int TICKET_EXPIRED = 40205;
+
+    /**
+     * 45035 — 操作冲突。
+     * <p>
+     * 在在职继承场景中表示客户已有进行中的转移流程，与本次请求冲突。
+     * 此状态为<b>永久性</b>——重试无法解决，应直接标记为终端失败（{@code retry_limit}）。
+     * 注意：此码在非转移场景（如标签操作）中可能是瞬态的，
+     * 仅在职继承上下文中视为终端错误。
+     * </p>
+     *
+     * @since 2.x
+     */
+    public static final int TRANSFER_CONFLICT = 45035;
+
+    /**
+     * 84096 — 在职继承场景：该客户无法发起在职继承。
+     * <p>
+     * 客户当前状态不满足在职继承条件（如客户已离职、客户数据异常等）。
+     * 此状态为<b>永久性</b>，重试无效，应直接标记为终端失败（{@code retry_limit}）。
+     * </p>
+     *
+     * @since 2.x
+     */
+    public static final int TRANSFER_NOT_AVAILABLE = 84096;
+
+    /**
+     * 84097 — 在职继承场景：接替成员客户数已达上限。
+     * <p>
+     * 目标服务老师的企业微信客户数已达到企微设定的上限，
+     * 无法再接收新客户。此状态为<b>永久性</b>——对同一目标员工重试无效，
+     * 应直接标记为终端失败（{@code retry_limit}），由管理员指派其他服务老师。
+     * </p>
+     *
+     * @since 2.x
+     */
+    public static final int TRANSFER_LIMIT_EXCEEDED = 84097;
+
+    /**
+     * 84100 — 在职继承场景：已有正在继承的员工。
+     * <p>
+     * 同一客户已存在进行中的在职继承流程，企微不允许并发发起重复转移。
+     * 本地去重检查通常已覆盖此场景，但极端竞态下企微侧可能返回此码。
+     * 此状态为<b>永久性</b>——对同一客户重复发起不会改变结果，
+     * 应直接标记为终端失败（{@code retry_limit}）。
+     * </p>
+     *
+     * @since 2.x
+     */
+    public static final int TRANSFER_PENDING_EXISTS = 84100;
+
+    /**
      * 84073 — 客户已删除该服务人员。
      * <p>
      * 表示客户主动删除了企业微信好友关系，后续对该客户的打标签、发消息等操作均会失败。

@@ -140,8 +140,7 @@ public class CallbackWorker {
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
                     if (eventJson == null) {
-                        // 跳过空消息（如 Init 占位、异常数据等），ACK 防止 PEL 泄漏
-                        log.warn("跳过空消息: msgId={}, value={}", msgId, value);
+                        // _init=1 占位消息或空消息，静默 ACK 防止 PEL 泄漏
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.CALLBACK_STREAM_KEY,
                             RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
@@ -386,6 +385,17 @@ public class CallbackWorker {
 
         // ② 记录/更新客户信息 — 关键路径，失败必须向上传播以触发重试/DLQ
         Long customerId = customerService.upsertFromCallback(externalUserId, userId, state);
+
+        // ②.5 标记该学校有新客户（供 InheritanceJob 增量扫描，避免每次遍历所有活跃活码）
+        if (state != null && !state.isBlank()) {
+            try {
+                String dirtyKey = com.bookstore.qrcode.job.InheritanceJob.DIRTY_SCHOOLS_KEY;
+                redisTemplate.opsForSet().add(dirtyKey, state);
+                redisTemplate.expire(dirtyKey, java.time.Duration.ofMinutes(30));
+            } catch (Exception e) {
+                log.warn("标记脏学校失败（将回退全量扫描，不影响主流程）: state={}", state, e);
+            }
+        }
 
         // ③ 发布自动打标事件 → TagWorker 异步消费，失败传播
         if (state != null) {

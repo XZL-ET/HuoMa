@@ -124,7 +124,7 @@ public class TagWorker {
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
                     if (eventJson == null) {
-                        log.warn("跳过空消息(Tag): msgId={}, value={}", msgId, value);
+                        // _init=1 占位消息或空消息，静默 ACK 防止 PEL 泄漏
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.TAG_STREAM_KEY,
                             RedisConfig.TAG_CONSUMER_GROUP, msgId);

@@ -51,6 +51,8 @@ public class RedisConfig {
     public static long TAG_STREAM_MAXLEN = 50000;
     /** DataFill Stream 最大长度，缓冲约 1 小时新客户高峰；可通过 app.redis-stream.datafill-maxlen 配置 */
     public static long DATAFILL_STREAM_MAXLEN = 50000;
+    /** Transfer Stream 最大长度（高吞吐场景扩容），防止高峰期 trim 丢继承事件；可通过 app.redis-stream.transfer-maxlen 配置 */
+    public static long TRANSFER_STREAM_MAXLEN = 100000;
 
     @Value("${app.redis-stream.callback-maxlen:10000}")
     public void setStreamMaxlen(long val) { RedisConfig.STREAM_MAXLEN = val; }
@@ -60,6 +62,9 @@ public class RedisConfig {
 
     @Value("${app.redis-stream.datafill-maxlen:50000}")
     public void setDatafillStreamMaxlen(long val) { RedisConfig.DATAFILL_STREAM_MAXLEN = val; }
+
+    @Value("${app.redis-stream.transfer-maxlen:100000}")
+    public void setTransferStreamMaxlen(long val) { RedisConfig.TRANSFER_STREAM_MAXLEN = val; }
 
     // ==================== 死信队列 (DLQ) Stream 相关常量 ====================
 
@@ -164,6 +169,16 @@ public class RedisConfig {
      * </p>
      */
     public static final String ROTATE_LOCK_PREFIX = "rotate:lock:";
+
+    /**
+     * 预激活去重 Key 前缀。
+     * <p>
+     * 完整 Key 格式：<code>preactivate:done:{qrCodeId}</code>，TTL 到当日午夜。
+     * <br>防止 {@code preActivateBackup} 在同一活码上被反复触发，
+     * 导致接待员无限堆积。每天每个活码最多触发一次预激活。
+     * </p>
+     */
+    public static final String PREACTIVATE_DONE_PREFIX = "preactivate:done:";
 
     /**
      * 学校访问限流 Key 前缀。
