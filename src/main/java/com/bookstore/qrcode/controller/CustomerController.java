@@ -6,6 +6,7 @@ import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.service.CustomerService;
 import com.bookstore.qrcode.service.AgentRotationService;
+import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.TagRepository;
@@ -56,6 +57,7 @@ public class CustomerController {
     private final AgentRepository agentRepo;
     private final QrCodeRepository qrCodeRepo;
     private final TagRepository tagRepo;
+    private final TagService tagService;
     private final WecomApiClient wecomApiClient;
 
     // 企微员工名单缓存（避免每次请求都调企微 API）
@@ -324,6 +326,33 @@ public class CustomerController {
     public String repairCustomerData() {
         int repaired = customerService.repairCustomerData();
         log.info("客户数据修复完成: 共修复 {} 条", repaired);
+        return "redirect:/customers";
+    }
+
+    /**
+     * POST {@code /customers/repair-tags}
+     * <p>
+     * 修复指定学校下所有客户的企微标签（批量补打）。
+     * 适用于系统异常导致本地 DB 已写入标签关联但企微侧标记未成功的情况。
+     * {@code markTag} 是幂等操作，已存在的标签重复调用不会产生副作用。
+     * </p>
+     *
+     * @param schoolId 学校 ID（必填，防止误操作全量执行）
+     * @param redirectAttributes 重定向闪存消息
+     * @return 重定向到客户列表页
+     * @see TagService#repairMissingWecomTags(String)
+     */
+    @PostMapping("/repair-tags")
+    public String repairTags(@RequestParam String schoolId,
+                             RedirectAttributes redirectAttributes) {
+        Map<String, Integer> result = tagService.repairMissingWecomTags(schoolId);
+        redirectAttributes.addFlashAttribute("message",
+            String.format("标签修复完成: 共 %d 个客户, 成功 %d, 跳过 %d, 失败 %d",
+                result.get("total"), result.get("success"),
+                result.get("skipped"), result.get("failed")));
+        log.info("标签修复: schoolId={}, total={}, success={}, skipped={}, failed={}",
+            schoolId, result.get("total"), result.get("success"),
+            result.get("skipped"), result.get("failed"));
         return "redirect:/customers";
     }
 

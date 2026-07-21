@@ -61,6 +61,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
         req.setSchoolId("SCH-ROTATE-001");
         req.setRegionCity("深圳");
         req.setRegionDistrict("南山区");
+        req.setStudentCount(500);
         req.setServiceTeacherUserid("agent_svc");
         req.setInitialAgentUserids("agent_svc");
         testQr = qrCodeService.create(req);

@@ -790,6 +790,78 @@ public class TransferService {
     }
 
     /**
+     * 修复因 field_data 键名与模板占位符不匹配导致的损坏备注。
+     * <p>从客户最近一次表单提交的 field_data 重新构建正确的备注并推送到企微。</p>
+     *
+     * @return 修复的客户数
+     */
+    public Map<String, Object> repairBrokenRemarks() {
+        List<CustomerTransfer> confirmed = transferRepo
+            .findConfirmedWithFormSubmission();
+        if (confirmed.isEmpty()) return Map.of("repaired", 0, "samples", List.of());
+
+        int repaired = 0;
+        List<Map<String, String>> samples = new ArrayList<>();
+        final int MAX_SAMPLES = 5;
+
+        for (CustomerTransfer ct : confirmed) {
+            try {
+                Customer customer = customerRepo.findById(ct.getCustomerId()).orElse(null);
+                if (customer == null) continue;
+
+                QrCode qr = ct.getQrCodeId() != null
+                    ? qrCodeRepo.findById(ct.getQrCodeId()).orElse(null) : null;
+
+                Map<String, String> fields = extractFormFields(ct.getCustomerId());
+                if (fields.isEmpty()) continue;
+
+                // 构建模板变量（与 sendTransferGreeting 一致）
+                Map<String, String> vars = new LinkedHashMap<>();
+                vars.put("parent_name", customer.getName());
+                vars.put("school_name", qr != null && qr.getSchoolName() != null
+                    ? qr.getSchoolName() : "");
+                vars.put("teacher_name", getTeacherName(ct.getToUserid()));
+                vars.putAll(fields);
+
+                // 取原始模板
+                String template = qr != null && qr.getTransferFilledNote() != null
+                    && !qr.getTransferFilledNote().isBlank()
+                    ? qr.getTransferFilledNote()
+                    : "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}";
+
+                // 重建"修复前"备注（只替换能匹配的变量，不清理残留占位符）
+                String before = template;
+                for (Map.Entry<String, String> entry : vars.entrySet()) {
+                    before = before.replace("{{" + entry.getKey() + "}}",
+                        entry.getValue() != null ? entry.getValue() : "");
+                }
+
+                // 清空备注，企微将显示客户网名
+                wecomApi.updateRemark(ct.getToUserid(),
+                    customer.getExternalUserid(), "");
+                repaired++;
+
+                if (samples.size() < MAX_SAMPLES) {
+                    samples.add(Map.of("before", before, "after", "（显示客户网名）"));
+                }
+
+                if (repaired % 10 == 0) {
+                    try { Thread.sleep(200); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                }
+            } catch (Exception e) {
+                log.warn("备注修复失败: customerId={}, err={}", ct.getCustomerId(), e.getMessage());
+            }
+        }
+        log.info("备注修复完成: 共 {} 条", repaired);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("repaired", repaired);
+        result.put("samples", samples);
+        return result;
+    }
+
+    /**
      * 从客户最近一次表单提交中提取字段数据，返回字段名→值的映射。
      * <p>
      * 用于填充交接欢迎语模板中的 {@code {{field_name}}} 占位符。
@@ -924,8 +996,7 @@ public class TransferService {
             return new TransferGreetingCfg(
                 qr.getTransferGreetingEnabled(),
                 qr.getTransferFilledNote() != null ? qr.getTransferFilledNote()
-                    : getGlobalConfig("transfer_filled_note_default",
-                        "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}"),
+                    : getFilledNoteConfig(),
                 qr.getTransferFilledGreeting() != null ? qr.getTransferFilledGreeting()
                     : getGlobalConfig("transfer_filled_greeting_default",
                         "{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚"),
@@ -956,8 +1027,7 @@ public class TransferService {
         // ③ SystemConfig 全局默认（硬编码兜底）
         return new TransferGreetingCfg(
             getGlobalConfigBool("transfer_greeting_enabled_default", true),
-            getGlobalConfig("transfer_filled_note_default",
-                "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}"),
+            getFilledNoteConfig(),
             getGlobalConfig("transfer_filled_greeting_default",
                 "{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚"),
             getGlobalConfig("transfer_unfilled_greeting_default",
@@ -1023,6 +1093,18 @@ public class TransferService {
         return fillTemplate(template, Map.of("teacher_name", getTeacherName(teacherUserid)));
     }
 
+    /**
+     * 从 {@link SystemConfig} 表读取 {@code transfer_filled_note_default} 配置。
+     * <p>与 {@link #getGlobalConfig} 不同：空字符串视为有效值（表示不设备注），
+     * 不会被过滤掉回退到硬编码兜底。</p>
+     */
+    private String getFilledNoteConfig() {
+        return systemConfigRepo.findByConfigKey("transfer_filled_note_default")
+            .map(SystemConfig::getConfigValue)
+            .filter(v -> v != null)
+            .orElse("{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}");
+    }
+
     private String getGlobalConfig(String key, String fallback) {
         return systemConfigRepo.findByConfigKey(key)
             .map(SystemConfig::getConfigValue)
@@ -1056,6 +1138,8 @@ public class TransferService {
             result = result.replace("{{" + entry.getKey() + "}}",
                 entry.getValue() != null ? entry.getValue() : "");
         }
+        // 兜底：清理所有未匹配的 {{...}} 占位符，避免原样显示到客户侧
+        result = result.replaceAll("\\{\\{[^}]+}}", "");
         return result;
     }
 

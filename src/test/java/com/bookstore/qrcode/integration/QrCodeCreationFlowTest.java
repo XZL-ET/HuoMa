@@ -50,6 +50,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         req.setSchoolId("SCH-TEST-001");
         req.setRegionCity("北京");
         req.setRegionDistrict("海淀区");
+        req.setStudentCount(500);
         // setup both old and new format — buildContactWayJson checks serviceTeacherUserid/agentsJson
         // while bindAgents prefers initialAgentUserids
         req.setServiceTeacherUserid("agent1,agent2");
@@ -137,7 +138,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
                 {"userid":"agent1","daily_max":20},
                 {"userid":"agent2","daily_max":30}
             ]""");
-        req.setStudentCount(null);           // 不触发自动计算
+        req.setStudentCount(500);            // 必填，不触发自动计算用 initialAgentCount
 
         QrCode created = qrCodeService.create(req);
 
@@ -195,6 +196,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         req.setSchoolId("SCH-NO-AGENT");
         req.setRegionCity("上海");
         req.setRegionDistrict("浦东新区");
+        req.setStudentCount(500);
         // 不设置任何 initialAgentUserids / serviceTeacherUserid / etc.
 
         assertThatThrownBy(() -> qrCodeService.create(req))

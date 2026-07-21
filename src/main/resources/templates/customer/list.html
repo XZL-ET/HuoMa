@@ -25,6 +25,14 @@
                   onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='修复中...'">
                 <button type="submit" class="btn btn-outline-warning btn-sm">🔧 修复客户数据</button>
             </form>
+            <!-- 标签修复：仅当已按学校筛选时才可用，防止误操作全量执行 -->
+            <th:block th:if="${schoolId != null}">
+                <form method="post" th:action="@{/customers/repair-tags}" style="display:inline"
+                      onsubmit="return confirm('确定要为当前筛选学校的全部客户补打企微标签吗？此操作安全但不可撤销。')">
+                    <input type="hidden" name="schoolId" th:value="${schoolId}">
+                    <button type="submit" class="btn btn-outline-info btn-sm">🏷️ 修复标签</button>
+                </form>
+            </th:block>
             <a th:href="@{/customers/export(keyword=${keyword},schoolId=${schoolId},currentAgent=${currentAgent},status=${status},startTime=${startTime},endTime=${endTime})}" class="btn btn-outline-secondary btn-sm">📥 导出 CSV</a>
         </div>
     </div>

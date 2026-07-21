@@ -56,6 +56,7 @@ class QrCodeControllerTest {
                 mock(SchoolRepository.class),
                 mock(SystemConfigRepository.class),
                 mock(StringRedisTemplate.class),
+                mock(OperationLogService.class),
                 mock(ObjectMapper.class),
                 mock(SceneConfigProperties.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();

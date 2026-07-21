@@ -201,6 +201,15 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
             CustomerTransfer.TransferStatus status, int minRetries);
 
     /**
+     * 查询已确认且有表单提交的转移记录，用于修复损坏的备注。
+     */
+    @Query("SELECT DISTINCT ct FROM CustomerTransfer ct "
+        + "JOIN FormSubmission fs ON fs.customerId = ct.customerId "
+        + "WHERE ct.status = 'confirmed' AND ct.greetingSent = true "
+        + "AND ct.noteSent = true")
+    List<CustomerTransfer> findConfirmedWithFormSubmission();
+
+    /**
      * 查询指定状态下轮询次数已达上限的转移记录。
      * <p>
      * 用于 trackResults 安全网：将 pollCount ≥ 48 但仍处于 pending_confirm

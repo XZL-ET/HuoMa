@@ -19,7 +19,7 @@
     <!-- Chart.js — 数据看板图表（BootCDN 国内节点） -->
     <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
     <style>
-        body { background: #f5f7fa; }
+        body { background: #f5f7fa; padding-top: 72px; }
         .navbar-brand { font-weight: 700; }
         .card { border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
         .table th { font-weight: 600; color: #555; }
@@ -46,7 +46,7 @@
 </head>
 <body>
     <!-- 顶部导航栏 -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm fixed-top">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">火马平台</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -128,7 +128,7 @@
     </nav>
 
     <!-- 主内容区 -->
-    <div class="container-fluid px-4">
+    <div class="container-fluid px-4 pt-3">
         <!-- 成功消息提示，model 中存在 message 时显示 -->
         <th:block th:if="${message}">
             <div class="alert alert-success alert-dismissible fade show" role="alert">

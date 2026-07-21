@@ -6,6 +6,7 @@ import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.TagRepository;
 import com.bookstore.qrcode.service.AgentRotationService;
 import com.bookstore.qrcode.service.CustomerService;
+import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,6 +37,7 @@ class CustomerControllerTest {
                 mock(AgentRepository.class),
                 mock(QrCodeRepository.class),
                 mock(TagRepository.class),
+                mock(TagService.class),
                 mock(WecomApiClient.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }

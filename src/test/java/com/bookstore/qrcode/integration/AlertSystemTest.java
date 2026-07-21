@@ -49,6 +49,7 @@ class AlertSystemTest extends BaseIntegrationTest {
         req.setSchoolId("SCH-ALERT-001");
         req.setRegionCity("广州");
         req.setRegionDistrict("天河区");
+        req.setStudentCount(500);
         req.setServiceTeacherUserid("agent1");
         req.setInitialAgentUserids("agent1");
         testQr = qrCodeService.create(req);

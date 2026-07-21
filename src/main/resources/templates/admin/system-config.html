@@ -53,6 +53,81 @@
             </table>
         </div>
     </div>
+
+    <!-- 运维工具 -->
+    <div class="card border-0 shadow-sm mt-4">
+        <div class="card-header bg-white border-bottom-0">
+            <h5 class="mb-0">🛠️ 运维工具</h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex flex-wrap gap-3 align-items-center">
+                <!-- 标签同步 -->
+                <form th:action="@{/admin/tags/sync}" method="post" class="d-inline">
+                    <button type="submit" class="btn btn-outline-secondary btn-sm">
+                        🔄 同步企微标签
+                    </button>
+                </form>
+                <!-- 备注修复（异步，避免浏览器超时） -->
+                <button id="repairBtn" type="button" class="btn btn-outline-warning btn-sm"
+                        onclick="repairRemarks()">
+                    🔧 修复损坏备注
+                </button>
+                <span id="repairStatus" class="small text-muted" style="display:none"></span>
+            </div>
+        </div>
+    </div>
+
+    <div id="repairSamples" class="mt-3" style="display:none"></div>
+
+    <script th:inline="javascript">
+    async function repairRemarks() {
+        if (!confirm('将修复所有已确认客户的备注名（约 1180 条，需 2-4 分钟），确认执行？')) return;
+
+        const btn = document.getElementById('repairBtn');
+        const status = document.getElementById('repairStatus');
+        const samplesDiv = document.getElementById('repairSamples');
+        btn.disabled = true;
+        btn.textContent = '⏳ 修复中...';
+        status.style.display = 'inline';
+        status.textContent = '正在处理，请勿关闭页面...';
+        status.className = 'small text-warning ms-2';
+        samplesDiv.style.display = 'none';
+
+        try {
+            const resp = await fetch('/admin/repair-remarks', { method: 'POST' });
+            const data = await resp.json();
+            status.textContent = '✅ 修复完成：共 ' + data.repaired + ' 条';
+            status.className = 'small text-success ms-2';
+            btn.textContent = '🔧 修复损坏备注';
+
+            // 显示修复样本（前5条的前后对比）
+            if (data.samples && data.samples.length > 0) {
+                let html = '<h6 class="mt-3 mb-2">📋 修复样本（前 ' + data.samples.length + ' 条）</h6>';
+                data.samples.forEach(function(s, i) {
+                    html += '<div class="card bg-light mb-2 border-0">' +
+                        '<div class="card-body py-2 px-3 small">' +
+                        '<div class="text-danger mb-1"><b>修复前：</b>' + escapeHtml(s.before) + '</div>' +
+                        '<div class="text-success"><b>修复后：</b>' + escapeHtml(s.after) + '</div>' +
+                        '</div></div>';
+                });
+                samplesDiv.innerHTML = html;
+                samplesDiv.style.display = 'block';
+            }
+        } catch (e) {
+            status.textContent = '❌ 请求失败，请重试';
+            status.className = 'small text-danger ms-2';
+            btn.textContent = '🔧 修复损坏备注';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    </script>
 </div>
 </body>
 </html>

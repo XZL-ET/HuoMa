@@ -772,7 +772,7 @@
     </script>
 
     <!-- 在职继承触发与预览 -->
-    <script>
+    <script th:inline="javascript">
     document.getElementById('triggerInheritanceBtn')?.addEventListener('click', async function() {
         const qrId = this.dataset.qrid;
         if (!confirm('确定要执行在职继承吗？')) return;

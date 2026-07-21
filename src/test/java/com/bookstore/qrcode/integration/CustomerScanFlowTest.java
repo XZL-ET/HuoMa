@@ -54,6 +54,7 @@ class CustomerScanFlowTest extends BaseIntegrationTest {
         req.setSchoolId("SCH-SCAN-001");
         req.setRegionCity("北京");
         req.setRegionDistrict("朝阳区");
+        req.setStudentCount(500);
         req.setServiceTeacherUserid("agent1,agent2");
         req.setInitialAgentUserids("agent1,agent2");
         testQr = qrCodeService.create(req);

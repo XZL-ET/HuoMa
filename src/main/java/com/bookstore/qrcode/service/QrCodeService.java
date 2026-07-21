@@ -1433,8 +1433,7 @@ public class QrCodeService {
                 getSystemConfigBool("transfer_greeting_enabled_default", true));
             // 转接附注：客户信息摘要，使用 {{}} 模板变量在服务端替换
             config.put("transfer_filled_note",
-                getSystemConfigOrDefault("transfer_filled_note_default",
-                    "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}"));
+                getFilledNoteConfig("{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}"));
             // 已填表客户的问候语模板
             config.put("transfer_filled_greeting",
                 getSystemConfigOrDefault("transfer_filled_greeting_default",
@@ -1448,6 +1447,18 @@ public class QrCodeService {
             // 欢迎语配置构造失败不阻断活码创建，返回空 JSON
             return "{}";
         }
+    }
+
+    /**
+     * 从 {@link SystemConfig} 表读取 {@code transfer_filled_note_default} 配置。
+     * <p>与 {@link #getSystemConfigOrDefault} 不同：空字符串视为有效值（表示不设备注），
+     * 不会被过滤掉回退到 fallback。</p>
+     */
+    private String getFilledNoteConfig(String fallback) {
+        return systemConfigRepo.findByConfigKey("transfer_filled_note_default")
+            .map(SystemConfig::getConfigValue)
+            .filter(v -> v != null)
+            .orElse(fallback);
     }
 
     /**
