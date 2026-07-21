@@ -118,7 +118,7 @@ public class TransferWorker {
 
                 try {
                     redisTemplate.opsForStream().trim(
-                        RedisConfig.TRANSFER_STREAM_KEY, RedisConfig.STREAM_MAXLEN, true);
+                        RedisConfig.TRANSFER_STREAM_KEY, RedisConfig.TRANSFER_STREAM_MAXLEN, true);
                 } catch (Exception e) { log.debug("TRANSFER trim skip: {}", e.getMessage()); }
             } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             catch (Exception e) {
