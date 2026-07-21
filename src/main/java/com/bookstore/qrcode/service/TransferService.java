@@ -980,12 +980,13 @@ public class TransferService {
 
             transfer.setGreetingSent(true);
             transfer.setNoteSent(true);
-            // 立即落库，防止调用方后续异常导致 greetingSent 标记丢失而重复发送
-            transferRepo.save(transfer);
+            // 使用 saveAndFlush 强制立即落库，防止 detached entity 在 for 循环中未 flush
+            // 导致下一轮 retryFailedGreetings 又被扫出造成重复发送
+            transferRepo.saveAndFlush(transfer);
         } catch (WecomPermanentException e) {
             // 永久错误（如 48002 api forbidden）不可恢复，标记已完成避免每 30 分钟无效重试
             transfer.setGreetingSent(true);
-            transferRepo.save(transfer);
+            transferRepo.saveAndFlush(transfer);
             log.warn("发送交接欢迎语永久失败(已标记): transferId={}, errcode={}, errmsg={}",
                 transfer.getId(), e.getErrcode(), e.getErrmsg());
         } catch (Exception e) {
