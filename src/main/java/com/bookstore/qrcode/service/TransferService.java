@@ -109,16 +109,21 @@ public class TransferService {
             throw new RuntimeException("客户 " + customerId + " 继承锁占用，稍后重试");
         }
         // 将锁释放注册到事务完成后：@Transactional 在方法返回后才提交，
-        // 若在 finally 中提前释放，其他线程可能在事务可见前查到空记录并重复发起转移
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(
-                new TransactionSynchronization() {
-                    @Override
-                    public void afterCompletion(int status) {
-                        redisTemplate.delete(lockKey);
-                    }
-                });
-        }
+        // 若在 finally 中提前释放，其他线程可能在事务可见前查到空记录并重复发起转移。
+        // syncActive 标记用于兜底：若事务同步未激活（极端场景），finally 直接释放锁，
+        // 避免 120s TTL 期间阻塞同一客户的所有转移请求。
+        boolean syncActive = false;
+        try {
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            redisTemplate.delete(lockKey);
+                        }
+                    });
+                syncActive = true;
+            }
         // ---- 去重：避免同一客户重复发起继承 ----
         // 只排除进行中/已完成的转移（pending_confirm / confirmed），
         // timeout / rejected / api_failed / retry_limit 的客户允许重新转移。
@@ -307,6 +312,13 @@ public class TransferService {
                     .failReason(e.getMessage())
                     .build());
             }
+        } finally {
+            // 安全网：若事务同步未激活（极端场景，如 AOP 自调用绕过了代理），
+            // 直接释放锁，避免 120s TTL 期间阻塞同一客户的所有转移请求
+            if (!syncActive) {
+                redisTemplate.delete(lockKey);
+            }
+        }
     }
 
     /**

@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 在职继承定时任务。
@@ -210,6 +211,24 @@ public class InheritanceJob {
         int skippedNoService = 0;
         List<String> noServiceSchools = new ArrayList<>();
         List<String> noReceptionistSchools = new ArrayList<>();
+
+        // ---- 增量扫描优化：只处理有新客户添加的学校，减少无效 DB 查询 ----
+        try {
+            Set<String> dirtySchools = redisTemplate.opsForSet().members(DIRTY_SCHOOLS_KEY);
+            if (dirtySchools != null && !dirtySchools.isEmpty()) {
+                int before = activeQrs.size();
+                activeQrs = activeQrs.stream()
+                    .filter(qr -> dirtySchools.contains(qr.getSchoolId()))
+                    .toList();
+                redisTemplate.delete(DIRTY_SCHOOLS_KEY);
+                log.info("增量扫描: {} 个学校有新客户, 活码 {} → {} ({}), 窗口=[{}, {}]",
+                    dirtySchools.size(), before, activeQrs.size(), windowLabel,
+                    windowStart, windowEnd);
+            }
+        } catch (Exception e) {
+            // Redis 不可用时降级为全量扫描
+            log.warn("DIRTY_SCHOOLS 读取失败，退回全量扫描: {}", e.getMessage());
+        }
 
         for (QrCode qr : activeQrs) {
             try {

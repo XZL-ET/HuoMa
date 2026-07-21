@@ -255,8 +255,8 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
      * 确保相邻批次窗口不重叠，避免同一边界客户被重复入队。
      * </p>
      * <p>
-     * 用于在职继承定时任务：只排除 pending_confirm / confirmed 状态的客户，
-     * timeout / rejected / api_failed / retry_limit 的客户允许重新入队发起转移。
+     * 用于在职继承定时任务：排除 pending_confirm / confirmed / api_failed 状态的客户，
+     * 仅 timeout / rejected / retry_limit 的客户允许重新入队发起转移。
      * api_failed 的重试由 {@code TransferService.retryFailedTransfers()} 独立控制，不经过 Stream。
      * </p>
      *

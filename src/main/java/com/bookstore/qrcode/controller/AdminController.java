@@ -1,10 +1,13 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.service.TransferService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
@@ -19,6 +22,7 @@ public class AdminController {
 
     private final TagService tagService;
     private final TransferService transferService;
+    private final MessageGuardService messageGuardService;
 
     /**
      * 从企微同步全部标签到本地 DB，并刷新标签组缓存。
@@ -43,5 +47,27 @@ public class AdminController {
     @ResponseBody
     public Map<String, Object> repairRemarks() {
         return transferService.repairBrokenRemarks();
+    }
+
+    /**
+     * 将死信队列（DLQ）中的消息重放到 Transfer Stream。
+     *
+     * <p>POST /admin/dlq/replay —— DLQ 积压时手动触发重放，
+     * 消息会重新进入在职继承流水线。
+     *
+     * @param all 是否全量重放（默认 false，最多 100 条；true 最多 1000 条）
+     * @return JSON {@code {"replayed": N, "dlqRemaining": M}}
+     */
+    @PostMapping("/admin/dlq/replay")
+    @ResponseBody
+    public Map<String, Object> replayDlq(@RequestParam(defaultValue = "false") boolean all) {
+        int replayed;
+        if (all) {
+            replayed = messageGuardService.replayAllDlq(RedisConfig.TRANSFER_STREAM_KEY);
+        } else {
+            replayed = messageGuardService.replayDlq(RedisConfig.TRANSFER_STREAM_KEY);
+        }
+        long remaining = messageGuardService.dlqSize();
+        return Map.of("replayed", replayed, "dlqRemaining", Math.max(remaining, 0));
     }
 }

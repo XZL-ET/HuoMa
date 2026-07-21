@@ -48,7 +48,8 @@ public class SecurityConfig {
                         // 企微标签同步：部署后一键触发
                         .ignoringRequestMatchers("/admin/tags/sync")
                         // 备注修复：部署后一键触发
-                        .ignoringRequestMatchers("/admin/repair-remarks"))
+                        .ignoringRequestMatchers("/admin/repair-remarks")
+                        .ignoringRequestMatchers("/admin/dlq/replay"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
@@ -75,6 +76,8 @@ public class SecurityConfig {
                         .requestMatchers("/admin/tags/sync").hasRole("ADMIN")
                         // 备注修复：仅 admin 可访问
                         .requestMatchers("/admin/repair-remarks").hasRole("ADMIN")
+                        // DLQ 重放：仅 admin 可访问
+                        .requestMatchers("/admin/dlq/replay").hasRole("ADMIN")
                         // 系统配置管理：仅 admin 可访问
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问
