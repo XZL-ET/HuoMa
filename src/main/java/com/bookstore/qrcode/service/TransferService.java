@@ -984,6 +984,7 @@ public class TransferService {
 
             transfer.setGreetingSent(true);
             transfer.setNoteSent(true);
+            transfer.setGreetingPermanentFail(false); // 重置，防止手动重试后日志误判
             // 使用 saveAndFlush 强制立即落库，防止 detached entity 在 for 循环中未 flush
             // 导致下一轮 retryFailedGreetings 又被扫出造成重复发送
             transferRepo.saveAndFlush(transfer);
