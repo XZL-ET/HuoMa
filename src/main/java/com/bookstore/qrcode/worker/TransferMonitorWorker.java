@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.worker;
 
+import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.MessageGuardService;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 在职继承追踪与重试定时任务。
@@ -70,8 +72,9 @@ public class TransferMonitorWorker {
      */
     @Scheduled(cron = "0 */30 * * * *")
     public void monitor() {
+        String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(TRACK_RESULTS_LOCK_KEY, "1", TRACK_RESULTS_LOCK_TTL);
+            .setIfAbsent(TRACK_RESULTS_LOCK_KEY, lockValue, TRACK_RESULTS_LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
             log.debug("继承结果追踪被其他实例执行中，跳过");
             return;
@@ -87,7 +90,12 @@ public class TransferMonitorWorker {
         } catch (Exception e) {
             log.error("继承结果追踪异常", e);
         } finally {
-            redisTemplate.delete(TRACK_RESULTS_LOCK_KEY);
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                List.of(TRACK_RESULTS_LOCK_KEY), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", TRACK_RESULTS_LOCK_KEY);
+            }
         }
     }
 
@@ -101,8 +109,9 @@ public class TransferMonitorWorker {
      */
     @Scheduled(cron = "0 */30 * * * *")
     public void retryFailed() {
+        String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(RETRY_FAILED_LOCK_KEY, "1", RETRY_LOCK_TTL);
+            .setIfAbsent(RETRY_FAILED_LOCK_KEY, lockValue, RETRY_LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
             log.debug("api_failed 转移重试被其他实例执行中，跳过");
             return;
@@ -113,7 +122,12 @@ public class TransferMonitorWorker {
         } catch (Exception e) {
             log.error("api_failed 转移重试异常", e);
         } finally {
-            redisTemplate.delete(RETRY_FAILED_LOCK_KEY);
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                List.of(RETRY_FAILED_LOCK_KEY), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", RETRY_FAILED_LOCK_KEY);
+            }
         }
     }
 
@@ -133,8 +147,9 @@ public class TransferMonitorWorker {
         if (hour < 8 || (hour == 8 && minute < 30) || hour >= 21) {
             return;
         }
+        String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(RETRY_GREETINGS_LOCK_KEY, "1", RETRY_LOCK_TTL);
+            .setIfAbsent(RETRY_GREETINGS_LOCK_KEY, lockValue, RETRY_LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
             log.debug("欢迎语补发被其他实例执行中，跳过");
             return;
@@ -145,7 +160,12 @@ public class TransferMonitorWorker {
         } catch (Exception e) {
             log.error("欢迎语补发异常", e);
         } finally {
-            redisTemplate.delete(RETRY_GREETINGS_LOCK_KEY);
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                List.of(RETRY_GREETINGS_LOCK_KEY), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", RETRY_GREETINGS_LOCK_KEY);
+            }
         }
     }
 
