@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<!-- 全部活码异常员工总览页 — 按活码分组展示所有异常员工 -->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='全部异常员工总览', content=~{::main})}">
+<main>
+    <div class="row g-3">
+        <!-- 标题栏 -->
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <h5>🔍 全部异常员工总览</h5>
+                <a href="/qrcodes" class="btn btn-sm btn-outline-secondary">← 返回活码列表</a>
+            </div>
+        </div>
+
+        <!-- 统计概览 -->
+        <div class="col-12">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <div class="card p-3 text-center">
+                        <div class="fs-2 fw-bold" th:class="${totalAnomalyCount > 0 ? 'text-danger' : 'text-success'}"
+                             th:text="${totalAnomalyCount}">0</div>
+                        <small class="text-muted">异常员工总数</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 text-center">
+                        <div class="fs-2 fw-bold text-warning" th:text="${totalQrCount}">0</div>
+                        <small class="text-muted">受影响活码数</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 text-center">
+                        <div class="fs-2 fw-bold" th:class="${poolStandby > 0 ? 'text-primary' : 'text-warning'}"
+                             th:text="${poolStandby}">0</div>
+                        <small class="text-muted">全局池可用替补</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作区 -->
+        <div class="col-12" th:if="${totalAnomalyCount > 0}">
+            <div class="card p-3 d-flex flex-row align-items-center justify-content-between">
+                <div>
+                    <span class="text-danger fw-bold">⚠ 共 <span th:text="${totalAnomalyCount}"></span> 个异常员工</span>
+                    <span class="text-muted ms-2">分布在 <span th:text="${totalQrCount}"></span> 个活码上</span>
+                </div>
+                <form th:if="${poolStandby > 0}"
+                      th:action="@{/qrcodes/verify-all-agents/replace}" method="post"
+                      onsubmit="return confirm('确定要批量替换全部活码的异常员工吗？\n\n此操作将扫描所有活跃活码，移除异常员工并从全局池补入替补。')">
+                    <button class="btn btn-warning">🔧 批量替换全部异常</button>
+                </form>
+                <button th:if="${poolStandby == 0}"
+                        class="btn btn-secondary" disabled
+                        title="全局池无可用替补，无法替换">🔒 无可用替补</button>
+            </div>
+        </div>
+
+        <!-- 空白状态 -->
+        <div class="col-12" th:if="${#lists.isEmpty(allAnomalies)}">
+            <div class="card p-5 text-center">
+                <div class="fs-1">✅</div>
+                <h5 class="text-success">所有活码员工状态正常</h5>
+                <p class="text-muted">未发现异常员工，无需处理</p>
+                <a href="/qrcodes" class="btn btn-outline-primary">返回活码列表</a>
+            </div>
+        </div>
+
+        <!-- 按活码分组展示 -->
+        <div class="col-12" th:each="group : ${allAnomalies}">
+            <div class="card p-4 mb-3">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h6>
+                            <a th:href="@{/qrcodes/{id}/verify-agents(id=${group.qrCodeId})}"
+                               class="text-decoration-none">
+                                🏫 <span th:text="${group.schoolName}"></span>
+                            </a>
+                            <span class="badge bg-danger ms-2" th:text="${group.count} + '个异常'"></span>
+                        </h6>
+                        <small class="text-muted">活码 ID: <code th:text="${group.qrCodeId}"></code></small>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a th:href="@{/qrcodes/{id}/verify-agents(id=${group.qrCodeId})}"
+                           class="btn btn-sm btn-outline-primary">查看详情</a>
+                        <a th:href="@{/qrcodes/{id}(id=${group.qrCodeId})}"
+                           class="btn btn-sm btn-outline-secondary">活码详情</a>
+                    </div>
+                </div>
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>姓名</th>
+                            <th>UserID</th>
+                            <th>角色</th>
+                            <th>异常类型</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="a : ${group.agents}">
+                            <td><strong th:text="${a.name}"></strong></td>
+                            <td><code th:text="${a.userid}"></code></td>
+                            <td>
+                                <span class="badge" th:classappend="${a.role == 'service' ? 'bg-primary' : (a.role == 'dual' ? 'bg-info' : 'bg-secondary')}"
+                                      th:text="${a.role == 'service' ? '服务老师' : (a.role == 'dual' ? '双重角色' : '接待员')}"></span>
+                            </td>
+                            <td><span class="badge bg-danger" th:text="${a.anomaly}"></span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</main>
+</html>

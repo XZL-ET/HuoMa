@@ -21,6 +21,22 @@ public class FormTemplate {
     @Column(length = 500)
     private String description;
 
+    /** 表单页副标题（提示语），为空时使用系统默认 */
+    @Column(length = 200)
+    private String subtitle;
+
+    /** 发送卡片标题，为空时使用默认 "📋 请填写孩子信息" */
+    @Column(name = "card_title", length = 100)
+    private String cardTitle;
+
+    /** 发送卡片描述，为空时使用默认 */
+    @Column(name = "card_desc", length = 500)
+    private String cardDesc;
+
+    /** 发送卡片图片链接，为空时不传 picurl */
+    @Column(name = "card_pic_url", length = 500)
+    private String cardPicUrl;
+
     @Column(name = "fields", columnDefinition = "JSON", nullable = false)
     private String fields;
 

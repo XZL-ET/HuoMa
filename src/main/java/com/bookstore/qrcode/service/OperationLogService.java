@@ -2,10 +2,14 @@ package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.OperationLog;
 import com.bookstore.qrcode.repository.OperationLogRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
 
 /**
  * 操作审计日志服务。
@@ -20,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class OperationLogService {
 
     private final OperationLogRepository operationLogRepository;
+    private final ObjectMapper objectMapper;
 
     /**
      * 记录一条操作日志。
@@ -30,19 +35,24 @@ public class OperationLogService {
      * @param targetId   操作对象 ID
      * @param detail     操作详情描述
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void log(String operator, String action, String targetType, String targetId, String description) {
-        // detail 列类型为 JSON，需要构造合法的 JSON 字符串
-        String detail = String.format("{\"description\":\"%s\"}", description.replace("\"", "\\\""));
-        OperationLog opLog = OperationLog.builder()
-                .operator(operator)
-                .action(action)
-                .targetType(targetType)
-                .targetId(targetId)
-                .detail(detail)
-                .build();
-        operationLogRepository.save(opLog);
-        log.debug("操作日志已记录: operator={}, action={}, target={}/{}",
-                operator, action, targetType, targetId);
+        try {
+            // 使用 ObjectMapper 序列化，正确处理反斜杠、换行符等特殊字符
+            String detail = objectMapper.writeValueAsString(Map.of("description", description));
+            OperationLog opLog = OperationLog.builder()
+                    .operator(operator)
+                    .action(action)
+                    .targetType(targetType)
+                    .targetId(targetId)
+                    .detail(detail)
+                    .build();
+            operationLogRepository.save(opLog);
+            log.debug("操作日志已记录: operator={}, action={}, target={}/{}",
+                    operator, action, targetType, targetId);
+        } catch (Exception e) {
+            log.warn("审计日志写入失败（不影响主业务）: operator={}, action={}, target={}/{}",
+                    operator, action, targetType, targetId, e);
+        }
     }
 }

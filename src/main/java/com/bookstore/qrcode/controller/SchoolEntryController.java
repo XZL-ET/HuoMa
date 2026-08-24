@@ -8,6 +8,7 @@ import com.bookstore.qrcode.entity.School;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.SchoolAccessLogService;
 import com.bookstore.qrcode.service.SchoolService;
+import com.bookstore.qrcode.util.QrUrlAllowlist;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.RenderingHints;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,6 +48,7 @@ public class SchoolEntryController {
     private final SchoolService schoolService;
     private final SchoolAccessLogService logService;
     private final QrCodeRepository qrCodeRepository;
+    private final Font baseFont;
 
     // ========================================================================
     // 首页：市州列表 + 全局联系人
@@ -164,6 +167,11 @@ public class SchoolEntryController {
             log.warn("QrCode not found for schoolId={}", schoolId);
         }
 
+        if (!QrUrlAllowlist.isAllowedQrUrl(detail.getQrUrl())) {
+            log.warn("Download refused: 非法 QR URL, school={}", schoolId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
         // 代理下载企微活码图片，并在底部添加学校名称
         try {
             URL url = URI.create(detail.getQrUrl()).toURL();
@@ -191,9 +199,10 @@ public class SchoolEntryController {
                 // 分隔线
                 g.setColor(new Color(220, 220, 220));
                 g.drawLine(20, qrImage.getHeight() + 8, width - 20, qrImage.getHeight() + 8);
-                // 学校名称
+                // 学校名称（使用 FontConfig 加载的中文字体，避免 Linux 上显示为方块）
                 g.setColor(new Color(51, 51, 51));
-                g.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 16));
+                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                g.setFont(baseFont.deriveFont(Font.PLAIN, 16f));
                 FontMetrics fm = g.getFontMetrics();
                 String schoolLabel = detail.getSchoolName();
                 int textWidth = fm.stringWidth(schoolLabel);

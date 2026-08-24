@@ -7,4 +7,5 @@ import java.util.List;
 public interface FormSubmissionRepository extends JpaRepository<FormSubmission, Long> {
     List<FormSubmission> findByCustomerIdOrderBySubmittedAtDesc(Long customerId);
     boolean existsByCustomerId(Long customerId);
+    boolean existsByCustomerIdAndQrCodeId(Long customerId, Long qrCodeId);
 }

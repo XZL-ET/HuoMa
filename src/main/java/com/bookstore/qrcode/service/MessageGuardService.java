@@ -87,7 +87,7 @@ public class MessageGuardService {
             byte[] digest = md.digest(seed.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 16; i++) {  // 128-bit, collision prob ≈ 1/2^64
-                sb.append(String.format("%02x", digest[i]));
+                sb.append(String.format("%02x", digest[i] & 0xff));
             }
             return sb.toString();
         } catch (Exception e) {
@@ -193,15 +193,19 @@ public class MessageGuardService {
     /**
      * 扫描指定 Stream 的 PEL，回收 idle 超时的孤消息。
      *
-     * <p>正常流程中 Worker 会在处理成功后 ACK，PEL 应接近空。
-     * PEL 有消息意味着：Worker 在 READ 和 ACK 之间崩溃（JVM crash / kill -9）。</p>
+     * <p>PEL 里有消息意味着两种情况：</p>
+     * <ol>
+     *   <li>Worker 在 READ 和 ACK 之间崩溃（JVM crash / kill -9）——真孤儿；</li>
+     *   <li>带 {@code _retry_at} 的退避重试消息未到期，Worker 故意不 ACK 留在 PEL。</li>
+     * </ol>
      *
      * <p><b>回收逻辑（对每条 idle > idleMs 的消息）：</b>
      * <ol>
-     *   <li>INCR 重试计数器</li>
-     *   <li>retryCount ≤ 3 → XCLAIM 获取消息体 → XADD 回原 Stream 尾部
-     *       → ACK 原消息。正常 Worker 会重新消费到。</li>
-     *   <li>retryCount > 3 → XRANGE 读消息体 → 移入 DLQ → ACK 原消息</li>
+     *   <li>读 {@code _retry_at}：若仍在未来，跳过（留 PEL 等待到期），不 INCR、不重投；</li>
+     *   <li>到期或缺失 → INCR 重试计数器；</li>
+     *   <li>retryCount ≤ 3 → XADD 回原 Stream 尾部（不再设置 {@code _retry_at}，让
+     *       Worker 立即处理）→ ACK 原消息；</li>
+     *   <li>retryCount > 3 → 移入 DLQ → ACK 原消息。</li>
      * </ol>
      *
      * <p><b>为什么 XCLAIM 后必须 re-enqueue：</b>
@@ -237,11 +241,20 @@ public class MessageGuardService {
 
                 try {
                     // 先 XCLAIM 获取消息体，用内容哈希做重试 key（与 markRetryOrDead 一致）
-                    List<MapRecord<String, Object, Object>> claimed =
-                        redisTemplate.opsForStream().claim(
+                    List<MapRecord<String, Object, Object>> claimed;
+                    try {
+                        claimed = redisTemplate.opsForStream().claim(
                             streamKey, consumerGroup, recoveryConsumer,
                             Duration.ofMillis(idleMs),
                             RecordId.of(msgId));
+                    } catch (NullPointerException npe) {
+                        // 消息体已被 stream 清理（如 MAXLEN/MINID 裁剪），
+                        // 但 PEL 条目还在 — 直接 ACK 删除僵尸 pending
+                        log.warn("PEL 僵尸消息（body 已删除）: stream={}, msgId={}, idle={}ms — 自动 ACK",
+                            streamKey, msgId, idle);
+                        ackSafely(streamKey, consumerGroup, msgId);
+                        continue;
+                    }
 
                     if (claimed == null || claimed.isEmpty()) {
                         continue;
@@ -253,7 +266,19 @@ public class MessageGuardService {
                     fields.remove("_dlq_retry_count");
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
-                    fields.remove("_retry_at");
+
+                    // 尊重退避窗口：若 _retry_at 仍在未来，说明这是正常退避重试而非崩溃孤儿，
+                    // 跳过（留 PEL）待到期后由下一轮回收重投，避免 INCR 计数器导致消息被误判 DLQ
+                    String retryAt = fields.remove("_retry_at");
+                    if (retryAt != null) {
+                        try {
+                            if (Long.parseLong(retryAt) > Instant.now().getEpochSecond()) {
+                                log.debug("PEL 回收跳过（退避未到期）: stream={}, msgId={}, retryAt={}",
+                                    streamKey, msgId, retryAt);
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
 
                     // 基于消息内容生成逻辑 ID，与 markRetryOrDead 共享计数器
                     String logicalId = computeLogicalId(fields);
@@ -264,13 +289,12 @@ public class MessageGuardService {
                     redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
 
                     if (retryCount <= MAX_RETRIES) {
-                        // 指数退避重试
-                        long delaySec = Math.min((long) Math.pow(2, retryCount), MAX_BACKOFF_SECONDS);
-                        fields.put("_retry_at", String.valueOf(Instant.now().getEpochSecond() + delaySec));
+                        // 退避已到期或本就无 _retry_at（真崩溃孤儿），直接重投（不再设置 _retry_at），
+                        // 让 Worker 下次读到后立即处理，避免“退避→回收→再退避”的死循环
                         redisTemplate.opsForStream().add(streamKey, fields);
                         ackSafely(streamKey, consumerGroup, msgId);
-                        log.warn("PEL 回收: XCLAIM + re-enqueue ({}s 退避), stream={}, msgId={}, idle={}ms, retry={}",
-                            delaySec, streamKey, msgId, idle, retryCount);
+                        log.warn("PEL 回收: XCLAIM + re-enqueue, stream={}, msgId={}, idle={}ms, retry={}",
+                            streamKey, msgId, idle, retryCount);
                         recovered++;
                     } else {
                         moveToDlq(streamKey, msgId, fields, retryCount,
@@ -358,10 +382,12 @@ public class MessageGuardService {
     /**
      * 将 DLQ 中的所有消息重放到指定 Stream，然后逐条删除（防丢消息）。
      *
-     * <p>与 {@link #replayDlq(String)} 不同，此方法读取全部消息后用 XDEL 逐条删除，
+     * <p>每条消息优先使用 {@code _dlq_origin_stream} 元数据字段作为重放目标，
+     * 若该字段缺失或为空则回退到 {@code targetStreamKey}。
+     * 与 {@link #replayDlq(String)} 不同，此方法读取全部消息后用 XDEL 逐条删除，
      * 而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
-     * @param targetStreamKey 重放目标 Stream
+     * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
      * @return 重放的消息数量
      */
     public int replayAllDlq(String targetStreamKey) {
@@ -374,6 +400,10 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
+                    // 读取来源 Stream（剥离前），用于自动路由到正确的目标
+                    String originStream = fields.get("_dlq_origin_stream");
+                    String target = (originStream != null && !originStream.isBlank())
+                        ? originStream : targetStreamKey;
                     // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
@@ -383,11 +413,11 @@ public class MessageGuardService {
                     fields.remove("_retry_at");
                     // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String logicalId = computeLogicalId(fields);
-                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
                     // 添加静态标记
                     fields.put("_dlq_replayed", "true");
-                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
                     count++;
@@ -403,11 +433,13 @@ public class MessageGuardService {
     /**
      * 将 DLQ 中的消息重放到指定 Stream，逐条删除已重放的消息。
      *
-     * <p>重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
+     * <p>每条消息优先使用 {@code _dlq_origin_stream} 元数据字段作为重放目标，
+     * 若该字段缺失或为空则回退到 {@code targetStreamKey}。
+     * 重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
      * 一次最多重放 100 条死信，防止一次性压力过大。
      * 使用 XDEL 逐条删除而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
-     * @param targetStreamKey 重放目标 Stream（通常是原 Stream）
+     * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
      * @return 重放的消息数量
      */
     public int replayDlq(String targetStreamKey) {
@@ -420,6 +452,10 @@ public class MessageGuardService {
             if (records != null && !records.isEmpty()) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
+                    // 读取来源 Stream（剥离前），用于自动路由到正确的目标
+                    String originStream = fields.get("_dlq_origin_stream");
+                    String target = (originStream != null && !originStream.isBlank())
+                        ? originStream : targetStreamKey;
                     // 剥离 DLQ 元数据，避免动态字段参与逻辑 ID 计算
                     fields.remove("_dlq_origin_stream");
                     fields.remove("_dlq_origin_msgid");
@@ -429,11 +465,11 @@ public class MessageGuardService {
                     fields.remove("_retry_at");
                     // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String logicalId = computeLogicalId(fields);
-                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + targetStreamKey + ":" + logicalId;
+                    String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
                     // 添加静态标记
                     fields.put("_dlq_replayed", "true");
-                    redisTemplate.opsForStream().add(targetStreamKey, fields);
+                    redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
                     count++;

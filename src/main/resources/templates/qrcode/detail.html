@@ -18,6 +18,14 @@
                             <span th:if="${qr.studentCount != null}">
                                 | 学生人数：<span th:text="${qr.studentCount}"></span>人
                             </span>
+                            | 场景：
+                            <form th:action="@{/qrcodes/{id}/scene(id=${qr.id})}" method="post" class="d-inline">
+                                <select name="scene" class="form-select form-select-sm d-inline w-auto"
+                                        onchange="this.form.submit()">
+                                    <option value="daily_push" th:selected="${qr.scene.name() == 'daily_push'}">📱 日常推送</option>
+                                    <option value="parent_meeting" th:selected="${qr.scene.name() == 'parent_meeting'}">🏫 家长会</option>
+                                </select>
+                            </form>
                         </div>
                     </div>
                     <!-- 右侧：状态徽标 + 暂停/启用 + 删除按钮 -->
@@ -70,11 +78,17 @@
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label">欢迎语文案
-                                <small class="text-muted">（留空继承分组或系统默认）</small>
+                                <small class="text-muted">（留空继承分组/分类或系统默认）</small>
                             </label>
                             <textarea name="welcomeText" class="form-control" rows="2"
                                       th:text="${qr.welcomeText}"
                                       placeholder="留空使用默认：{{school_name}}家长您好～"></textarea>
+                            <div class="form-text" th:if="${qr.welcomeText == null}">
+                                生效值：<code th:text="${effectiveWelcomeText}"></code>
+                                <span th:if="${welcomeSource != null}" class="text-info">
+                                    📎 继承自 <span th:text="${welcomeSource}"></span>
+                                </span>
+                            </div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">收集表单模板
@@ -87,9 +101,128 @@
                                         th:text="${t.name}"
                                         th:selected="${qr.formTemplateId == t.id}"></option>
                             </select>
+                            <div class="form-text" th:if="${qr.formTemplateId == null && effectiveFormTemplateId != null}">
+                                生效模板 ID：<code th:text="${effectiveFormTemplateId}"></code>
+                                <span th:if="${formTemplateSource != null}" class="text-info">
+                                    📎 继承自 <span th:text="${formTemplateSource}"></span>
+                                </span>
+                            </div>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-sm btn-primary mt-3">保存配置</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 在职继承问候语配置区 -->
+        <div class="col-12">
+            <div class="card p-4">
+                <h6>📝 在职继承问候语配置
+                    <small class="text-muted">（留空继承<a href="/admin/system-config">系统默认设置</a>）</small>
+                </h6>
+                <form th:action="@{/qrcodes/{id}/transfer-greeting(id=${qr.id})}" method="post" id="transferGreetingForm">
+                    <!-- 启用开关 -->
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   name="transferGreetingEnabled" value="true"
+                                   id="transferEnabled"
+                                   th:checked="${effectiveTransferEnabled}">
+                            <label class="form-check-label" for="transferEnabled">启用在职继承问候语</label>
+                        </div>
+                        <div class="form-text" th:if="${!transferEnabledOverride}">
+                            生效值：<span th:text="${effectiveTransferEnabled ? '已启用' : '已禁用'}"></span>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferEnabledOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 已填写-备注模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">已填写-备注模板
+                            <small class="text-muted">（写入企微客户备注）</small>
+                        </label>
+                        <textarea name="transferFilledNote" class="form-control" rows="2"
+                                  th:text="${qr.transferFilledNote}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferFilledNoteOverride}">
+                            生效值：<code th:text="${effectiveTransferFilledNote}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferFilledNoteOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 已填写-问候语模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">已填写-问候语模板
+                            <small class="text-muted">（客户已填表时发送）</small>
+                        </label>
+                        <textarea name="transferFilledGreeting" class="form-control" rows="2"
+                                  th:text="${qr.transferFilledGreeting}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferFilledGreetingOverride}">
+                            生效值：<code th:text="${effectiveTransferFilledGreeting}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferFilledGreetingOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 未填写-问候语模板 -->
+                    <div class="mb-3">
+                        <label class="form-label">未填写-问候语模板
+                            <small class="text-muted">（客户未填表时发送）</small>
+                        </label>
+                        <textarea name="transferUnfilledGreeting" class="form-control" rows="2"
+                                  th:text="${qr.transferUnfilledGreeting}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferUnfilledGreetingOverride}">
+                            生效值：<code th:text="${effectiveTransferUnfilledGreeting}"></code>
+                            <span class="text-info">📎 继承自系统默认</span>
+                        </div>
+                        <div class="form-text" th:if="${transferUnfilledGreetingOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <!-- 模板变量提示 -->
+                    <div class="text-muted small mb-2">
+                        可用变量：
+                        <code>{{parent_name}}</code> <code>{{school_name}}</code>
+                        <code>{{teacher_name}}</code> <code>{{grade}}</code>
+                        <code>{{class}}</code> <code>{{child_name}}</code>
+                        <code>{{form_link}}</code>
+                    </div>
+
+                    <!-- 转接成功通知消息 -->
+                    <div class="mb-3">
+                        <label class="form-label">转接成功通知
+                            <small class="text-muted">（客户侧可见，最多200字符，由企微在转接成功后自动发送）</small>
+                        </label>
+                        <textarea name="transferSuccessMsg" class="form-control" rows="2"
+                                  maxlength="200"
+                                  th:text="${qr.transferSuccessMsg}"
+                                  placeholder="留空使用系统默认"></textarea>
+                        <div class="form-text" th:if="${!transferSuccessMsgOverride}">
+                            生效值：<code th:text="${effectiveTransferSuccessMsg}"></code>
+                            <span class="text-info" th:if="${effectiveTransferSuccessMsg != null and !effectiveTransferSuccessMsg.isEmpty()}">📎 继承自系统默认</span>
+                            <span class="text-muted" th:if="${effectiveTransferSuccessMsg == null or effectiveTransferSuccessMsg.isEmpty()}">📎 继承自系统默认（不发送）</span>
+                        </div>
+                        <div class="form-text" th:if="${transferSuccessMsgOverride}">
+                            <span class="text-success">✏️ 活码自定义</span>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-sm btn-primary">保存问候语配置</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary"
+                                onclick="resetTransferGreeting()">重置为系统默认</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -98,12 +231,23 @@
         <div class="col-12">
             <div class="card p-4">
                 <h6>🔄 在职继承
+                    <button type="button" class="btn btn-sm btn-outline-warning float-end ms-1" id="autoInheritanceToggle"
+                            onclick="toggleAutoInheritance()">⏸ 暂停自动</button>
                     <a th:href="@{/qrcodes/{id}/transfers(id=${qr.id})}"
                        class="btn btn-sm btn-outline-secondary float-end">查看记录</a>
+                    <span id="autoStatus" class="float-end small text-success me-2 mt-1">● 自动运行中</span>
                 </h6>
-                <p class="small text-muted">将接待员当日积累的客户批量转移给服务老师</p>
-                <button class="btn btn-sm btn-outline-primary" id="triggerInheritanceBtn"
-                        th:attr="data-qrid=${qr.id}">执行在职继承</button>
+                <p class="small text-muted">
+                    🕗 <b>白天 (<span th:text="${dayStartHour}"></span>:00‑<span th:text="${dayEndHour}"></span>:00)</b>：客户添加后延迟 15 分钟自动转到服务老师<br>
+                    🌙 <b>夜间 (<span th:text="${dayEndHour}"></span>:00‑<span th:text="${dayStartHour}"></span>:00)</b>：次日 08:30 批量转移，避免半夜打扰客户<br>
+                    <span class="text-secondary">下方按钮可手动触发今日待转移客户（无视时间窗口）</span>
+                </p>
+                <div class="d-flex gap-2">
+                    <a th:href="@{/qrcodes/{id}/transfer-preview(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-primary">📋 查看待转移客户</a>
+                    <button class="btn btn-sm btn-outline-success" id="triggerInheritanceBtn"
+                            th:attr="data-qrid=${qr.id}">⚡ 执行继承</button>
+                </div>
                 <span id="transferPreview" class="ms-2 small text-muted"></span>
             </div>
         </div>
@@ -114,15 +258,30 @@
                 <h6>
                     📱 活码联系人
                     <small class="text-muted">（扫码后客户随机分配到这几位中的一位）</small>
-                    <button class="btn btn-sm btn-outline-success float-end" data-bs-toggle="modal" data-bs-target="#addAgentModal">
-                        <i class="bi bi-plus-lg"></i> 新增联系人
+                    <a th:href="@{/qrcodes/{id}/verify-agents(id=${qr.id})}"
+                       class="btn btn-sm btn-outline-danger float-end me-1">🔍 核验异常员工</a>
+                    <button class="btn btn-sm btn-outline-success float-end me-1" data-bs-toggle="modal" data-bs-target="#addAgentModal">
+                        ➕ 新增联系人
                     </button>
                 </h6>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <small class="text-muted">
+                        可回收 <span class="text-primary fw-bold" id="recyclableCount">0</span> 人
+                    </small>
+                    <button type="button" class="btn btn-outline-warning btn-sm" id="recycleBtn"
+                            onclick="batchRecycle()" disabled>
+                        ♻️ 回收选中
+                    </button>
+                </div>
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
+                    <thead><tr><th style="width:40px">
+                                        <input type="checkbox" id="receptionistSelectAll"
+                                               onchange="toggleAllReceptionists(this)">
+                                    </th><th>姓名</th><th>角色</th><th>日限</th><th>今日已加</th><th>状态</th><th style="width:100px;">操作</th></tr></thead>
                     <tbody>
                         <!-- 服务老师行：th:each 遍历 services 列表 -->
                         <tr th:each="a : ${services}">
+                            <td></td>
                             <td>
                                 <!-- 通过 agentNameMap 将 userid 转为可读名称 -->
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
@@ -137,18 +296,41 @@
                             <!-- 状态徽标：活跃=绿色，已满=黄色，其他=红色 -->
                             <td>
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : (a.status.name() == 'full' ? 'bg-warning' : 'bg-danger')}"
-                                      th:text="${a.status.name() == 'active' ? '接客中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
+                                      th:text="${a.status.name() == 'active' ? '接待中' : (a.status.name() == 'full' ? '已满' : a.status.name())}"></span>
                             </td>
                             <td class="text-nowrap">
-                                <!-- 编辑按钮，将联系人数据存放在 data-* 属性中供弹窗使用 -->
-                                <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
-                                        th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
-                                        data-bs-toggle="modal" data-bs-target="#editAgentModal"
-                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                                <!-- 已移除状态：显示重新上码按钮 -->
+                                <th:block th:if="${a.status.name() != 'active'}">
+                                    <form th:action="@{/agents/restore}" method="post" class="d-inline"
+                                          onsubmit="return confirm('确定将该服务老师重新上码吗？\n\n恢复后该服务老师将重新参与该活码的客户服务。')">
+                                        <input type="hidden" name="userid" th:value="${a.agentUserid}">
+                                        <input type="hidden" name="view" value="pool">
+                                        <input type="hidden" name="redirectUrl" th:value="@{/qrcodes/{id}(id=${qr.id})}">
+                                        <button class="btn btn-sm btn-outline-success" title="重新上码">🔄 重新上码</button>
+                                    </form>
+                                </th:block>
+                                <!-- 活跃状态：显示编辑和移除按钮 -->
+                                <th:block th:if="${a.status.name() == 'active'}">
+                                    <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
+                                            th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
+                                            data-bs-toggle="modal" data-bs-target="#editAgentModal"
+                                            title="编辑">✏️</button>
+                                    <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
+                                          method="post" class="d-inline"
+                                          onsubmit="return confirm('⚠️ 确定要移除该服务老师吗？\n\n移除后该活码将失去服务老师，客户扫码后将由接待员直接接待。')">
+                                        <button class="btn btn-sm btn-outline-danger" title="移除服务老师">🗑️</button>
+                                    </form>
+                                </th:block>
                             </td>
                         </tr>
                         <!-- 已激活的接待员行 -->
                         <tr th:each="a : ${receptionists}">
+                            <td>
+                                <input type="checkbox" class="receptionist-check"
+                                       th:value="${a.id}"
+                                       th:disabled="${a.role.name() == 'service' || a.role.name() == 'dual'}"
+                                       th:title="${a.role.name() == 'service' ? '服务老师不可回收' : (a.role.name() == 'dual' ? '双角色员工不可回收' : '勾选以回收')}">
+                            </td>
                             <td>
                                 <strong th:text="${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)}"></strong>
                                 <span class="badge bg-info ms-1">接待员</span>
@@ -161,24 +343,24 @@
                             </td>
                             <td>
                                 <span class="badge" th:classappend="${a.status.name() == 'active' ? 'bg-success' : 'bg-danger'}"
-                                      th:text="${a.status.name() == 'active' ? '接客中' : a.status.name()}"></span>
+                                      th:text="${a.status.name() == 'active' ? '接待中' : a.status.name()}"></span>
                             </td>
                             <td class="text-nowrap">
                                 <button class="btn btn-sm btn-outline-secondary edit-agent-btn"
                                         th:attr="data-id=${a.id},data-userid=${a.agentUserid},data-name=${agentNameMap.getOrDefault(a.agentUserid, a.agentUserid)},data-dailymax=${a.dailyMax},data-role=${a.role.name()},data-sortorder=${a.sortOrder}"
                                         data-bs-toggle="modal" data-bs-target="#editAgentModal"
-                                        title="编辑"><i class="bi bi-pencil"></i></button>
+                                        title="编辑">✏️</button>
                                 <!-- 移除联系人按钮 -->
                                 <form th:action="@{/qrcodes/{qid}/agents/{aid}/remove(qid=${qr.id},aid=${a.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('确定要将该联系人从活码中移除吗？')">
-                                    <button class="btn btn-sm btn-outline-danger" title="移除"><i class="bi bi-trash"></i></button>
+                                    <button class="btn btn-sm btn-outline-danger" title="移除">🗑️ 移除</button>
                                 </form>
                             </td>
                         </tr>
                         <!-- 空数据提示 -->
                         <tr th:if="${services.isEmpty() and receptionists.isEmpty()}">
-                            <td colspan="6" class="text-muted text-center">暂未配置联系人</td>
+                            <td colspan="7" class="text-muted text-center">暂未配置联系人</td>
                         </tr>
                     </tbody>
                 </table>
@@ -206,7 +388,7 @@
                     <span class="badge bg-warning text-dark me-1" th:text="'已满 ' + ${poolFull}"></span>
                     <span th:if="${poolBlocked > 0}" class="badge bg-danger me-1" th:text="'暂停 ' + ${poolBlocked}"></span>
                     <button class="btn btn-sm btn-outline-primary float-end" data-bs-toggle="modal" data-bs-target="#addBackupModal">
-                        <i class="bi bi-plus-lg"></i> 新增
+                        ➕ 新增
                     </button>
                 </h6>
                 <small class="text-muted">以下员工供所有活码共享，按优先级分配。上移/下移调整全局优先级。</small>
@@ -223,7 +405,7 @@
                                 <span th:text="${b.dailyCurrent}"
                                       th:classappend="${b.dailyCurrent >= b.dailyMax ? 'text-danger fw-bold' : ''}"></span>
                             </td>
-                            <td th:text="${b.dailyMax}">100</td>
+                            <td th:text="${b.dailyMax}">150</td>
                             <td>
                                 <span class="badge bg-success" th:if="${b.status.name() == 'standby'}">待命</span>
                                 <span class="badge bg-warning text-dark" th:if="${b.status.name() == 'full'}">已满</span>
@@ -237,21 +419,21 @@
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="up">
                                     <button class="btn btn-sm btn-outline-secondary" title="上移（全局优先级）"
-                                            th:disabled="${iter.first}"><i class="bi bi-chevron-up"></i></button>
+                                            th:disabled="${iter.first}">▲</button>
                                 </form>
                                 <!-- 下移按钮（调整全局优先级） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/move(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline">
                                     <input type="hidden" name="direction" value="down">
                                     <button class="btn btn-sm btn-outline-secondary" title="下移（全局优先级）"
-                                            th:disabled="${iter.last}"><i class="bi bi-chevron-down"></i></button>
+                                            th:disabled="${iter.last}">▼</button>
                                 </form>
                                 </th:block>
                                 <!-- 移除按钮（从全局池删除，影响所有活码） -->
                                 <form th:action="@{/qrcodes/{qid}/backups/{bid}/remove(qid=${qr.id},bid=${b.id})}"
                                       method="post" class="d-inline"
                                       onsubmit="return confirm('⚠️ 将从全局员工池移除该员工，影响所有活码。确定吗？')">
-                                    <button class="btn btn-sm btn-outline-danger" title="从全局池移除"><i class="bi bi-trash"></i></button>
+                                    <button class="btn btn-sm btn-outline-danger" title="从全局池移除">🗑️ 移除</button>
                                 </form>
                             </td>
                         </tr>
@@ -323,7 +505,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addBackupModalLabel">
-                        <i class="bi bi-person-plus"></i> 添加员工到全局池（所有活码共享）
+                        👤 添加员工到全局池（所有活码共享）
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -357,7 +539,7 @@
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success"
                                                     th:disabled="${#lists.contains(allPoolUserids, u.userid)}">
-                                                <i class="bi bi-plus-circle"></i> 加入后备
+                                                ➕ 加入后备
                                             </button>
                                         </form>
                                     </td>
@@ -382,7 +564,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addAgentModalLabel">
-                        <i class="bi bi-person-plus"></i> 新增联系人到此活码
+                        👤 新增联系人到此活码
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
@@ -416,7 +598,7 @@
                                         <form th:action="@{/qrcodes/{id}/agents(id=${qr.id})}" method="post" class="d-inline">
                                             <input type="hidden" name="agentUserid" th:value="${u.userid}">
                                             <button class="btn btn-sm btn-outline-success">
-                                                <i class="bi bi-plus-circle"></i> 加入
+                                                ➕ 加入
                                             </button>
                                         </form>
                                     </td>
@@ -441,11 +623,12 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="editAgentModalLabel">
-                        <i class="bi bi-pencil"></i> 编辑联系人 — <span class="agent-name-display"></span>
+                        ✏️ 编辑联系人 — <span class="agent-name-display"></span>
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
                 </div>
-                <form method="post" id="editAgentForm">
+                <form th:action="@{/qrcodes/0/agents/0/update}" method="post" id="editAgentForm">
+                    <!-- CSRF token 由 th:action 自动注入；action 地址在 JS 中动态替换 -->
                     <div class="modal-body">
                         <!-- 字段：日添加上限 -->
                         <div class="mb-3">
@@ -543,7 +726,7 @@
 
     <!-- 返回列表按钮 -->
     <div class="mt-3">
-        <a href="/qrcodes" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> 返回列表</a>
+        <a href="/qrcodes" class="btn btn-outline-secondary">← 返回列表</a>
     </div>
 
     <!-- 前端交互逻辑 -->
@@ -589,23 +772,146 @@
     </script>
 
     <!-- 在职继承触发与预览 -->
-    <script>
+    <script th:inline="javascript">
     document.getElementById('triggerInheritanceBtn')?.addEventListener('click', async function() {
         const qrId = this.dataset.qrid;
         if (!confirm('确定要执行在职继承吗？')) return;
         this.disabled = true;
         this.textContent = '执行中...';
         try {
-            const resp = await fetch('/api/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
+            const resp = await fetch('/qrcodes/' + qrId + '/transfer/trigger', {method:'POST'});
             const data = await resp.json();
             document.getElementById('transferPreview').textContent =
-                data.success ? '已发起 ' + data.count + ' 条继承任务' : '失败: ' + data.error;
+                data.transferred != null ? '✅ 已发起 ' + data.transferred + ' 条继承任务' : '失败: ' + (data.error || '未知错误');
         } catch(e) {
             document.getElementById('transferPreview').textContent = '网络错误';
         }
         this.disabled = false;
         this.textContent = '执行在职继承';
     });
+
+    // 自动在职继承开关
+    async function initAutoToggle() {
+        const btn = document.getElementById('autoInheritanceToggle');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = '加载中...';
+        try {
+            const resp = await fetch('/api/inheritance/auto/status');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            updateAutoToggleUI(data.enabled);
+        } catch(e) {
+            console.error('获取自动继承状态失败:', e);
+            // 恢复默认 UI（自动运行中）
+            updateAutoToggleUI(true);
+        }
+        btn.disabled = false;
+    }
+    function updateAutoToggleUI(enabled) {
+        const btn = document.getElementById('autoInheritanceToggle');
+        const status = document.getElementById('autoStatus');
+        if (!btn || !status) return;
+        if (enabled) {
+            btn.textContent = '⏸ 暂停自动';
+            btn.className = 'btn btn-sm btn-outline-warning float-end ms-1';
+            status.textContent = '● 自动运行中';
+            status.className = 'float-end small text-success me-2 mt-1';
+        } else {
+            btn.textContent = '▶ 开启自动';
+            btn.className = 'btn btn-sm btn-outline-success float-end ms-1';
+            status.textContent = '● 自动已暂停';
+            status.className = 'float-end small text-danger me-2 mt-1';
+        }
+    }
+    async function toggleAutoInheritance() {
+        const btn = document.getElementById('autoInheritanceToggle');
+        if (!btn) return;
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = '切换中...';
+        try {
+            const resp = await fetch('/api/inheritance/auto/toggle', {method:'POST'});
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error('HTTP ' + resp.status + (text.length < 100 ? ': ' + text : ''));
+            }
+            const data = await resp.json();
+            updateAutoToggleUI(data.enabled);
+        } catch(e) {
+            console.error('切换自动继承失败:', e);
+            alert('切换失败: ' + e.message);
+        }
+        btn.disabled = false;
+        if (btn.textContent === '切换中...') {
+            btn.textContent = originalText;
+        }
+    }
+    initAutoToggle();
+
+    function resetTransferGreeting() {
+        // 开启开关
+        document.getElementById('transferEnabled').checked = true;
+        // 清空三个模板字段（空=使用系统默认）
+        document.querySelector('[name="transferFilledNote"]').value = '';
+        document.querySelector('[name="transferFilledGreeting"]').value = '';
+        document.querySelector('[name="transferUnfilledGreeting"]').value = '';
+        document.querySelector('[name="transferSuccessMsg"]').value = '';
+        // 提交表单
+        document.getElementById('transferGreetingForm').submit();
+    }
+
+    function toggleAllReceptionists(master) {
+        document.querySelectorAll('.receptionist-check:not([disabled])').forEach(cb => {
+            cb.checked = master.checked;
+        });
+        updateRecycleButton();
+    }
+
+    function updateRecycleButton() {
+        const selected = document.querySelectorAll('.receptionist-check:checked').length;
+        document.getElementById('recyclableCount').textContent = selected;
+        const btn = document.getElementById('recycleBtn');
+        btn.disabled = selected === 0;
+        btn.textContent = selected > 0 ? '♻️ 回收选中 (' + selected + ')' : '♻️ 回收选中';
+    }
+
+    document.querySelectorAll('.receptionist-check').forEach(cb => {
+        cb.addEventListener('change', updateRecycleButton);
+    });
+
+    async function batchRecycle() {
+        const checked = document.querySelectorAll('.receptionist-check:checked');
+        if (checked.length === 0) return;
+        if (!confirm('确定要回收选中的 ' + checked.length + ' 个接待员吗？\n\n回收后他们将返回全局池，可被其他活码使用。')) return;
+
+        const agentIds = Array.from(checked).map(cb => parseInt(cb.value));
+        const qrId = /*[[${qr.id}]]*/ 0;
+        try {
+            const resp = await fetch('/qrcodes/' + qrId + '/agents/batch-recycle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentIds: agentIds })
+            });
+            const result = await resp.json();
+            let msg = '回收完成：成功 ' + result.recycled + ' 人';
+            if (result.rejected > 0) {
+                msg += '，' + result.rejected + ' 人被拒绝';
+                const reasons = result.rejectReasons;
+                if (reasons) {
+                    for (const [id, reason] of Object.entries(reasons)) {
+                        msg += '\n• ' + reason;
+                    }
+                }
+            }
+            alert(msg);
+            if (result.recycled > 0) location.reload();
+        } catch (e) {
+            alert('回收失败: ' + e.message);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', updateRecycleButton);
     </script>
 </main>
 </html>

@@ -322,7 +322,6 @@ public class CustomerService {
      *
      * @return 实际修复的客户数量
      */
-    @Transactional
     public int repairCustomerData() {
         // 分批处理，每批 50 条，避免全量加载到内存
         int batchSize = 50;
@@ -366,9 +365,6 @@ public class CustomerService {
                     repaired++;
                 }
             }
-            // 每批处理完 flush + clear，释放持久化上下文内存
-            entityManager.flush();
-            entityManager.clear();
         } while (customerPage.hasNext());
 
         log.info("客户数据修复完成: 修复{}条, API调用{}次", repaired, apiCalls);

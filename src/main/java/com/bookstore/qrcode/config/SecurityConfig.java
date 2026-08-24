@@ -33,12 +33,31 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+                .csrf(csrf -> csrf
+                        // 企微回调 POST 无 CSRF token，必须跳过 CSRF 校验
+                        .ignoringRequestMatchers("/api/wecom/callback/**")
+                        // H5 收集表单提交无 CSRF token
+                        .ignoringRequestMatchers("/api/form/submit")
+                        // 管理后台内部 API（活码操作 / 在职继承等），页面内 fetch() 调用无 CSRF token
+                        .ignoringRequestMatchers("/api/qrcodes/**")
+                        .ignoringRequestMatchers("/api/inheritance/**")
+                        .ignoringRequestMatchers("/qrcodes/*/transfer/**")
+                        .ignoringRequestMatchers("/qrcodes/*/agents/batch-recycle")
+                        // 客户标签修复：管理后台表单提交
+                        .ignoringRequestMatchers("/customers/repair-tags")
+                        // 企微标签同步：部署后一键触发
+                        .ignoringRequestMatchers("/admin/tags/sync")
+                        // 备注修复：部署后一键触发
+                        .ignoringRequestMatchers("/admin/repair-remarks")
+                        .ignoringRequestMatchers("/admin/dlq/replay"))
                 .authorizeHttpRequests(authz -> authz
                         // 企微回调：URL 验证 + 事件推送，必须公开
                         .requestMatchers("/api/wecom/callback/**").permitAll()
                         // Actuator 健康检查：供 K8s 探针使用
                         .requestMatchers("/actuator/health/**").permitAll()
                         .requestMatchers("/actuator/metrics/**").hasRole("ADMIN")
+                        // H5 收集表单：客户侧无需登录
+                        .requestMatchers("/form/**", "/api/form/submit").permitAll()
                         // 下载中心全部路径：由 DownloadAuthenticationFilter 独立处理认证
                         .requestMatchers("/download/**").permitAll()
                         // 用户管理：仅 admin 可访问
@@ -49,12 +68,26 @@ public class SecurityConfig {
                         .requestMatchers("/s/**").permitAll()
                         // 学校管理后台：仅 admin 可访问
                         .requestMatchers("/admin/schools/**").hasRole("ADMIN")
+                        // 表单模板管理：仅 admin 可访问
+                        .requestMatchers("/admin/form-templates/**").hasRole("ADMIN")
+                        // 学校分类管理：仅 admin 可访问
+                        .requestMatchers("/admin/categories/**").hasRole("ADMIN")
+                        // 企微标签同步：仅 admin 可访问
+                        .requestMatchers("/admin/tags/sync").hasRole("ADMIN")
+                        // 备注修复：仅 admin 可访问
+                        .requestMatchers("/admin/repair-remarks").hasRole("ADMIN")
+                        // DLQ 重放：仅 admin 可访问
+                        .requestMatchers("/admin/dlq/replay").hasRole("ADMIN")
                         // 系统配置管理：仅 admin 可访问
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问
                         .requestMatchers("/admin/school-entry/**").hasRole("ADMIN")
                         // 登录页面及静态资源
                         .requestMatchers("/login", "/css/**", "/js/**").permitAll()
+                        // 运维端点：仅 admin（health 详情含 Stream/PEL 深度，dlq 重放为破坏性操作）
+                        .requestMatchers("/api/health/**").hasRole("ADMIN")
+                        // 自动在职继承全局开关：仅 admin（破坏性，影响全局继承行为）
+                        .requestMatchers("/api/inheritance/**").hasRole("ADMIN")
                         // 其余所有请求需要登录
                         .anyRequest().authenticated()
                 )

@@ -1,0 +1,9 @@
+User-agent: *
+Disallow: /form/
+Disallow: /api/form/
+Disallow: /login
+Disallow: /download/oauth/
+Allow: /
+
+# 新华书店 · 火马活码管理平台
+# 如有问题请联系系统管理员

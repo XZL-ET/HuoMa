@@ -101,6 +101,29 @@ public class QrCode {
     @Column(name = "welcome_config", columnDefinition = "JSON")
     private String welcomeConfig;
 
+    /**
+     * 在职继承问候语是否启用，{@code NULL}=使用系统默认。
+     * @see com.bookstore.qrcode.service.TransferService#sendTransferGreeting
+     */
+    @Column(name = "transfer_greeting_enabled")
+    private Boolean transferGreetingEnabled;
+
+    /** 在职继承-已填写备注模板，{@code NULL}=使用系统默认，支持 {@code {{grade}} {{class}} {{child_name}} {{school_name}}} 等变量 */
+    @Column(name = "transfer_filled_note", length = 500)
+    private String transferFilledNote;
+
+    /** 在职继承-已填写问候语模板，{@code NULL}=使用系统默认 */
+    @Column(name = "transfer_filled_greeting", length = 500)
+    private String transferFilledGreeting;
+
+    /** 在职继承-未填写问候语模板，{@code NULL}=使用系统默认 */
+    @Column(name = "transfer_unfilled_greeting", length = 500)
+    private String transferUnfilledGreeting;
+
+    /** 转接成功通知消息（客户侧可见），{@code NULL}=使用系统默认，空字符串=不发送。最多200字符，由企微API限制。 */
+    @Column(name = "transfer_success_msg", length = 200)
+    private String transferSuccessMsg;
+
     /** 活码状态：active-正常, paused-暂停, full-已满, no_agent-无可用客服 */
     @Column(nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
@@ -126,7 +149,8 @@ public class QrCode {
     /** 创建方式：manual-手动创建, batch_import-批量导入 */
     @Column(name = "create_mode", nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
-    private CreateMode createMode;
+    @Builder.Default
+    private CreateMode createMode = CreateMode.manual;
 
     /** 备注说明 */
     @Column(length = 500)
@@ -144,6 +168,16 @@ public class QrCode {
     /** 学校学生人数，用于自动计算所需接待员数量 */
     @Column(name = "student_count")
     private Integer studentCount;
+
+    /** 活码创建场景：daily_push-日常推送, parent_meeting-家长会 */
+    @Column(name = "scene", nullable = false, length = 20)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private Scene scene = Scene.daily_push;
+
+    /** 所属企微部门 ID，用于扩容时同部门优先取人 */
+    @Column(name = "department_id")
+    private Long departmentId;
 
     /** 客户扫码后自动打标的自定义标签列表，多个标签以逗号分隔 */
     @Column(name = "custom_tags", length = 500)

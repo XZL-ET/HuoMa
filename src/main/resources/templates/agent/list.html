@@ -10,13 +10,27 @@
             <span class="badge bg-success fs-6" th:text="'待命 ' + ${standbyCount}"></span>
             <span class="badge bg-warning text-dark fs-6" th:text="'已满 ' + ${fullCount}"></span>
             <span class="badge bg-danger fs-6" th:text="'暂停 ' + ${blockedCount}"></span>
-            <form th:action="@{/agents/sync}" method="post" class="d-inline ms-2"
+            <form th:if="${view == null || view == 'pool'}" th:action="@{/agents/sync}" method="post" class="d-inline ms-2"
                   onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='同步中...';">
                 <button class="btn btn-sm btn-outline-primary" title="从企微通讯录同步新员工到全局池">
                     🔄 从企微同步
                 </button>
             </form>
         </div>
+    </div>
+
+    <!-- 视图切换 -->
+    <div class="btn-group mb-3" role="group" aria-label="视图切换">
+        <a th:href="@{/agents(view=pool,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter})}"
+           class="btn btn-sm"
+           th:classappend="${view == null || view == 'pool' ? 'btn-primary' : 'btn-outline-primary'}">
+           📋 池内视图
+        </a>
+        <a th:href="@{/agents(view=all,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter})}"
+           class="btn btn-sm"
+           th:classappend="${view == 'all' ? 'btn-primary' : 'btn-outline-primary'}">
+           👥 全量视图
+        </a>
     </div>
 
     <!-- 同步结果消息 -->
@@ -29,7 +43,8 @@
         <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
     </div>
 
-    <!-- 状态分布条 + 总数 -->
+    <!-- 状态分布条 + 总数（仅池内视图） -->
+    <th:block th:if="${view == null || view == 'pool'}">
     <div class="card p-3 mb-3" th:if="${totalCount > 0}">
         <div class="d-flex justify-content-between align-items-center mb-2">
             <div>
@@ -59,21 +74,36 @@
                  th:text="'暂停 ' + ${blockedCount}"></div>
         </div>
     </div>
+    </th:block>
 
     <!-- 搜索筛选栏 -->
     <div class="card p-3 mb-3">
         <form class="row g-2" method="get" th:action="@{/agents}">
+            <input type="hidden" name="view" th:value="${view}">
             <div class="col-md-4">
                 <input type="text" name="keyword" class="form-control" placeholder="搜索姓名或账号..."
                        th:value="${keyword}">
             </div>
             <div class="col-md-2">
+                <!-- 池内视图：按池状态筛选 -->
+                <th:block th:if="${view == null || view == 'pool'}">
                 <select name="status" class="form-select">
                     <option value="">全部状态</option>
                     <option value="standby" th:selected="${statusFilter == 'standby'}">待命</option>
                     <option value="full" th:selected="${statusFilter == 'full'}">已满</option>
                     <option value="blocked" th:selected="${statusFilter == 'blocked'}">暂停</option>
                 </select>
+                </th:block>
+                <!-- 全量视图：按企微状态筛选 -->
+                <th:block th:if="${view == 'all'}">
+                <select name="status" class="form-select">
+                    <option value="">全部状态</option>
+                    <option value="1" th:selected="${statusFilter == '1'}">已激活</option>
+                    <option value="2" th:selected="${statusFilter == '2'}">已禁用</option>
+                    <option value="4" th:selected="${statusFilter == '4'}">未激活</option>
+                    <option value="5" th:selected="${statusFilter == '5'}">已离职</option>
+                </select>
+                </th:block>
             </div>
             <div class="col-md-2">
                 <select name="anomaly" class="form-select">
@@ -88,13 +118,14 @@
                     <option value="已禁用" th:selected="${anomalyFilter == '已禁用'}">已禁用</option>
                 </select>
             </div>
-            <div class="col-md-1">
-                <button type="submit" class="btn btn-outline-secondary w-100"><i class="bi bi-search"></i></button>
+            <div class="col-md-auto">
+                <button type="submit" class="btn btn-primary">🔍 搜索</button>
             </div>
         </form>
     </div>
 
-    <!-- 全局池表格 -->
+    <!-- 池内视图表格 -->
+    <th:block th:if="${view == null || view == 'pool'}">
     <div class="card p-0">
         <div class="table-responsive">
             <table class="table table-sm table-hover mb-0" th:if="${!poolPage.isEmpty()}">
@@ -153,6 +184,16 @@
                                   th:text="${agentAnomalyMap.get(p.agentUserid)}"></span>
                             <span th:unless="${agentAnomalyMap.containsKey(p.agentUserid)}"
                                   class="text-muted small">-</span>
+                            <!-- 一键恢复按钮（仅熔断/停用可恢复） -->
+                            <th:block th:if="${agentAnomalyMap.getOrDefault(p.agentUserid, '') == '已熔断' || agentAnomalyMap.getOrDefault(p.agentUserid, '') == '已停用'}">
+                                <form th:action="@{/agents/restore}" method="post" class="d-inline ms-1"
+                                      th:attr="data-reason=${agentStatusReasonMap.getOrDefault(p.agentUserid, '未知')}"
+                                      onsubmit="return confirm('确定恢复该员工为正常状态吗？\n\n熔断原因: ' + this.getAttribute('data-reason'))">
+                                    <input type="hidden" name="userid" th:value="${p.agentUserid}">
+                                    <input type="hidden" name="view" value="pool">
+                                    <button class="btn btn-sm btn-outline-success py-0 px-1" title="一键恢复为正常状态">恢复</button>
+                                </form>
+                            </th:block>
                         </td>
                         <!-- 所在活码列表 -->
                         <td>
@@ -177,25 +218,137 @@
             </div>
         </div>
     </div>
+    </th:block>
 
-    <!-- 分页导航，仅当总页数 > 1 时显示 -->
+    <!-- 全量视图表格 -->
+    <th:block th:if="${view == 'all'}">
+    <div class="card p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0" th:if="${!allEmployeePage.isEmpty()}">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>员工姓名</th>
+                        <th>账号</th>
+                        <th>企微状态</th>
+                        <th>综合状态</th>
+                        <th>角色</th>
+                        <th>池状态</th>
+                        <th>日用量</th>
+                        <th>异常</th>
+                        <th>所在活码</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="row,iter : ${allEmployeeRows}">
+                        <td class="text-muted small" th:text="${allEmployeePage.number * allEmployeePage.size + iter.count}"></td>
+                        <td><span class="fw-semibold" th:text="${row.name}"></span></td>
+                        <td><code class="small" th:text="${row.userid}"></code></td>
+                        <!-- 企微状态 -->
+                        <td>
+                            <th:block th:switch="${row.wechatStatus}">
+                                <span th:case="1" class="badge bg-success">已激活</span>
+                                <span th:case="2" class="badge bg-danger">已禁用</span>
+                                <span th:case="4" class="badge bg-warning text-dark">未激活</span>
+                                <span th:case="5" class="badge bg-secondary">已离职</span>
+                                <span th:case="*" class="text-muted small">-</span>
+                            </th:block>
+                        </td>
+                        <!-- 综合状态 -->
+                        <td>
+                            <th:block th:switch="${row.agentOverallStatus}">
+                                <span th:case="'normal'" class="badge bg-success">正常</span>
+                                <span th:case="'warning'" class="badge bg-warning text-dark">预警</span>
+                                <span th:case="'blocked'" class="badge bg-danger">已停用</span>
+                                <span th:case="'melted'" class="badge bg-dark">已熔断</span>
+                                <span th:case="*" class="text-muted small">-</span>
+                            </th:block>
+                        </td>
+                        <!-- 角色 -->
+                        <td>
+                            <th:block th:switch="${row.agentRole}">
+                                <span th:case="'receptionist'" class="badge bg-info text-dark">接待员</span>
+                                <span th:case="'service'" class="badge bg-secondary">服务老师</span>
+                                <span th:case="'dual'" class="badge bg-primary">双重角色</span>
+                                <span th:case="*" class="text-muted small">-</span>
+                            </th:block>
+                        </td>
+                        <!-- 池状态 -->
+                        <td>
+                            <th:block th:switch="${row.poolStatus}">
+                                <span th:case="'standby'" class="badge bg-success">待命</span>
+                                <span th:case="'full'" class="badge bg-warning text-dark">已满</span>
+                                <span th:case="'blocked'" class="badge bg-danger">暂停</span>
+                                <span th:case="*" class="badge bg-light text-muted">未入池</span>
+                            </th:block>
+                        </td>
+                        <!-- 日用量 -->
+                        <td>
+                            <th:block th:if="${row.poolStatus != null}">
+                                <span th:text="${row.dailyCurrent} + ' / ' + ${row.dailyMax}"
+                                      th:classappend="${row.dailyCurrent >= row.dailyMax ? 'text-danger fw-bold' : ''}"></span>
+                            </th:block>
+                            <span th:unless="${row.poolStatus != null}" class="text-muted small">-</span>
+                        </td>
+                        <!-- 异常标签 -->
+                        <td>
+                            <span th:if="${row.anomalyLabel != null}"
+                                  class="badge" th:classappend="${row.anomalyClass}"
+                                  th:text="${row.anomalyLabel}"></span>
+                            <span th:unless="${row.anomalyLabel != null}" class="text-muted small">-</span>
+                            <!-- 一键恢复按钮（仅熔断/停用可恢复） -->
+                            <th:block th:if="${row.anomalyLabel == '已熔断' || row.anomalyLabel == '已停用'}">
+                                <form th:action="@{/agents/restore}" method="post" class="d-inline ms-1"
+                                      th:attr="data-reason=${row.statusReason != null ? row.statusReason : '未知'}"
+                                      onsubmit="return confirm('确定恢复该员工为正常状态吗？\n\n熔断原因: ' + this.getAttribute('data-reason'))">
+                                    <input type="hidden" name="userid" th:value="${row.userid}">
+                                    <input type="hidden" name="view" value="all">
+                                    <button class="btn btn-sm btn-outline-success py-0 px-1" title="一键恢复为正常状态">恢复</button>
+                                </form>
+                            </th:block>
+                        </td>
+                        <!-- 所在活码 -->
+                        <td>
+                            <span th:each="name,stat : ${row.qrCodeNames}"
+                                  class="badge bg-light text-dark me-1" th:text="${name}"></span>
+                            <span th:if="${row.qrCodeNames.isEmpty()}" class="text-muted small">-</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- 无匹配结果 -->
+            <div th:if="${allEmployeePage.isEmpty()}" class="text-center text-muted py-4">
+                <p class="mb-1" th:if="${!keyword.isBlank() || !statusFilter.isBlank() || !anomalyFilter.isBlank()}">
+                    无匹配员工，请调整筛选条件
+                </p>
+                <p class="mb-1" th:if="${keyword.isBlank() && statusFilter.isBlank() && anomalyFilter.isBlank()}">
+                    暂无员工数据
+                </p>
+                <small>请先从企微同步员工数据</small>
+            </div>
+        </div>
+    </div>
+    </th:block>
+
+    <!-- 分页导航（池内视图），仅当总页数 > 1 时显示 -->
+    <th:block th:if="${view == null || view == 'pool'}">
     <nav th:if="${poolPage.totalPages > 1}" class="mt-3">
         <ul class="pagination justify-content-center">
-            <!-- 上一页：首页时用 span 替代链接，防止 page=-1 -->
             <li class="page-item" th:classappend="${poolPage.first ? 'disabled' : ''}">
                 <th:block th:if="${!poolPage.first}">
-                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number - 1},size=${poolPage.size})}">上一页</a>
+                    <a class="page-link" th:href="@{/agents(view=pool,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number - 1},size=${poolPage.size})}">上一页</a>
                 </th:block>
                 <th:block th:if="${poolPage.first}">
                     <span class="page-link">上一页</span>
                 </th:block>
             </li>
-            <!-- 页码跳转表单 -->
             <li class="page-item">
                 <form method="get" th:action="@{/agents}" class="page-link border-0 bg-transparent"
                       style="display:inline-flex;align-items:center;gap:4px"
                       th:attr="data-max-page=${poolPage.totalPages}"
                       onsubmit="var v=parseInt(this.goto.value);var m=parseInt(this.getAttribute('data-max-page'));if(isNaN(v)||v<1)v=1;if(v>m)v=m;this.page.value=v-1">
+                    <input type="hidden" name="view" value="pool">
                     <input type="hidden" name="keyword" th:value="${keyword}">
                     <input type="hidden" name="status" th:value="${statusFilter}">
                     <input type="hidden" name="anomaly" th:value="${anomalyFilter}">
@@ -213,10 +366,9 @@
                     <span class="text-muted small ms-2">（需启用 JS 跳页，或使用上一页/下一页）</span>
                 </noscript>
             </li>
-            <!-- 下一页：末页时用 span 替代链接 -->
             <li class="page-item" th:classappend="${poolPage.last ? 'disabled' : ''}">
                 <th:block th:if="${!poolPage.last}">
-                    <a class="page-link" th:href="@{/agents(keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number + 1},size=${poolPage.size})}">下一页</a>
+                    <a class="page-link" th:href="@{/agents(view=pool,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${poolPage.number + 1},size=${poolPage.size})}">下一页</a>
                 </th:block>
                 <th:block th:if="${poolPage.last}">
                     <span class="page-link">下一页</span>
@@ -224,11 +376,69 @@
             </li>
         </ul>
     </nav>
+    </th:block>
 
-    <!-- 说明 -->
+    <!-- 分页导航（全量视图），仅当总页数 > 1 时显示 -->
+    <th:block th:if="${view == 'all'}">
+    <nav th:if="${allEmployeePage.totalPages > 1}" class="mt-3">
+        <ul class="pagination justify-content-center">
+            <li class="page-item" th:classappend="${allEmployeePage.first ? 'disabled' : ''}">
+                <th:block th:if="${!allEmployeePage.first}">
+                    <a class="page-link" th:href="@{/agents(view=all,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${allEmployeePage.number - 1},size=${allEmployeePage.size})}">上一页</a>
+                </th:block>
+                <th:block th:if="${allEmployeePage.first}">
+                    <span class="page-link">上一页</span>
+                </th:block>
+            </li>
+            <li class="page-item">
+                <form method="get" th:action="@{/agents}" class="page-link border-0 bg-transparent"
+                      style="display:inline-flex;align-items:center;gap:4px"
+                      th:attr="data-max-page=${allEmployeePage.totalPages}"
+                      onsubmit="var v=parseInt(this.goto.value);var m=parseInt(this.getAttribute('data-max-page'));if(isNaN(v)||v<1)v=1;if(v>m)v=m;this.page.value=v-1">
+                    <input type="hidden" name="view" value="all">
+                    <input type="hidden" name="keyword" th:value="${keyword}">
+                    <input type="hidden" name="status" th:value="${statusFilter}">
+                    <input type="hidden" name="anomaly" th:value="${anomalyFilter}">
+                    <input type="hidden" name="size" th:value="${allEmployeePage.size}">
+                    <input type="hidden" name="page" value="0">
+                    <span>第</span>
+                    <input type="number" name="goto" min="1" th:max="${allEmployeePage.totalPages}"
+                           th:value="${allEmployeePage.number + 1}"
+                           class="form-control form-control-sm text-center"
+                           style="width:55px; padding:2px 4px; height:28px;">
+                    <span>/ <span th:text="${allEmployeePage.totalPages}"></span> 页</span>
+                    <button type="submit" class="btn btn-outline-secondary btn-sm" style="padding:2px 8px; height:28px;">跳转</button>
+                </form>
+                <noscript>
+                    <span class="text-muted small ms-2">（需启用 JS 跳页，或使用上一页/下一页）</span>
+                </noscript>
+            </li>
+            <li class="page-item" th:classappend="${allEmployeePage.last ? 'disabled' : ''}">
+                <th:block th:if="${!allEmployeePage.last}">
+                    <a class="page-link" th:href="@{/agents(view=all,keyword=${keyword},status=${statusFilter},anomaly=${anomalyFilter},page=${allEmployeePage.number + 1},size=${allEmployeePage.size})}">下一页</a>
+                </th:block>
+                <th:block th:if="${allEmployeePage.last}">
+                    <span class="page-link">下一页</span>
+                </th:block>
+            </li>
+        </ul>
+    </nav>
+    </th:block>
+
+    <!-- 说明（池内视图） -->
+    <th:block th:if="${view == null || view == 'pool'}">
     <small class="text-muted mt-2 d-block">
         💡 全局池员工在所有活码间共享。员工被任一活码添加后，其日用量全局累计。
         达到日上限后状态变为「已满」，午夜自动恢复并排到队尾。
     </small>
+    </th:block>
+
+    <!-- 说明（全量视图） -->
+    <th:block th:if="${view == 'all'}">
+    <small class="text-muted mt-2 d-block">
+        💡 全量视图展示所有已同步的企微员工（含已离职、未激活、已禁用等不可用状态）。
+        仅池内员工参与活码分配。
+    </small>
+    </th:block>
 </main>
 </html>

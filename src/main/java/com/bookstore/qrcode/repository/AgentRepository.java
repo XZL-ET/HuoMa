@@ -4,8 +4,10 @@ import com.bookstore.qrcode.entity.Agent;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.List;
@@ -82,5 +84,22 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
     /** 批量重置熔断计数（每日凌晨调用，防止跨天累积永久封禁） */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query("UPDATE Agent a SET a.meltedCount24h = 0 WHERE a.meltedCount24h > 0")
+    @org.springframework.transaction.annotation.Transactional
     int batchResetMeltedCount();
+
+    /**
+     * 批量将指定员工标记为已停用。
+     * <p>在企微通讯录同步发现员工离职时调用，防止已离职员工的 userid
+     * 继续被推送到企微 API 导致 60111 错误。</p>
+     *
+     * @param userids 离职员工的 userid 列表
+     * @return 实际更新的行数
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Agent a SET a.overallStatus = 'blocked', "
+         + "a.statusReason = CONCAT('{\"reason\":\"企微通讯录已移除(同步级联)\",\"operator\":\"system\",\"time\":\"', CURRENT_TIMESTAMP, '\"}'), "
+         + "a.updatedAt = CURRENT_TIMESTAMP "
+         + "WHERE a.userid IN :userids AND a.overallStatus = 'normal'")
+    int batchBlockByUserids(@Param("userids") Collection<String> userids);
 }

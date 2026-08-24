@@ -60,16 +60,17 @@ public class AsyncConfig {
     }
 
     /**
-     * 通用异步任务线程池 — TagWorker(8) + DataFillWorker(4) + syncQrCodeToWechatAsync + 批量导入。
+     * 通用异步任务线程池 — TagWorker(8) + DataFillWorker(4) + OutboundMsgWorker(4) + TransferWorker(2)
+     * + syncQrCodeToWechatAsync + 批量导入。
      *
-     * <p>常驻线程数 = 8 + 4 = 12，corePoolSize 设为 12 确保常驻任务不被排队。
-     * maxPoolSize=16 给弹性任务留 4 个槽位。</p>
+     * <p>常驻线程数 = 8 + 4 + 4 + 2 = 18，corePoolSize 设为 20 确保常驻任务不被排队。
+     * maxPoolSize=24 给弹性任务留 4 个槽位。</p>
      */
     @Bean("taskExecutor")
     public Executor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(12);
-        executor.setMaxPoolSize(16);
+        executor.setCorePoolSize(20);
+        executor.setMaxPoolSize(24);
         executor.setQueueCapacity(2000);
         executor.setThreadNamePrefix("async-");
         // AbortPolicy: 队列满时抛异常，由调用方 catch 并记录日志，

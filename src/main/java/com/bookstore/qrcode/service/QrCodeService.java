@@ -1,18 +1,23 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.config.SceneConfigProperties;
 import com.bookstore.qrcode.dto.QrCodeCreateRequest;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomRateLimitException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
@@ -23,8 +28,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * <h2>活码核心服务</h2>
@@ -78,10 +87,26 @@ public class QrCodeService {
     private final GlobalAgentPoolRepository poolRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
+    private final EmployeeRepository employeeRepo;
+    private final SchoolRepository schoolRepo;
+    private final SchoolCategoryRepository categoryRepo;
+    private final SystemConfigRepository systemConfigRepo;
     private final WechatSyncHealingService healingService;
+    private final SceneConfigProperties sceneConfig;
+
+    @Qualifier("taskExecutor")
+    private final Executor taskExecutor;
+
+    @Qualifier("batchExecutor")
+    private final Executor batchExecutor;
+
+    // 自注入代理：解决 executeBatchImport → create() 的 @Transactional 自调用失效问题
+    @org.springframework.beans.factory.annotation.Autowired
+    @Lazy
+    private QrCodeService self;
 
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
-    @Value("${app.agent.daily-max-default:100}")
+    @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
 
     /** 批量导入时日接待上限，可通过 app.agent.batch-import-daily-max 配置 */
@@ -105,7 +130,7 @@ public class QrCodeService {
      */
     public Page<QrCode> search(String keyword, String city, String district,
                                 QrCode.QrCodeStatus status, Pageable pageable) {
-        return qrCodeRepo.search(keyword, city, district, status, pageable);
+        return qrCodeRepo.search(keyword, city, district, status, null, pageable);
     }
 
     /**
@@ -134,26 +159,35 @@ public class QrCodeService {
     }
 
     /**
-     * 获取全局员工池全部记录（含 standby / full / blocked）。
+     * 获取全局员工池分页数据 — 状态优先排序，DB 侧分页。
      *
-     * <p>v2.0 重构后升级为全局员工池，所有活码共享。
-     * 返回全部状态员工，standby 优先在前，同状态按 sortOrder 排序。</p>
-     *
-     * @param qrCodeId 活码主键 ID（保留参数兼容性，实际不区分活码）
-     * @return 全局池全部员工列表
+     * @param qrCodeId 活码主键 ID（保留参数兼容性）
+     * @param page     页码（从 0 开始）
+     * @param size     每页条数
+     * @return 全局池分页数据
      */
-    public List<GlobalAgentPool> getBackups(Long qrCodeId) {
-        List<GlobalAgentPool> all = poolRepo.findAll();
-        // standby 优先在前，同状态按 sortOrder 排序
-        all.sort((a, b) -> {
-            int sa = a.getStatus() == GlobalAgentPool.PoolStatus.standby ? 0
-                : a.getStatus() == GlobalAgentPool.PoolStatus.full ? 1 : 2;
-            int sb = b.getStatus() == GlobalAgentPool.PoolStatus.standby ? 0
-                : b.getStatus() == GlobalAgentPool.PoolStatus.full ? 1 : 2;
-            if (sa != sb) return Integer.compare(sa, sb);
-            return Integer.compare(a.getSortOrder(), b.getSortOrder());
-        });
-        return all;
+    public Page<GlobalAgentPool> getBackups(Long qrCodeId, int page, int size) {
+        return poolRepo.findAllWithStatusPriority(PageRequest.of(page, size));
+    }
+
+    /**
+     * 获取全局池各状态统计 — 改用三条 COUNT 查询替代全量加载。
+     *
+     * @return Map 包含 standby/full/blocked 计数
+     */
+    public Map<String, Long> getPoolStats() {
+        Map<String, Long> stats = new LinkedHashMap<>();
+        stats.put("standby", poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby));
+        stats.put("full", poolRepo.countByStatus(GlobalAgentPool.PoolStatus.full));
+        stats.put("blocked", poolRepo.countByStatus(GlobalAgentPool.PoolStatus.blocked));
+        return stats;
+    }
+
+    /**
+     * 获取全局池全部 userid 列表（轻量投影，只查 userid）。
+     */
+    public List<String> getAllPoolUserids() {
+        return poolRepo.findAllAgentUserids();
     }
 
     // ==================== 手动创建 ====================
@@ -186,12 +220,26 @@ public class QrCodeService {
             throw new RuntimeException("学校ID已存在: " + req.getSchoolId());
         }
 
-        // 若填写了学校人数，自动计算所需接待员总数（每 100 学生配 1 人，最少 1 人，最多 100 人）
-        if (req.getStudentCount() != null && req.getStudentCount() > 0) {
-            int computed = (int) Math.ceil(req.getStudentCount() / 100.0);
-            int need = Math.max(1, Math.min(100, computed));
+        // 校验同城市下学校名称不重复：避免同一学校误建多个活码
+        if (req.getSchoolName() != null && req.getRegionCity() != null
+            && qrCodeRepo.existsBySchoolNameAndRegionCity(req.getSchoolName(), req.getRegionCity())) {
+            throw new RuntimeException(
+                String.format("「%s」在「%s」已存在活码，请勿重复创建", req.getSchoolName(), req.getRegionCity()));
+        }
+
+        // 根据场景自动计算所需接待员总数
+        // 公式：ceil(学生人数 × 场景扫码率 / 员工日限)，最少 1 人，最多 100 人
+        // 用户手动指定 initialAgentCount 时跳过自动计算
+        if (req.getStudentCount() != null && req.getStudentCount() > 0
+            && req.getInitialAgentCount() == null) {
+            Scene scene = req.getScene() != null ? req.getScene() : Scene.daily_push;
+            SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+            int expectedScans = (int) Math.ceil(req.getStudentCount() * preset.getScanRatio());
+            int need = Math.max(1, Math.min(100,
+                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
             req.setInitialAgentCount(need);
-            log.info("学校人数={}, 自动计算 initialAgentCount={}", req.getStudentCount(), need);
+            log.info("学校人数={}, 场景={}, 扫码率={}, 自动计算 initialAgentCount={}",
+                req.getStudentCount(), scene.name(), preset.getScanRatio(), need);
         }
 
         // 1. 调用企微 API 创建「联系我」二维码（在 DB 写入之前，失败回滚事务）
@@ -215,6 +263,10 @@ public class QrCodeService {
         // qr_code 是活码图片的 URL，前端直接展示
         String qrUrl = qrCodeNode.asText();
 
+        // 场景联动阈值
+        Scene effectiveScene = req.getScene() != null ? req.getScene() : Scene.daily_push;
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(effectiveScene);
+
         // 2. 保存活码主表记录
         // createMode 标记为 manual 以区别于批量导入（batch）
         QrCode qr = QrCode.builder()
@@ -227,15 +279,40 @@ public class QrCodeService {
             .welcomeConfig(buildWelcomeConfig(req))
             .status(QrCode.QrCodeStatus.active)
             .rotateMode(QrCode.RotateMode.auto)
-            .createMode(QrCode.CreateMode.manual)
+            .createMode(req.getCreateMode() != null ? req.getCreateMode() : QrCode.CreateMode.manual)
             .remark(req.getRemark())
             .transferTargetUserid(req.getTransferTargetUserid())
             .initialAgentCount(req.getInitialAgentCount() != null
                 ? req.getInitialAgentCount() : 1)
             .studentCount(req.getStudentCount())
             .customTags(req.getCustomTags())
+            .scene(effectiveScene)
+            .departmentId(req.getDepartmentId())
+            .formTemplateId(req.getFormTemplateId())
+            .warnRatio(80)
+            .urgentRatio(preset.getUrgentRatio())
             .build();
         qr = qrCodeRepo.save(qr);
+
+        // 2.5 同步学校记录：确保 school 表有记录，并关联分类
+        if (req.getSchoolId() != null) {
+            School school = schoolRepo.findBySchoolIdAndDeletedFalse(req.getSchoolId()).orElse(null);
+            if (school == null) {
+                school = School.builder()
+                    .schoolId(req.getSchoolId())
+                    .schoolName(req.getSchoolName())
+                    .regionCity(req.getRegionCity())
+                    .regionDistrict(req.getRegionDistrict())
+                    .hasQrcode(true)
+                    .deleted(false)
+                    .categoryId(req.getCategoryId())
+                    .build();
+            } else {
+                if (req.getCategoryId() != null) school.setCategoryId(req.getCategoryId());
+                school.setHasQrcode(true);
+            }
+            schoolRepo.save(school);
+        }
 
         // 3. 绑定员工：从全局池取人写入 QrAgent
         bindAgents(qr.getId(), req);
@@ -254,7 +331,7 @@ public class QrCodeService {
                         log.error("活码创建后同步企微失败（活码已保存，需手动重同步）: qrId={}, configId={}, error={}",
                             finalQrId, finalConfigId, e.getMessage());
                         try {
-                            alertService.createAlert("system", "qr_sync_failed_on_create",
+                            alertService.createAlert(null, "qr_sync_failed_on_create",
                                 AgentAlert.AlertSeverity.high,
                                 String.format("活码「%s」(config_id=%s) 创建后同步企微失败：%s",
                                     finalSchoolName, finalConfigId, e.getMessage()),
@@ -300,12 +377,22 @@ public class QrCodeService {
         init.put("total", String.valueOf(rawItems.size()));
         init.put("success", "0");
         init.put("fail", "0");
+        init.put("processed", "0");
         init.put("status", "processing");
         redisTemplate.opsForHash().putAll(progressKey, init);
         redisTemplate.expire(progressKey, 30, TimeUnit.MINUTES);  // 30 分钟自动过期，防止 Redis 内存泄漏
 
-        // 启动异步执行（通过 Spring @Async 注解的 taskExecutor 线程池）
-        executeBatchImport(taskId, rawItems);
+        // 使用 batchExecutor 而非 taskExecutor：taskExecutor 被 Worker 线程永久占用
+        //（TagWorker/DataFillWorker 等阻塞在 Redis XREADGROUP 上），批量导入任务会永远排队。
+        CompletableFuture.runAsync(() -> self.executeBatchImport(taskId, rawItems), batchExecutor)
+            .exceptionally(ex -> {
+                log.error("批量导入异步任务异常终止: taskId={}", taskId, ex);
+                redisTemplate.opsForHash().put(progressKey, "status", "error");
+                String errMsg = ex.getMessage() != null ? ex.getMessage() : "未知错误";
+                redisTemplate.opsForHash().put(progressKey, "error",
+                    errMsg.substring(0, Math.min(errMsg.length(), 500)));
+                return null;
+            });
 
         return taskId;
     }
@@ -320,47 +407,197 @@ public class QrCodeService {
      * @param taskId   任务标识
      * @param rawItems Excel 解析后的行数据列表
      */
-    @Async("taskExecutor")
     public void executeBatchImport(String taskId, List<Map<String, String>> rawItems) {
         String progressKey = "batch:import:" + taskId;
         int success = 0, fail = 0;
         int total = rawItems.size();
 
+        log.info("批量导入开始执行: taskId={}, total={}", taskId, total);
+
+        // ─ 更新进度：告知前端当前阶段 ─
+        updateBatchProgress(progressKey, total, 0, 0, 0, 0, "processing", "正在加载企微部门列表…");
+
+        // ─ 预加载企微部门列表（一次性拉取，用于名称→ID 转换） ─
+        Map<String, Long> deptNameToId = loadDeptNameMap();
+
+        boolean interrupted = false;
+        int skipped = 0;
+
         for (int i = 0; i < rawItems.size(); i++) {
             Map<String, String> item = rawItems.get(i);
-            try {
-                // 将 Excel 行数据映射为创建请求 DTO
-                QrCodeCreateRequest req = new QrCodeCreateRequest();
-                req.setSchoolName(item.get("schoolName"));
-                req.setSchoolId(item.get("schoolId"));
-                req.setRegionCity(item.get("regionCity"));
-                req.setRegionDistrict(item.get("regionDistrict"));
-                req.setRemark(item.getOrDefault("remark", ""));
-                // 直接复用手动创建流程（含企微 API 调用）
-                create(req);
-                success++;
-            } catch (Exception e) {
-                fail++;
-                // 记录失败详情到独立 Redis Key，方便前端展示失败原因
-                String detailKey = progressKey + ":fail:" + fail;
-                redisTemplate.opsForValue().set(detailKey,
-                    item.get("row") + "|" + item.get("schoolName") + "|" + e.getMessage(),
-                    30, TimeUnit.MINUTES);
+            String schoolName = item.get("schoolName");
+
+            // ── 按学校名称去重：同名学校已存在活码则自动跳过 ──
+            if (qrCodeRepo.existsBySchoolName(schoolName)) {
+                skipped++;
+                log.info("批量导入 [{}]: 第 {}/{} 行学校「{}」已存在活码，自动跳过",
+                    taskId, i + 1, total, schoolName);
+                updateBatchProgress(progressKey, total, success, fail, skipped, i + 1, "processing",
+                    "第 " + (i + 1) + "/" + total + " 行：「" + schoolName + "」已存在，已跳过");
+                continue;
             }
 
-            // 每处理完一行就更新进度 Hash，实现实时进度展示
-            Map<String, String> progress = new LinkedHashMap<>();
-            progress.put("total", String.valueOf(total));
-            progress.put("success", String.valueOf(success));
-            progress.put("fail", String.valueOf(fail));
-            progress.put("processed", String.valueOf(i + 1));
-            progress.put("status", "processing");
-            redisTemplate.opsForHash().putAll(progressKey, progress);
+            // ── 前置校验：必填字段检查（city / district 在 DB 中 NOT NULL） ──
+            String regionCity = item.get("regionCity");
+            String regionDistrict = item.get("regionDistrict");
+            if (regionCity == null || regionCity.isEmpty()
+                || regionDistrict == null || regionDistrict.isEmpty()) {
+                fail++;
+                log.warn("批量导入 [{}]: 第 {}/{} 行缺少必填字段（city/district）— {}",
+                    taskId, i + 1, total, schoolName);
+                String detailKey = progressKey + ":fail:" + fail;
+                String missingField = (regionCity == null || regionCity.isEmpty() ? "城市 " : "")
+                    + (regionDistrict == null || regionDistrict.isEmpty() ? "区县" : "");
+                redisTemplate.opsForValue().set(detailKey,
+                    item.get("row") + "|" + schoolName
+                        + "|缺少必填字段: " + missingField.trim(),
+                    30, TimeUnit.MINUTES);
+                updateBatchProgress(progressKey, total, success, fail, skipped, i + 1, "processing",
+                    "第 " + (i + 1) + "/" + total + " 行：缺少必填字段，已跳过");
+                continue;
+            }
+
+            boolean rowDone = false;
+
+            // 最多尝试 2 次（首次 + 限频重试 1 次）
+            for (int attempt = 0; attempt < 2 && !rowDone; attempt++) {
+                try {
+                    if (attempt > 0) {
+                        log.info("批量导入 [{}]: 第 {}/{} 行重试 (attempt={})", taskId, i + 1, total, attempt);
+                    }
+                    log.debug("批量导入 [{}]: 正在处理第 {}/{} 行 — {}", taskId, i + 1, total, schoolName);
+                    // 将 Excel 行数据映射为创建请求 DTO
+                    QrCodeCreateRequest req = new QrCodeCreateRequest();
+                    req.setSchoolName(schoolName);
+                    req.setCreateMode(QrCode.CreateMode.batch_import);
+                    String schoolId = item.get("schoolId");
+                    // 学校ID为空时自动生成（与手动创建一致：SCH + 时间戳）
+                    if (schoolId == null || schoolId.isBlank()) {
+                        schoolId = "SCH" + java.time.LocalDateTime.now()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+                        log.debug("批量导入 [{}]: 第 {} 行学校ID为空，已自动生成: {}", taskId, i + 1, schoolId);
+                    }
+                    req.setSchoolId(schoolId);
+                    req.setRegionCity(regionCity);
+                    req.setRegionDistrict(regionDistrict);
+                    req.setServiceTeacherUserid(resolveUserids(item.get("serviceTeacherUserid")));
+                    req.setRemark(item.getOrDefault("remark", ""));
+                    String studentCountStr = item.get("studentCount");
+                    if (studentCountStr != null && !studentCountStr.isEmpty()) {
+                        try { req.setStudentCount(Integer.valueOf(studentCountStr)); }
+                        catch (NumberFormatException e) {
+                            log.warn("批量导入 [{}]: 第 {} 行学校人数无法解析: {}", taskId, i + 1, studentCountStr);
+                        }
+                    }
+                    String initialAgentStr = item.get("initialAgentCount");
+                    if (initialAgentStr != null && !initialAgentStr.isEmpty()) {
+                        try { req.setInitialAgentCount(Integer.valueOf(initialAgentStr)); }
+                        catch (NumberFormatException e) {
+                            log.warn("批量导入 [{}]: 第 {} 行初始上码员工数无法解析: {}", taskId, i + 1, initialAgentStr);
+                        }
+                    }
+                    req.setReceptionistUserid(resolveUserids(item.get("receptionistUserid")));
+                    String dailyMaxStr = item.get("serviceDailyMax");
+                    if (dailyMaxStr != null && !dailyMaxStr.isEmpty()) {
+                        try { req.setServiceDailyMax(Integer.valueOf(dailyMaxStr)); }
+                        catch (NumberFormatException e) {
+                            log.warn("批量导入 [{}]: 第 {} 行服务老师日上限无法解析: {}", taskId, i + 1, dailyMaxStr);
+                        }
+                    } else {
+                        // 使用批量导入专用默认日上限（区分于手动创建的 dailyMaxDefault）
+                        req.setServiceDailyMax(batchImportDailyMax);
+                    }
+                    req.setWelcomeText(item.get("welcomeText"));
+
+                    String sceneStr = item.get("scene");
+                    if (sceneStr != null && !sceneStr.isBlank()) {
+                        req.setScene(resolveScene(sceneStr.trim()));
+                    }
+
+                    String deptIdStr = item.get("departmentId");
+                    if (deptIdStr != null && !deptIdStr.isBlank()) {
+                        Long deptId = resolveDepartment(deptIdStr.trim(), deptNameToId);
+                        if (deptId != null) req.setDepartmentId(deptId);
+                    }
+
+                    // 分类名称 → categoryId（按名称匹配）
+                    String catName = item.get("categoryName");
+                    if (catName != null && !catName.isBlank()) {
+                        var catOpt = categoryRepo.findByName(catName.trim());
+                        if (catOpt.isPresent()) {
+                            req.setCategoryId(catOpt.get().getId());
+                        } else {
+                            log.warn("批量导入 [{}]: 第 {} 行分类名称未找到: {}",
+                                taskId, i + 1, catName.trim());
+                        }
+                    }
+
+                    // 服务老师必填：保证每个学校活码上的人是指定的而非随机池取
+                    if (req.getServiceTeacherUserid() == null || req.getServiceTeacherUserid().isBlank()) {
+                        throw new RuntimeException("缺少服务老师，请在 Excel「服务老师」列填写企微 userid 或中文姓名");
+                    }
+
+                    // 通过 self（Spring 代理）调用 create()，确保 @Transactional 生效
+                    self.create(req);
+                    success++;
+                    rowDone = true;
+                    log.debug("批量导入 [{}]: 第 {}/{} 行创建成功 — {}", taskId, i + 1, total, schoolName);
+
+                } catch (WecomRateLimitException e) {
+                    // 限频：等待企微要求的 retry-after 秒数后重试
+                    int waitSec = Math.max(e.getRetryAfterSeconds(), 60);
+                    log.warn("批量导入 [{}]: 第 {}/{} 行触发限频，等待 {}s 后重试", taskId, i + 1, total, waitSec);
+                    try {
+                        Thread.sleep(waitSec * 1000L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        fail++;
+                        String detailKey = progressKey + ":fail:" + fail;
+                        redisTemplate.opsForValue().set(detailKey,
+                            item.get("row") + "|" + schoolName + "|导入被中断（限频等待中）", 30, TimeUnit.MINUTES);
+                        rowDone = true;
+                        break;
+                    }
+                    // 如果重试次数用完，记录失败
+                    if (attempt == 1) {
+                        fail++;
+                        log.warn("批量导入 [{}]: 第 {}/{} 行限频重试仍失败 — {}", taskId, i + 1, total, schoolName);
+                        String detailKey = progressKey + ":fail:" + fail;
+                        redisTemplate.opsForValue().set(detailKey,
+                            item.get("row") + "|" + schoolName + "|限频重试失败: " + e.getMessage(), 30, TimeUnit.MINUTES);
+                        rowDone = true;
+                    }
+                } catch (Exception e) {
+                    fail++;
+                    log.warn("批量导入 [{}]: 第 {}/{} 行创建失败 — {}: {}", taskId, i + 1, total, schoolName, e.getMessage());
+                    String detailKey = progressKey + ":fail:" + fail;
+                    redisTemplate.opsForValue().set(detailKey,
+                        item.get("row") + "|" + schoolName + "|" + e.getMessage(), 30, TimeUnit.MINUTES);
+                    rowDone = true;
+                }
+            }
+
+            // 每处理完一行就更新进度 Hash
+            String rowMsg = "已处理 " + (i + 1) + "/" + total + " 行（成功 " + success + "，失败 " + fail
+                + (skipped > 0 ? "，跳过 " + skipped : "") + "）";
+            updateBatchProgress(progressKey, total, success, fail, skipped, i + 1, "processing", rowMsg);
+
+            // 行间延迟 1 秒，避免触发企微限频
+            if (i < rawItems.size() - 1) {
+                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); interrupted = true; break; }
+            }
         }
 
-        // 全部处理完毕，标记状态为 done
-        redisTemplate.opsForHash().put(progressKey, "status", "done");
-        log.info("批量导入完成: taskId={}, total={}, success={}, fail={}", taskId, total, success, fail);
+        // 全部处理完毕，标记最终状态
+        String finalStatus = interrupted ? "interrupted" : "done";
+        String finalMsg = interrupted
+            ? "导入被中断：成功 " + success + "/" + total + "，失败 " + fail
+                + (skipped > 0 ? "，跳过 " + skipped : "")
+            : "导入完成：成功 " + success + "/" + total + "，失败 " + fail
+                + (skipped > 0 ? "，跳过 " + skipped : "");
+        updateBatchProgress(progressKey, total, success, fail, skipped, total, finalStatus, finalMsg);
+        log.info("批量导入完成: taskId={}, total={}, success={}, fail={}, status={}",
+            taskId, total, success, fail, finalStatus);
     }
 
     /**
@@ -375,6 +612,62 @@ public class QrCodeService {
      */
     public Map<Object, Object> getBatchImportProgress(String taskId) {
         return redisTemplate.opsForHash().entries("batch:import:" + taskId);
+    }
+
+    /**
+     * 更新批量导入进度 Hash（含阶段描述消息）。
+     *
+     * <p>将进度信息写入 Redis Hash {@code batch:import:{taskId}}，
+     * 前端轮询时读取所有字段展示进度条和阶段描述。</p>
+     *
+     * @param progressKey Redis Hash key
+     * @param total       总行数
+     * @param success     成功数
+     * @param fail        失败数
+     * @param processed   已处理数
+     * @param status      状态（processing/done/error/interrupted）
+     * @param message     阶段描述消息，如"正在加载企微部门列表…"/"已处理 3/10 行"
+     */
+    private void updateBatchProgress(String progressKey, int total, int success, int fail,
+                                     int skipped, int processed, String status, String message) {
+        Map<String, String> progress = new LinkedHashMap<>();
+        progress.put("total", String.valueOf(total));
+        progress.put("success", String.valueOf(success));
+        progress.put("fail", String.valueOf(fail));
+        progress.put("skipped", String.valueOf(skipped));
+        progress.put("processed", String.valueOf(processed));
+        progress.put("status", status);
+        progress.put("message", message != null ? message : "");
+        redisTemplate.opsForHash().putAll(progressKey, progress);
+    }
+
+    /**
+     * 获取批量导入的失败详情列表。
+     *
+     * <p>扫描 Redis 中所有 {@code batch:import:{taskId}:fail:* } 键，
+     * 返回失败记录的列表，每条格式为 "行号|学校名称|失败原因"。</p>
+     *
+     * @param taskId 任务标识
+     * @return 失败详情列表，无失败记录时为空列表
+     */
+    public List<String> getBatchImportFailDetails(String taskId) {
+        String pattern = "batch:import:" + taskId + ":fail:*";
+        var keys = redisTemplate.keys(pattern);
+        if (keys == null || keys.isEmpty()) return List.of();
+        List<String> details = new ArrayList<>();
+        for (String key : keys) {
+            String val = redisTemplate.opsForValue().get(key);
+            if (val != null) details.add(val);
+        }
+        // 按 fail 序号排序（key 格式为 batch:import:{taskId}:fail:{N}）
+        details.sort((a, b) -> {
+            int na = a.indexOf('|');
+            int nb = b.indexOf('|');
+            String rowA = na > 0 ? a.substring(0, na) : a;
+            String rowB = nb > 0 ? b.substring(0, nb) : b;
+            return rowA.compareTo(rowB);
+        });
+        return details;
     }
 
     // ==================== 删除 ====================
@@ -483,7 +776,7 @@ public class QrCodeService {
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
         getById(qrCodeId); // 校验活码存在
-        poolService.ensureInPool(agentUserid, 200);
+        poolService.ensureInPool(agentUserid, 150);
         log.info("全局池员工已添加: userid={}", agentUserid);
     }
 
@@ -549,12 +842,12 @@ public class QrCodeService {
     /**
      * 移除活码联系人（软删除：标记为 removed 状态）。
      *
-     * <p>不移除服务老师角色（{@link QrAgent.AgentRole#service}），
-     * 因为服务老师是活码的核心配置，需要通过更换流程来替换。</p>
+     * <p>服务老师/双角色也可移除，移除后该活码将失去服务老师，
+     * 客户扫码后由接待员直接接待。操作会记录 WARN 日志以便追溯。</p>
      *
      * @param qrCodeId 活码主键 ID
      * @param agentId  联系人记录 ID（QrAgent 主键）
-     * @throws RuntimeException 联系人不存在、不属于该活码、或尝试移除服务老师时抛出
+     * @throws RuntimeException 联系人不存在、不属于该活码时抛出
      */
     @Transactional
     public void removeAgent(Long qrCodeId, Long agentId) {
@@ -563,10 +856,11 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
-        // 服务老师不允许直接移除：必须先指定新的服务老师，通过更换流程替换
-        // 这是为了防止活码失去服务老师导致客户无人接待
-        if (agent.getRole() == QrAgent.AgentRole.service) {
-            throw new RuntimeException("服务老师不能移除，请先更换服务老师");
+        // 服务老师/双角色允许移除，但记录警告日志以便追溯
+        if (agent.getRole() == QrAgent.AgentRole.service
+            || agent.getRole() == QrAgent.AgentRole.dual) {
+            log.warn("服务老师/双角色被移除: qrCodeId={}, agentUserid={}, role={}",
+                qrCodeId, agent.getAgentUserid(), agent.getRole());
         }
         // 软删除：标记为 removed 而非物理删除，保留历史记录
         agent.setStatus(QrAgent.AgentStatus.removed);
@@ -613,7 +907,34 @@ public class QrCodeService {
         if (dailyMax != null && dailyMax > 0) agent.setDailyMax(dailyMax);
         if (role != null) {
             try {
-                agent.setRole(QrAgent.AgentRole.valueOf(role));
+                QrAgent.AgentRole newRole = QrAgent.AgentRole.valueOf(role);
+                // 禁止将唯一的 service/dual 降级为 receptionist（会绕过所有保护）
+                if (newRole == QrAgent.AgentRole.receptionist
+                    && (agent.getRole() == QrAgent.AgentRole.service
+                     || agent.getRole() == QrAgent.AgentRole.dual)) {
+                    long svcCount = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                        .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+                        .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                                  || a.getRole() == QrAgent.AgentRole.dual)
+                        .count();
+                    if (svcCount <= 1) {
+                        throw new RuntimeException(
+                            "不能降级唯一的服务老师/双角色，请先指定新的服务老师再更换");
+                    }
+                }
+                agent.setRole(newRole);
+                // 同步 Agent 表角色（仅升级：receptionist → service/dual），
+                // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
+                if (newRole == QrAgent.AgentRole.service
+                    || newRole == QrAgent.AgentRole.dual) {
+                    Agent agentRecord = agentRepo.findById(agent.getAgentUserid()).orElse(null);
+                    if (agentRecord != null
+                        && agentRecord.getRole() == Agent.AgentRole.receptionist) {
+                        agentRecord.setRole(Agent.AgentRole.valueOf(role));
+                        agentRepo.save(agentRecord);
+                        log.info("Agent 角色已同步升级: userid={}, role={}", agent.getAgentUserid(), role);
+                    }
+                }
             } catch (IllegalArgumentException ignored) {
                 // 无效角色值被静默忽略，避免前端误传导致 500
             }
@@ -763,21 +1084,192 @@ public class QrCodeService {
      */
     @Transactional
     public int batchUpdateRotateMode(List<Long> ids, QrCode.RotateMode mode) {
-        int count = 0;
-        for (Long id : ids) {
-            try {
-                QrCode qr = qrCodeRepo.findById(id).orElse(null);
-                if (qr != null) {
-                    qr.setRotateMode(mode);
-                    qrCodeRepo.save(qr);
-                    count++;
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateRotateMode(mode, ids);
+    }
+
+    /**
+     * 批量更新活码欢迎语文本。
+     */
+    @Transactional
+    public int batchUpdateWelcomeText(List<Long> ids, String welcomeText) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateWelcomeText(welcomeText, ids);
+    }
+
+    /**
+     * 批量更新活码表单模板 ID（传 null 清空）。
+     */
+    @Transactional
+    public int batchUpdateFormTemplateId(List<Long> ids, Long formTemplateId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateFormTemplateId(formTemplateId, ids);
+    }
+
+    /**
+     * 批量更新活码分组 ID（传 null 取消分组）。
+     */
+    @Transactional
+    public int batchUpdateGroupId(List<Long> ids, Long groupId) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateGroupId(groupId, ids);
+    }
+
+    /**
+     * 批量更新活码告警/紧急阈值。
+     */
+    @Transactional
+    public int batchUpdateThresholds(List<Long> ids, int warnRatio, int urgentRatio) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateThresholds(warnRatio, urgentRatio, ids);
+    }
+
+    /**
+     * 批量更新活码状态（暂停/启用）。
+     */
+    @Transactional
+    public int batchUpdateStatus(List<Long> ids, QrCode.QrCodeStatus status) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return qrCodeRepo.batchUpdateStatus(status, ids);
+    }
+
+    /**
+     * 切换活码场景（单个）。
+     *
+     * <p>切换场景时会同步更新紧急阈值（urgentRatio）以匹配目标场景的预设值。
+     * 如果活码已设置学生人数，自动根据新场景的扫码率重算所需接待员数：</p>
+     *
+     * <h3>自动调整逻辑</h3>
+     * <ol>
+     *   <li>公式：need = ceil(studentCount × scanRatio / dailyMax)，最少 1 人</li>
+     *   <li>统计当前 active 状态的接待员数</li>
+     *   <li>need > current → 从全局池 takeStandby 补足差额（同部门优先）</li>
+     *   <li>need < current → 下掉多余接待员（优先接待员角色，按 sortOrder 倒序）</li>
+     *   <li>need = current → 不变</li>
+     * </ol>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @param scene    目标场景枚举
+     * @throws RuntimeException 活码不存在时抛出
+     */
+    @Transactional
+    public void updateScene(Long qrCodeId, Scene scene) {
+        QrCode qr = getById(qrCodeId);
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+        Scene oldScene = qr.getScene();
+        qr.setScene(scene);
+        qr.setUrgentRatio(preset.getUrgentRatio());
+        qrCodeRepo.save(qr);
+
+        // 场景切换后重算所需接待员数
+        if (qr.getStudentCount() != null && qr.getStudentCount() > 0) {
+            int expectedScans = (int) Math.ceil(qr.getStudentCount() * preset.getScanRatio());
+            int need = Math.max(1, Math.min(100,
+                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
+
+            List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
+            int current = activeAgents.size();
+
+            if (need > current) {
+                // ── 不足：从全局池补人 ──
+                Set<String> boundUserids = activeAgents.stream()
+                    .map(QrAgent::getAgentUserid)
+                    .collect(Collectors.toSet());
+                int toAdd = need - current;
+                int added = 0;
+                int sortOrder = qrAgentRepo.findByQrCodeId(qrCodeId).size();
+
+                for (int i = 0; i < toAdd; i++) {
+                    GlobalAgentPool next = poolService.takeStandby(boundUserids, qr.getDepartmentId());
+                    if (next == null) break;
+                    boundUserids.add(next.getAgentUserid());
+                    qrAgentRepo.save(QrAgent.builder()
+                        .qrCodeId(qrCodeId).agentUserid(next.getAgentUserid())
+                        .role(QrAgent.AgentRole.receptionist)
+                        .dailyMax(next.getDailyMax())
+                        .sortOrder(sortOrder++)
+                        .status(QrAgent.AgentStatus.active).build());
+                    added++;
                 }
-            } catch (Exception e) {
-                // 单条失败不中断批量操作：记录日志后继续处理下一条
-                log.warn("批量切换轮换模式失败: id={}", id, e);
+
+                log.info("场景切换 {}→{}，学生{}人 扫码率{} 需{}人 现有{}人，从全局池补{}人",
+                    oldScene.name(), scene.name(), qr.getStudentCount(),
+                    preset.getScanRatio(), need, current, added);
+
+                if (added < toAdd) {
+                    log.warn("活码 {} 场景切换后全局池不足：需补 {} 人，实补 {} 人（缺 {} 人）",
+                        qrCodeId, toAdd, added, toAdd - added);
+                }
+            } else if (need < current) {
+                // ── 过剩：下掉多余接待员（优先接待员角色，后上先下） ──
+                int toRemove = current - need;
+
+                // 排定移除优先级：接待员在前，服务老师在后；同角色按 sortOrder 倒序
+                List<QrAgent> candidates = new ArrayList<>(activeAgents);
+                candidates.sort((a, b) -> {
+                    boolean aIsReceptionist = a.getRole() != QrAgent.AgentRole.service;
+                    boolean bIsReceptionist = b.getRole() != QrAgent.AgentRole.service;
+                    if (aIsReceptionist != bIsReceptionist) {
+                        return aIsReceptionist ? -1 : 1; // 接待员优先被移除
+                    }
+                    return Integer.compare(b.getSortOrder(), a.getSortOrder()); // sortOrder 大的（后加的）先下
+                });
+
+                int removed = 0;
+                for (QrAgent agent : candidates) {
+                    if (removed >= toRemove) break;
+                    if (agent.getRole() == QrAgent.AgentRole.service
+                        || agent.getRole() == QrAgent.AgentRole.dual) {
+                        // 服务老师/双角色受保护，不参与场景切换下码
+                        continue;
+                    }
+                    agent.setStatus(QrAgent.AgentStatus.removed);
+                    qrAgentRepo.save(agent);
+                    removed++;
+                    log.info("场景切换 {}→{}，下掉联系人: userid={}, role={}",
+                        oldScene.name(), scene.name(), agent.getAgentUserid(), agent.getRole());
+                }
+
+                log.info("场景切换 {}→{}，学生{}人 扫码率{} 需{}人 现有{}人，下掉{}人",
+                    oldScene.name(), scene.name(), qr.getStudentCount(),
+                    preset.getScanRatio(), need, current, removed);
+
+                // 同步企微侧联系人列表
+                final Long syncQrId = qrCodeId;
+                TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            try { syncQrUsersToWechat(syncQrId); }
+                            catch (Exception e) {
+                                log.error("场景切换后同步企微失败: qrCodeId={}", syncQrId, e);
+                            }
+                        }
+                    });
+            } else {
+                log.info("场景切换 {}→{}，需{}人 现有{}人（无需调整）",
+                    oldScene.name(), scene.name(), need, current);
             }
         }
-        return count;
+
+        log.info("活码 {} 场景切换为 {}, urgentRatio 同步更新为 {}", qrCodeId, scene.name(), preset.getUrgentRatio());
+    }
+
+    /**
+     * 批量切换活码场景。
+     *
+     * <p>同步更新紧急阈值（urgentRatio）以匹配目标场景预设。
+     * 通过 JPQL 批量更新，避免逐条查询。</p>
+     *
+     * @param ids   活码主键 ID 列表
+     * @param scene 目标场景枚举
+     * @return 成功更新的活码数量
+     */
+    @Transactional
+    public int batchUpdateScene(List<Long> ids, Scene scene) {
+        if (ids == null || ids.isEmpty()) return 0;
+        SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
+        return qrCodeRepo.batchUpdateScene(scene, preset.getUrgentRatio(), ids);
     }
 
     /**
@@ -936,22 +1428,57 @@ public class QrCodeService {
             }
             // 表单回传：客户填写收集表单后，自动将表单信息以标签形式回传给接待员工
             config.put("form_callback_tag", true);
-            // 转接问候：启用后客户添加员工时会自动发送个性化问候语
-            config.put("transfer_greeting_enabled", true);
+            // 转接问候：读取系统全局默认值（管理员可在系统配置页修改），硬编码仅作兜底
+            config.put("transfer_greeting_enabled",
+                getSystemConfigBool("transfer_greeting_enabled_default", true));
             // 转接附注：客户信息摘要，使用 {{}} 模板变量在服务端替换
             config.put("transfer_filled_note",
-                "{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}");
+                getFilledNoteConfig("{{grade}}{{class}} | 孩子：{{child_name}} | 来源：{{school_name}}"));
             // 已填表客户的问候语模板
             config.put("transfer_filled_greeting",
-                "{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚");
+                getSystemConfigOrDefault("transfer_filled_greeting_default",
+                    "{{parent_name}}您好～我是{{school_name}}的专属服务老师{{teacher_name}}，以后孩子的学习资料和购书优惠都由我为您服务 📚"));
             // 未填表客户的问候语模板（引导客户先填写信息）
             config.put("transfer_unfilled_greeting",
-                "{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}");
+                getSystemConfigOrDefault("transfer_unfilled_greeting_default",
+                    "{{parent_name}}您好～我是{{school_name}}的{{teacher_name}}！为了给您精准推荐适合孩子的学习资料和优惠，请先花30秒填写一下孩子信息哦👇 📚 {{form_link}}"));
             return objectMapper.writeValueAsString(config);
         } catch (Exception e) {
             // 欢迎语配置构造失败不阻断活码创建，返回空 JSON
             return "{}";
         }
+    }
+
+    /**
+     * 从 {@link SystemConfig} 表读取 {@code transfer_filled_note_default} 配置。
+     * <p>与 {@link #getSystemConfigOrDefault} 不同：空字符串视为有效值（表示不设备注），
+     * 不会被过滤掉回退到 fallback。</p>
+     */
+    private String getFilledNoteConfig(String fallback) {
+        return systemConfigRepo.findByConfigKey("transfer_filled_note_default")
+            .map(SystemConfig::getConfigValue)
+            .filter(v -> v != null)
+            .orElse(fallback);
+    }
+
+    /**
+     * 从 {@link SystemConfig} 表读取字符串配置，不存在或为空则返回 fallback。
+     */
+    private String getSystemConfigOrDefault(String key, String fallback) {
+        return systemConfigRepo.findByConfigKey(key)
+            .map(SystemConfig::getConfigValue)
+            .filter(v -> v != null && !v.isBlank())
+            .orElse(fallback);
+    }
+
+    /**
+     * 从 {@link SystemConfig} 表读取布尔配置，"true"/"1" 视为 true，否则返回 fallback。
+     */
+    private boolean getSystemConfigBool(String key, boolean fallback) {
+        return systemConfigRepo.findByConfigKey(key)
+            .map(SystemConfig::getConfigValue)
+            .map(v -> "true".equalsIgnoreCase(v) || "1".equals(v))
+            .orElse(fallback);
     }
 
     /**
@@ -976,7 +1503,7 @@ public class QrCodeService {
 
             // ① 确保在职继承目标在全局池中
             if (req.getTransferTargetUserid() != null && !req.getTransferTargetUserid().isBlank()) {
-                poolService.ensureInPool(req.getTransferTargetUserid().trim(), 100);
+                ensureAgent(req.getTransferTargetUserid().trim(), "service"); // 继承目标不入全局池
             }
 
             // ② 初始上码员工：优先使用 initialAgentUserids 列表
@@ -1009,10 +1536,10 @@ public class QrCodeService {
 
             // 确保指定员工在全局池中，并写入 QrAgent
             int defaultDailyMax = req.getServiceDailyMax() != null
-                ? req.getServiceDailyMax() : 30;
+                ? req.getServiceDailyMax() : 150;
             // 手动指定的初始员工作为「服务老师」，其余从全局池补的作为「接待员」
             for (String uid : initialUserids) {
-                poolService.ensureInPool(uid, defaultDailyMax);
+                ensureAgent(uid, "service"); // 服务老师不入全局池，避免被其他活码借走
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(uid)
                     .role(QrAgent.AgentRole.service)
@@ -1025,7 +1552,7 @@ public class QrCodeService {
             // 不够数，从全局池自动补（排除已绑定员工，避免重复）
             Set<String> boundUserids = new HashSet<>(initialUserids);
             while (needCount > 0) {
-                GlobalAgentPool next = poolService.takeStandby(boundUserids);
+                GlobalAgentPool next = poolService.takeStandby(boundUserids, req.getDepartmentId());
                 if (next == null) break;
                 boundUserids.add(next.getAgentUserid());
                 qrAgentRepo.save(QrAgent.builder()
@@ -1068,31 +1595,45 @@ public class QrCodeService {
      * @param role   员工角色（"service" 或 "receptionist"），用于初始化 {@link Agent.AgentRole}
      */
     private void ensureAgent(String userid, String role) {
-        if (!agentRepo.existsById(userid)) {
-            // 尝试从企微 API 获取真实姓名，失败时用 userid 作为降级方案
-            String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
-            try {
-                JsonNode result = wecomApi.getUserSimplelist();
-                // parseAndCheck 保证 errcode=0
-                for (JsonNode u : result.get("userlist")) {
-                    if (userid.equals(u.get("userid").asText())) {
-                        name = u.get("name").asText();
-                        break;
-                    }
-                }
-            } catch (Exception e) {
-                // 获取员工姓名失败不阻断流程，使用 userid 作为 name 降级
-                log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
+        Agent.AgentRole requestedRole = Agent.AgentRole.valueOf(role);
+        Agent existing = agentRepo.findById(userid).orElse(null);
+        if (existing != null) {
+            // 只升级不降级：receptionist → dual/service 时同步更新 Agent 角色，
+            // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
+            if (existing.getRole() == Agent.AgentRole.receptionist
+                && (requestedRole == Agent.AgentRole.service
+                 || requestedRole == Agent.AgentRole.dual)) {
+                existing.setRole(requestedRole);
+                agentRepo.save(existing);
+                log.info("Agent 角色已升级: userid={}, {} → {}", userid,
+                    Agent.AgentRole.receptionist, requestedRole);
             }
-
-            // 创建 Agent 记录，默认日总接待上限 500（适用于未单独配置的员工）
-            agentRepo.save(Agent.builder()
-                .userid(userid)
-                .name(name)
-                .role(Agent.AgentRole.valueOf(role))
-                .dailyTotalCap(500)
-                .build());
+            return;
         }
+
+        // 尝试从企微 API 获取真实姓名，失败时用 userid 作为降级方案
+        String name = userid; // fallback：企微 userid 通常比空字符串更有辨识度
+        try {
+            JsonNode result = wecomApi.getUserSimplelist();
+            // parseAndCheck 保证 errcode=0
+            for (JsonNode u : result.get("userlist")) {
+                if (userid.equals(u.get("userid").asText())) {
+                    name = u.get("name").asText();
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            // 获取员工姓名失败不阻断流程，使用 userid 作为 name 降级
+            log.warn("获取员工姓名失败, 使用 userid 作为 name: userid={}", userid);
+        }
+
+        // 创建 Agent 记录，默认日总接待上限 500（适用于未单独配置的员工）
+        agentRepo.save(Agent.builder()
+            .userid(userid)
+            .name(name)
+            .role(requestedRole)
+            .dailyTotalCap(500)
+            .build());
     }
 
     /**
@@ -1101,15 +1642,24 @@ public class QrCodeService {
      * <h3>Excel 列映射（第 0 行为表头，从第 1 行开始读取）</h3>
      * <table>
      *   <tr><th>列号</th><th>字段</th><th>说明</th></tr>
-     *   <tr><td>A (0)</td><td>schoolName</td><td>学校名称</td></tr>
-     *   <tr><td>B (1)</td><td>schoolId</td><td>学校 ID（唯一标识）</td></tr>
-     *   <tr><td>C (2)</td><td>regionCity</td><td>所在城市</td></tr>
-     *   <tr><td>D (3)</td><td>regionDistrict</td><td>所在区县</td></tr>
-     *   <tr><td>E (4)</td><td>remark</td><td>备注</td></tr>
+     *   <tr><td>A (0)</td><td>schoolName</td><td>学校名称（必填）</td></tr>
+     *   <tr><td>B (1)</td><td>schoolId</td><td>学校 ID（留空则自动生成，格式 SCH+时间戳）</td></tr>
+     *   <tr><td>C (2)</td><td>regionCity</td><td>所在城市（必填）</td></tr>
+     *   <tr><td>D (3)</td><td>regionDistrict</td><td>所在区县（必填）</td></tr>
+     *   <tr><td>E (4)</td><td>serviceTeacherUserid</td><td>服务老师（必填，支持中文姓名或 userid，逗号分隔）</td></tr>
+     *   <tr><td>F (5)</td><td>studentCount</td><td>学校人数</td></tr>
+     *   <tr><td>G (6)</td><td>initialAgentCount</td><td>初始上码员工数，默认 1</td></tr>
+     *   <tr><td>H (7)</td><td>receptionistUserid</td><td>接待员 userid（逗号分隔）</td></tr>
+     *   <tr><td>I (8)</td><td>serviceDailyMax</td><td>服务老师日上限</td></tr>
+     *   <tr><td>J (9)</td><td>welcomeText</td><td>欢迎语</td></tr>
+     *   <tr><td>K (10)</td><td>remark</td><td>备注</td></tr>
+     *   <tr><td>L (11)</td><td>scene</td><td>场景（daily_push / parent_meeting），默认 daily_push</td></tr>
+     *   <tr><td>M (12)</td><td>departmentId</td><td>企微部门 ID</td></tr>
+     *   <tr><td>N (13)</td><td>categoryName</td><td>学校分类名称（按名称匹配）</td></tr>
      * </table>
      *
-     * <p>仅当 schoolName 和 schoolId 均非空时才将该行加入结果列表，
-     * 跳过空行和不完整的行。</p>
+     * <p>仅当 schoolName 非空时才将该行加入结果列表；
+     * schoolId 留空时由 {@link #executeBatchImport} 自动生成。</p>
      *
      * @param file 上传的 Excel 文件（.xlsx 格式）
      * @return 行数据列表，每行为一个 Map，包含 row（Excel 行号）、schoolName、schoolId 等字段
@@ -1119,21 +1669,32 @@ public class QrCodeService {
     private List<Map<String, String>> parseExcel(MultipartFile file) {
         List<Map<String, String>> items = new ArrayList<>();
         try (InputStream is = file.getInputStream();
-             Workbook wb = new XSSFWorkbook(is)) {  // 使用 XSSFWorkbook 支持 .xlsx 格式
-            Sheet sheet = wb.getSheetAt(0);          // 只读第一个工作表
-            // i=1 从第 2 行开始（第 1 行是表头）
+             Workbook wb = new XSSFWorkbook(is)) {
+            Sheet sheet = wb.getSheetAt(0);
             for (int i = 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
-                if (row == null) continue;           // 跳过空行
+                if (row == null) continue;
                 Map<String, String> item = new LinkedHashMap<>();
-                item.put("row", String.valueOf(i + 1));  // 行号从 1 开始（给人看的行号）
+                item.put("row", String.valueOf(i + 1));
+                // 列索引: 0学校名称 1学校ID 2市 3区 4服务老师 5学校人数
+                //          6初始上码员工数 7接待员 8服务老师日上限 9欢迎语 10备注
+                //          11场景 12部门ID 13分类名称
                 item.put("schoolName", getCellString(row, 0));
                 item.put("schoolId", getCellString(row, 1));
                 item.put("regionCity", getCellString(row, 2));
                 item.put("regionDistrict", getCellString(row, 3));
-                item.put("remark", getCellString(row, 4));
-                // 学校名称和学校 ID 都非空才视为有效行
-                if (!item.get("schoolName").isEmpty() && !item.get("schoolId").isEmpty()) {
+                item.put("serviceTeacherUserid", getCellString(row, 4));
+                item.put("studentCount", getCellString(row, 5));
+                item.put("initialAgentCount", getCellString(row, 6));
+                item.put("receptionistUserid", getCellString(row, 7));
+                item.put("serviceDailyMax", getCellString(row, 8));
+                item.put("welcomeText", getCellString(row, 9));
+                item.put("remark", getCellString(row, 10));
+                item.put("scene", getCellString(row, 11));
+                item.put("departmentId", getCellString(row, 12));
+                item.put("categoryName", getCellString(row, 13));
+                // 仅学校名称必填；学校ID留空时由 executeBatchImport 自动生成
+                if (!item.get("schoolName").isEmpty()) {
                     items.add(item);
                 }
             }
@@ -1146,8 +1707,8 @@ public class QrCodeService {
     /**
      * 安全读取 Excel 单元格的字符串值。
      *
-     * <p>处理 null 单元格，并强制将单元格类型设为 STRING 以避免数字单元格
-     * （如学校 ID "1001"）被 POI 解析为数值类型导致精度丢失或格式异常。</p>
+     * <p>使用 {@link DataFormatter} 按 Excel 显示格式读取单元格值，
+     * 避免 {@code setCellType(STRING)} 将整数数值格式化为 "500.0" 导致后续解析失败。</p>
      *
      * @param row Excel 行对象
      * @param col 列索引（从 0 开始）
@@ -1156,8 +1717,551 @@ public class QrCodeService {
     private String getCellString(Row row, int col) {
         Cell cell = row.getCell(col);
         if (cell == null) return "";
-        // 强制设为 STRING 类型：防止纯数字的学校 ID 被当作数值解析
-        cell.setCellType(CellType.STRING);
-        return cell.getStringCellValue().trim();
+        return new DataFormatter().formatCellValue(cell).trim();
+    }
+
+    /**
+     * 从企微 API 加载部门名称→ID 映射（用于批量导入时按名称匹配部门）。
+     * 使用 CompletableFuture 包装 + 15 秒硬超时，防止 API 阻塞整个导入流程。
+     * 失败/超时时返回空 Map，名称解析降级为要求纯数字 ID。
+     */
+    private Map<String, Long> loadDeptNameMap() {
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    JsonNode deptResp = wecomApi.listDepartments(null);
+                    Map<String, Long> map = new LinkedHashMap<>();
+                    if (deptResp.has("department") && deptResp.get("department").isArray()) {
+                        for (JsonNode d : deptResp.get("department")) {
+                            map.put(d.get("name").asText(), d.get("id").asLong());
+                        }
+                    }
+                    log.info("批量导入：已加载 {} 个企微部门用于名称解析", map.size());
+                    return map;
+                } catch (Exception e) {
+                    log.warn("批量导入：加载企微部门列表失败，将仅支持数字ID", e);
+                    return Map.<String, Long>of();
+                }
+            }).get(15, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.warn("批量导入：加载企微部门列表超时或失败，将仅支持数字ID", e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * 将部门输入解析为部门 ID。
+     *
+     * <p>规则：输入为纯数字 → 直接作为 ID；输入含中文 → 按名称精确匹配。
+     * 匹配不到返回 null，后续由 {@code buildContactWayJson} 处理。</p>
+     */
+    private Long resolveDepartment(String raw, Map<String, Long> deptNameToId) {
+        // 纯数字 → 直接当 ID 用
+        if (raw.matches("\\d+")) {
+            try { return Long.valueOf(raw); }
+            catch (NumberFormatException ignored) { return null; }
+        }
+        // 按名称匹配
+        Long id = deptNameToId.get(raw);
+        if (id != null) {
+            log.debug("部门名称→ID: {} → {}", raw, id);
+        } else {
+            log.warn("部门名称无法解析为 ID: {}", raw);
+        }
+        return id;
+    }
+
+    /**
+     * 将场景输入（支持中文或英文）解析为 Scene 枚举。
+     *
+     * @param raw 原始输入，如 "日常推送" / "家长会" / "daily_push" / "parent_meeting"
+     * @return 解析后的 Scene，无法识别时默认 daily_push
+     */
+    private Scene resolveScene(String raw) {
+        return switch (raw) {
+            case "日常推送", "daily_push" -> Scene.daily_push;
+            case "家长会", "parent_meeting" -> Scene.parent_meeting;
+            default -> {
+                log.warn("无法识别的场景值「{}」，已回退为 daily_push", raw);
+                yield Scene.daily_push;
+            }
+        };
+    }
+
+    /**
+     * 将员工输入（可能是中文姓名或 userid）解析为企微 userid。
+     *
+     * <p>规则：输入含中文字符时，先尝试从 {@code Employee} 表按姓名精确匹配；
+     * 匹配不到或输入不含中文则原样返回（当作 userid 透传）。
+     * 支持逗号分隔的多个值，每个值独立解析。</p>
+     *
+     * @param raw 原始输入，可能为中文姓名或 userid，逗号分隔
+     * @return 解析后的 userid 列表（逗号分隔），无法解析的保留原值
+     */
+    private String resolveUserids(String raw) {
+        if (raw == null || raw.isBlank()) return raw;
+        StringBuilder resolved = new StringBuilder();
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            // 含中文字符 → 尝试按姓名查找
+            if (trimmed.matches(".*[\\u4e00-\\u9fff]+.*")) {
+                List<com.bookstore.qrcode.entity.Employee> matches =
+                    employeeRepo.findByNameContaining(trimmed);
+                // 精确匹配（姓名完全相等）
+                List<com.bookstore.qrcode.entity.Employee> exact = matches.stream()
+                    .filter(e -> trimmed.equals(e.getName()))
+                    .toList();
+                if (exact.size() == 1) {
+                    if (resolved.length() > 0) resolved.append(",");
+                    resolved.append(exact.get(0).getUserid());
+                    log.debug("姓名→userid: {} → {}", trimmed, exact.get(0).getUserid());
+                } else if (exact.size() > 1) {
+                    // 重名：拒绝解析，原样保留让用户手动改
+                    if (resolved.length() > 0) resolved.append(",");
+                    resolved.append(trimmed);
+                    log.warn("姓名「{}」有 {} 个重名员工，无法自动解析，请改用 userid", trimmed, exact.size());
+                } else {
+                    // 找不到就原样保留，后续企微 API 调用会报错给出明确提示
+                    if (resolved.length() > 0) resolved.append(",");
+                    resolved.append(trimmed);
+                    log.warn("姓名无法解析为 userid: {}", trimmed);
+                }
+            } else {
+                if (resolved.length() > 0) resolved.append(",");
+                resolved.append(trimmed);
+            }
+        }
+        return resolved.toString();
+    }
+
+    /**
+     * 获取活码下所有异常员工列表（只读查询，不做任何修改）。
+     *
+     * <p>遍历活码下所有 active 状态的接待员，通过 {@link #getAnomalyLabel}
+     * 判定是否异常，返回异常员工的详细信息列表供 verify-agents 页面展示。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @return 异常员工详情列表，每项包含 userid / name / role / anomaly / dailyMax / dailyCurrent / status
+     */
+    public List<Map<String, Object>> getAnomalousAgents(Long qrCodeId) {
+        List<QrAgent> activeAgents = qrAgentRepo
+            .findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
+
+        if (activeAgents.isEmpty()) {
+            return List.of();
+        }
+
+        // 批量加载 Employee + Agent 快照
+        Set<String> userids = activeAgents.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        Map<String, Employee> empMap = employeeRepo.findByUseridIn(userids).stream()
+            .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+        Map<String, Agent> agentMap = agentRepo.findAllById(userids).stream()
+            .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+
+        // 构建 userid → name 映射
+        Map<String, String> nameMap = new HashMap<>();
+        for (String uid : userids) {
+            String name = uid; // fallback
+            Agent agent = agentMap.get(uid);
+            if (agent != null && agent.getName() != null) {
+                name = agent.getName();
+            } else {
+                Employee emp = empMap.get(uid);
+                if (emp != null && emp.getName() != null) name = emp.getName();
+            }
+            nameMap.put(uid, name);
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (QrAgent qa : activeAgents) {
+            Agent agent = agentMap.get(qa.getAgentUserid());
+            Employee emp = empMap.get(qa.getAgentUserid());
+            String label = getAnomalyLabel(agent, emp);
+            if (label != null) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("agentId", qa.getId());
+                item.put("userid", qa.getAgentUserid());
+                item.put("name", nameMap.getOrDefault(qa.getAgentUserid(), qa.getAgentUserid()));
+                item.put("role", qa.getRole().name());
+                item.put("anomaly", label);
+                item.put("dailyMax", qa.getDailyMax());
+                item.put("dailyCurrent", qa.getDailyCurrent() != null ? qa.getDailyCurrent() : 0);
+                item.put("status", qa.getStatus().name());
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 获取所有活跃活码的异常员工汇总（供 verify-all-agents 页面使用）。
+     *
+     * @return 按活码分组的异常员工信息列表
+     */
+    public List<Map<String, Object>> getAllAnomalousAgents() {
+        List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+        if (activeQrs.isEmpty()) return List.of();
+
+        // 批量加载所有 active QrAgent
+        List<QrAgent> allActive = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active);
+        if (allActive.isEmpty()) return List.of();
+
+        Set<String> allUserids = allActive.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        Map<String, Agent> agentMap = agentRepo.findAllById(allUserids).stream()
+            .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+        Map<String, Employee> empMap = employeeRepo.findByUseridIn(allUserids).stream()
+            .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+
+        // 活跃活码 ID 集合，用于过滤（只展示活跃活码的异常员工）
+        Set<Long> activeQrIds = activeQrs.stream()
+            .map(QrCode::getId).collect(Collectors.toSet());
+
+        // qrCodeId → schoolName 映射（覆盖全部活码，防止暂停活码显示"未知"）
+        Map<Long, String> qrNameMap = activeQrs.stream()
+            .collect(Collectors.toMap(QrCode::getId, q -> q.getSchoolName() != null ? q.getSchoolName() : "ID:" + q.getId()));
+
+        // 按活码分组收集异常（仅限活跃活码下的员工）
+        Map<Long, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        for (QrAgent qa : allActive) {
+            // 跳过非活跃活码的员工
+            if (!activeQrIds.contains(qa.getQrCodeId())) continue;
+            Agent agent = agentMap.get(qa.getAgentUserid());
+            Employee emp = empMap.get(qa.getAgentUserid());
+            String label = getAnomalyLabel(agent, emp);
+            if (label != null) {
+                Long qrId = qa.getQrCodeId();
+                String name = qa.getAgentUserid();
+                if (agent != null && agent.getName() != null) name = agent.getName();
+                else if (emp != null && emp.getName() != null) name = emp.getName();
+
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("agentId", qa.getId());
+                item.put("userid", qa.getAgentUserid());
+                item.put("name", name);
+                item.put("role", qa.getRole().name());
+                item.put("anomaly", label);
+                grouped.computeIfAbsent(qrId, k -> new ArrayList<>()).add(item);
+            }
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (var entry : grouped.entrySet()) {
+            Map<String, Object> qrGroup = new LinkedHashMap<>();
+            qrGroup.put("qrCodeId", entry.getKey());
+            qrGroup.put("schoolName", qrNameMap.getOrDefault(entry.getKey(), "未知"));
+            qrGroup.put("agents", entry.getValue());
+            qrGroup.put("count", entry.getValue().size());
+            result.add(qrGroup);
+        }
+        return result;
+    }
+
+    /**
+     * 替换活码下所有异常员工。
+     *
+     * <p>逐个判定活码下的 active 接待员是否异常，异常则移除并从全局池取替补。
+     * 替补必须通过 {@link #getAnomalyLabel} 二次校验，防止回灌异常员工。
+     * 事务提交后异步同步企微。</p>
+     *
+     * @param qrCodeId 活码主键 ID
+     * @return 替换结果 Map：qrCodeId / schoolName / removed / replaced / shortfall / details
+     */
+    @Transactional
+    public Map<String, Object> replaceAnomalyAgents(Long qrCodeId) {
+        QrCode qr = getById(qrCodeId);
+
+        // 1. 获取活码下全部 active 接待员
+        List<QrAgent> activeAgents = qrAgentRepo
+            .findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
+
+        if (activeAgents.isEmpty()) {
+            return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+        }
+
+        // 2. 批量加载 Employee + Agent 快照
+        Set<String> userids = activeAgents.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        Map<String, Employee> empMap = employeeRepo.findByUseridIn(userids).stream()
+            .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+        Map<String, Agent> agentMap = agentRepo.findAllById(userids).stream()
+            .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+
+        // 3. 找出异常员工
+        List<QrAgent> anomalous = new ArrayList<>();
+        for (QrAgent qa : activeAgents) {
+            Agent agent = agentMap.get(qa.getAgentUserid());
+            Employee emp = empMap.get(qa.getAgentUserid());
+            if (getAnomalyLabel(agent, emp) != null) {
+                anomalous.add(qa);
+            }
+        }
+
+        if (anomalous.isEmpty()) {
+            return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+        }
+
+        // 3.5 安全阈值：全局池无 standby 时跳过移除，防止活码变空码
+        long poolStandby = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby);
+        if (poolStandby == 0) {
+            log.warn("活码 {} 有 {} 个异常员工但全局池无 standby，跳过移除以防活码变空",
+                qrCodeId, anomalous.size());
+            alertService.createAlert(null, "anomaly_replace_blocked",
+                AgentAlert.AlertSeverity.high,
+                String.format("活码「%s」(id=%d) 有 %d 个异常员工但全局池无 standby，跳过移除以防活码变空",
+                    qr.getSchoolName(), qrCodeId, anomalous.size()),
+                AgentAlert.AutoAction.none, qrCodeId);
+            List<Map<String, String>> blockedDetails = anomalous.stream()
+                .map(qa -> Map.of("userid", qa.getAgentUserid(),
+                    "anomaly", getAnomalyLabel(
+                        agentMap.get(qa.getAgentUserid()), empMap.get(qa.getAgentUserid())),
+                    "skipped", "全局池无 standby"))
+                .collect(Collectors.toList());
+            Map<String, Object> blockedResult = new LinkedHashMap<>();
+            blockedResult.put("qrCodeId", qrCodeId);
+            blockedResult.put("schoolName", qr.getSchoolName());
+            blockedResult.put("removed", 0);
+            blockedResult.put("replaced", 0);
+            blockedResult.put("shortfall", anomalous.size());
+            blockedResult.put("details", blockedDetails);
+            blockedResult.put("skipped", true);
+            blockedResult.put("reason", "全局池无 standby，跳过移除以防活码变空");
+            return blockedResult;
+        }
+
+        // 4. 构建排除集合（已在活码上的非 removed 员工）
+        Set<String> excludeUserids = activeAgents.stream()
+            .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
+
+        // 5. 移除异常 + 补人（替补二次校验）
+        List<Map<String, String>> details = new ArrayList<>();
+        int replaced = 0;
+        int maxSortOrder = activeAgents.stream()
+            .mapToInt(QrAgent::getSortOrder).max().orElse(0);
+
+        for (QrAgent qa : anomalous) {
+            String label = getAnomalyLabel(
+                agentMap.get(qa.getAgentUserid()), empMap.get(qa.getAgentUserid()));
+
+            // 服务老师/双角色异常不下码，只告警，由管理员手动处理
+            if (qa.getRole() == QrAgent.AgentRole.service
+                || qa.getRole() == QrAgent.AgentRole.dual) {
+                log.warn("服务老师/双角色异常但不下码: qrCodeId={}, userid={}, role={}, anomaly={}",
+                    qrCodeId, qa.getAgentUserid(), qa.getRole(), label);
+                alertService.createAlert(qa.getAgentUserid(), "service_teacher_anomaly",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("活码「%s」服务老师/双角色 %s 异常(%s)，请手动处理",
+                        qr.getSchoolName(), qa.getAgentUserid(), label),
+                    AgentAlert.AutoAction.none, qrCodeId);
+                details.add(Map.of("userid", qa.getAgentUserid(),
+                    "role", qa.getRole().name(),
+                    "anomaly", label, "skipped", "服务老师/双角色需手动处理"));
+                continue;
+            }
+
+            // 移除
+            qa.setStatus(QrAgent.AgentStatus.removed);
+            qa.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(qa);
+
+            // 从全局池找替补，最多尝试 20 次
+            String replacementUserid = null;
+            for (int attempt = 0; attempt < 20; attempt++) {
+                GlobalAgentPool next = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
+                if (next == null) break;
+
+                // 二次校验：替补也必须是正常状态
+                Agent repAgent = agentRepo.findById(next.getAgentUserid()).orElse(null);
+                Employee repEmp = employeeRepo.findByUserid(next.getAgentUserid()).orElse(null);
+                String repLabel = getAnomalyLabel(repAgent, repEmp);
+
+                if (repLabel == null) {
+                    // 合格
+                    replacementUserid = next.getAgentUserid();
+                    break;
+                }
+                // 不合格 — 加入排除列表，继续取下一个
+                excludeUserids.add(next.getAgentUserid());
+                log.warn("替换补人跳过异常员工: qrCodeId={}, userid={}, anomaly={}",
+                    qrCodeId, next.getAgentUserid(), repLabel);
+            }
+
+            if (replacementUserid != null) {
+                excludeUserids.add(replacementUserid);
+                maxSortOrder++;
+                qrAgentRepo.save(QrAgent.builder()
+                    .qrCodeId(qrCodeId).agentUserid(replacementUserid)
+                    .role(qa.getRole())
+                    .dailyMax(dailyMaxDefault)
+                    .sortOrder(maxSortOrder)
+                    .status(QrAgent.AgentStatus.active).build());
+                replaced++;
+                details.add(Map.of("removed", qa.getAgentUserid(),
+                    "anomaly", label, "replacedBy", replacementUserid));
+            } else {
+                details.add(Map.of("removed", qa.getAgentUserid(),
+                    "anomaly", label, "replacedBy", ""));
+            }
+        }
+
+        // 6. 异步同步企微
+        final Long fQrId = qrCodeId;
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncQrUsersToWechat(fQrId);
+                    } catch (Exception e) {
+                        log.error("替换异常员工后同步企微失败: qrCodeId={}", fQrId, e);
+                    }
+                }
+            });
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("qrCodeId", qrCodeId);
+        result.put("schoolName", qr.getSchoolName());
+        result.put("removed", anomalous.size());
+        result.put("replaced", replaced);
+        result.put("shortfall", anomalous.size() - replaced);
+        result.put("details", details);
+
+        int shortfall = anomalous.size() - replaced;
+        if (shortfall > 0) {
+            alertService.createAlert(null, "anomaly_replace_shortfall",
+                AgentAlert.AlertSeverity.medium,
+                String.format("活码「%s」(id=%d) 替换异常员工：移除 %d 人，仅补入 %d 人，缺口 %d 人",
+                    qr.getSchoolName(), qrCodeId, anomalous.size(), replaced, shortfall),
+                AgentAlert.AutoAction.none, qrCodeId);
+        }
+
+        log.info("活码 {} 异常员工替换完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人",
+            qrCodeId, anomalous.size(), replaced, anomalous.size() - replaced);
+
+        return result;
+    }
+
+    /**
+     * 批量回收闲置接待员回全局池。
+     *
+     * <h3>校验规则</h3>
+     * <ol>
+     *   <li>服务老师（role=service）不可回收</li>
+     *   <li>回收后活码上至少保留 1 个 active 接待员</li>
+     * </ol>
+     *
+     * @param qrCodeId 活码 ID
+     * @param agentIds 要回收的 QrAgent ID 列表
+     * @return 回收结果，包含成功数/拒绝数及拒绝原因
+     */
+    @Transactional
+    public Map<String, Object> batchRecycleAgents(Long qrCodeId, List<Long> agentIds) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        Map<String, String> rejectReasons = new LinkedHashMap<>();
+        int recycled = 0;
+
+        // 统计当前 active 接待员总数
+        List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() == QrAgent.AgentStatus.active)
+            .toList();
+        long activeReceptionistCount = activeAgents.stream()
+            .filter(a -> a.getRole() != QrAgent.AgentRole.service
+                       && a.getRole() != QrAgent.AgentRole.dual)
+            .count();
+
+        for (Long agentId : agentIds) {
+            QrAgent agent = qrAgentRepo.findById(agentId).orElse(null);
+            if (agent == null || !agent.getQrCodeId().equals(qrCodeId)) {
+                rejectReasons.put(String.valueOf(agentId), "不存在或不属于此活码");
+                continue;
+            }
+            // 服务老师和双角色员工不可回收
+            if (agent.getRole() == QrAgent.AgentRole.service
+                || agent.getRole() == QrAgent.AgentRole.dual) {
+                rejectReasons.put(String.valueOf(agentId),
+                    agent.getRole() == QrAgent.AgentRole.service
+                        ? "服务老师不可回收" : "双角色员工不可回收");
+                continue;
+            }
+            // 至少保留 1 个 active 接待员
+            if (agent.getRole() == QrAgent.AgentRole.receptionist
+                && activeReceptionistCount - recycled <= 1) {
+                rejectReasons.put(String.valueOf(agentId), "至少保留1个接待员");
+                continue;
+            }
+
+            agent.setStatus(QrAgent.AgentStatus.removed);
+            agent.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(agent);
+
+            // 恢复全局池状态
+            GlobalAgentPool pool = poolRepo.findByAgentUserid(agent.getAgentUserid()).orElse(null);
+            if (pool != null && pool.getStatus() != GlobalAgentPool.PoolStatus.standby) {
+                pool.setStatus(GlobalAgentPool.PoolStatus.standby);
+                poolRepo.save(pool);
+            }
+            recycled++;
+        }
+
+        result.put("recycled", recycled);
+        result.put("rejected", agentIds.size() - recycled);
+        result.put("rejectReasons", rejectReasons);
+
+        // 异步同步企微
+        if (recycled > 0) {
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        syncQrUsersToWechat(qrCodeId);
+                    }
+                });
+        }
+
+        log.info("批量回收完成: qrCodeId={}, recycled={}, rejected={}",
+            qrCodeId, recycled, agentIds.size() - recycled);
+        return result;
+    }
+
+    /**
+     * 判定员工的异常状态标签（统一工具方法，供全系统复用）。
+     *
+     * <p>判定优先级：Agent blocked → Agent melted → Agent warning
+     * → Employee wechatStatus 异常。blocked 状态会解析 statusReason 中的 errcode
+     * 来区分具体原因。正常员工返回 {@code null}。</p>
+     *
+     * @param agent Agent 记录（可为 {@code null}）
+     * @param emp   Employee 记录（可为 {@code null}）
+     * @return 异常标签，正常返回 {@code null}
+     */
+    public static String getAnomalyLabel(Agent agent, Employee emp) {
+        if (agent != null) {
+            if (agent.getOverallStatus() == Agent.OverallStatus.blocked) {
+                String reason = agent.getStatusReason();
+                if (reason != null && reason.contains("40098")) return "未实名";
+                if (reason != null && reason.contains("41054")) return "未加入组织";
+                return "已停用";
+            }
+            if (agent.getOverallStatus() == Agent.OverallStatus.melted) {
+                return "已熔断";
+            }
+            if (agent.getOverallStatus() == Agent.OverallStatus.warning) {
+                return "预警";
+            }
+        }
+        if (emp != null && emp.getWechatStatus() != null) {
+            int ws = emp.getWechatStatus();
+            if (ws == 5) return "已离职";
+            if (ws == 4) return "未激活";
+            if (ws == 2) return "已禁用";
+        }
+        return null; // 正常
     }
 }

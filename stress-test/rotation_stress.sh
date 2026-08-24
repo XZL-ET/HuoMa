@@ -48,9 +48,9 @@ TEST_SCHOOL_ID="STRESS_TEST_000"
 TEST_DAILY_MAX=5                     # 测试代理日限（小值，快速触发轮转）
 REDIS_STREAM="wecom:callback:stream"
 
-MYSQL_PASS='<YOUR_DB_PASSWORD>'
-MYSQL_USER='bookstore'
-MYSQL_DB='bookstore_qrcode'
+MYSQL_PASS="${MYSQL_PASS:-}"
+MYSQL_USER="${MYSQL_USER:-bookstore}"
+MYSQL_DB="${MYSQL_DB:-bookstore_qrcode}"
 REDIS_CMD="redis-cli"
 
 mkdir -p "$RESULT_DIR"

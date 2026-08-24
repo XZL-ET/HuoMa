@@ -19,6 +19,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -76,6 +77,7 @@ public class CallbackWorker {
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
     @Value("${app.worker.callback.threads:4}")
     private int consumerThreads;
+
     private static final String CONSUMER_PREFIX = "callback-worker";
 
     /**
@@ -138,8 +140,7 @@ public class CallbackWorker {
                     Map<Object, Object> value = record.getValue();
                     String eventJson = (String) value.get("event");
                     if (eventJson == null) {
-                        // 跳过空消息（如 Init 占位、异常数据等），ACK 防止 PEL 泄漏
-                        log.warn("跳过空消息: msgId={}, value={}", msgId, value);
+                        // _init=1 占位消息或空消息，静默 ACK 防止 PEL 泄漏
                         redisTemplate.opsForStream().acknowledge(
                             RedisConfig.CALLBACK_STREAM_KEY,
                             RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
@@ -147,16 +148,13 @@ public class CallbackWorker {
                     }
                     Map<String, String> fields = Map.of("event", eventJson);
 
-                    // 检查 _retry_at 时间戳（指数退避），未到时间则跳过
+                    // 检查 _retry_at 时间戳（指数退避），未到时间则不 ACK、留在 PEL
+                    // 由 MessageGuardService.recoverOrphanedPending 在 idle>120s 后重投
                     String retryAt = (String) value.get("_retry_at");
                     if (retryAt != null) {
                         try {
                             if (Long.parseLong(retryAt) > java.time.Instant.now().getEpochSecond()) {
-                                // 尚未到重试时间，放回并 ACK（会在 PEL 回收时重新处理）
-                                redisTemplate.opsForStream().acknowledge(
-                                    RedisConfig.CALLBACK_STREAM_KEY,
-                                    RedisConfig.CALLBACK_CONSUMER_GROUP, msgId);
-                                continue;
+                                continue; // 不 ACK，留 PEL 等待延迟重投
                             }
                         } catch (NumberFormatException ignored) {}
                     }
@@ -369,15 +367,32 @@ public class CallbackWorker {
             return;
         }
 
-        // ① 速率检测（防封）
-        try {
-            rateLimiterService.recordAdd(userId);
-        } catch (Exception e) {
-            log.error("速率检测失败: userid={}", userId, e);
+        // ① 速率检测（仅对有机新增计数 — state 非空表示客户扫码添加）
+        // 在职继承/离职继承等企微内部转移的回调 state 为空，不计入熔断
+        if (state != null && !state.isBlank()) {
+            try {
+                rateLimiterService.recordAdd(userId);
+            } catch (Exception e) {
+                log.error("速率检测失败: userid={}", userId, e);
+            }
+        } else {
+            log.debug("跳过熔断计数（state 为空，非有机新增）: userid={}, external={}",
+                userId, externalUserId);
         }
 
         // ② 记录/更新客户信息 — 关键路径，失败必须向上传播以触发重试/DLQ
         Long customerId = customerService.upsertFromCallback(externalUserId, userId, state);
+
+        // ②.5 标记该学校有新客户（供 InheritanceJob 增量扫描，避免每次遍历所有活跃活码）
+        if (state != null && !state.isBlank()) {
+            try {
+                String dirtyKey = com.bookstore.qrcode.job.InheritanceJob.DIRTY_SCHOOLS_KEY;
+                redisTemplate.opsForSet().add(dirtyKey, state);
+                redisTemplate.expire(dirtyKey, java.time.Duration.ofMinutes(30));
+            } catch (Exception e) {
+                log.warn("标记脏学校失败（将回退全量扫描，不影响主流程）: state={}", state, e);
+            }
+        }
 
         // ③ 发布自动打标事件 → TagWorker 异步消费，失败传播
         if (state != null) {
@@ -394,34 +409,56 @@ public class CallbackWorker {
             }
         }
 
-        // ④ 员工日计数 +1
-        try {
-            rotationService.incrementDailyCount(userId, state);
-        } catch (Exception e) {
-            log.error("日计数失败: userid={}, state={}", userId, state, e);
+        // ④ 员工日计数（仅对有机新增计数 — state 非空表示客户扫码添加）
+        if (state != null && !state.isBlank()) {
+            try {
+                rotationService.incrementDailyCount(userId, state);
+            } catch (Exception e) {
+                log.error("日计数失败: userid={}, state={}", userId, state, e);
+            }
         }
 
         // ⑤ 发布欢迎语+表单事件 → OutboundMsgWorker 异步发送
         try {
+            String welcomeCode = getField(event, "welcome_code");
+            QrCode qr = null;
             if (state != null) {
-                QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
-                if (qr != null) {
-                    Map<String, Object> outEvent = new java.util.LinkedHashMap<>();
-                    outEvent.put("type", "welcome_and_form");
-                    outEvent.put("external_userid", externalUserId);
-                    outEvent.put("userid", userId);
-                    outEvent.put("state", state);
-                    outEvent.put("qr_code_id", qr.getId().toString());
-                    outEvent.put("customer_id", customerId.toString());
-                    redisTemplate.opsForStream().add(
-                        RedisConfig.OUTBOUND_STREAM_KEY,
-                        Map.of("event", objectMapper.writeValueAsString(outEvent)));
+                qr = qrCodeRepo.findBySchoolId(state).orElse(null);
+                if (qr == null) {
+                    log.warn("回调 state={} 未匹配到活码, 将使用系统默认欢迎语: external={}, userid={}",
+                        state, externalUserId, userId);
                 }
+            } else {
+                log.debug("回调缺少 state 字段, 使用系统默认欢迎语: external={}, userid={}",
+                    externalUserId, userId);
             }
+            // 即使找不到活码或 state 为空，也发送系统默认欢迎语
+            Map<String, Object> outEvent = new java.util.LinkedHashMap<>();
+            outEvent.put("type", "welcome_and_form");
+            outEvent.put("external_userid", externalUserId);
+            outEvent.put("userid", userId);
+            outEvent.put("state", state);
+            if (qr != null) {
+                outEvent.put("qr_code_id", qr.getId().toString());
+            }
+            if (customerId != null) {
+                outEvent.put("customer_id", customerId.toString());
+            }
+            if (welcomeCode != null) {
+                outEvent.put("welcome_code", welcomeCode);
+            }
+            redisTemplate.opsForStream().add(
+                RedisConfig.OUTBOUND_STREAM_KEY,
+                Map.of("event", objectMapper.writeValueAsString(outEvent)));
         } catch (Exception e) {
             log.error("发布欢迎语事件失败: external={}", externalUserId, e);
             // 不抛异常，不影响主流程（客户已入库+日计数已完成）
         }
+
+        // ⑥ 在职继承已移至 InheritanceJob 定时任务：
+        //    白天（默认 08:00-21:00）：每 15 分钟批量转移（延迟 15 分钟）
+        //    夜间（默认 21:00-08:00）：次日 08:30 批量转移
+        //    不再在此处立即 XADD，保证客户添加后延迟 15 分钟再转，避免打扰
 
         log.info("添加成功处理完成: external={}, userid={}, state={}, customerId={}",
             externalUserId, userId, state, customerId);

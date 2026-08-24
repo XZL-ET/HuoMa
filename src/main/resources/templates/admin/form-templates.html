@@ -18,11 +18,11 @@
                 <td th:text="${t.description}"></td>
                 <td class="text-nowrap">
                     <a th:href="@{/admin/form-templates/{id}/edit(id=${t.id})}"
-                       class="btn btn-sm btn-outline-secondary">编辑</a>
+                       class="btn btn-sm btn-outline-secondary">✏️ 编辑</a>
                     <form th:action="@{/admin/form-templates/{id}/delete(id=${t.id})}"
                           method="post" class="d-inline"
                           onsubmit="return confirm('确定删除该模板？已有活码引用时不影响已收集数据。')">
-                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                        <button class="btn btn-sm btn-outline-danger">🗑️ 删除</button>
                     </form>
                 </td>
             </tr>

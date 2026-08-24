@@ -171,7 +171,7 @@ public class WecomCallbackController {
             // 步骤2: 校验签名 + AES 解密 → 得到明文 XML
             // ================================================================
             String decryptedXml = validator.decryptMessage(msgSignature, timestamp, nonce, body);
-            log.info("解密后的XML: {}", decryptedXml);
+            log.debug("解密后的XML: {}", decryptedXml);
 
             // ================================================================
             // 步骤3: 快速提取事件关键字段
@@ -190,6 +190,7 @@ public class WecomCallbackController {
             String state = extractXmlTag(decryptedXml, "State");
             String failReason = extractXmlTag(decryptedXml, "FailReason");
             String source = extractXmlTag(decryptedXml, "Source");
+            String welcomeCode = extractXmlTag(decryptedXml, "WelcomeCode");
 
             // ================================================================
             // 步骤4: 构造事件 JSON（标准化结构，便于消费者统一处理）
@@ -201,6 +202,7 @@ public class WecomCallbackController {
             event.put("state", state);
             event.put("fail_reason", failReason);
             event.put("source", source);
+            event.put("welcome_code", welcomeCode);
             event.put("timestamp", Instant.now().toString());
             event.put("raw_xml", decryptedXml);       // 保留完整 XML，供消费者按需提取
 

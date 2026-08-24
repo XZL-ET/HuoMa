@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.Employee;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +43,24 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
 
     /** 按 userid 列表批量查询 — 替代 findAll 全表加载 */
     List<Employee> findByUseridIn(Collection<String> userids);
+
+    // ── 全量视图分页查询（员工管理页用） ──
+
+    /** 全量分页查询所有员工（含离职），按姓名排序 */
+    Page<Employee> findAllByOrderByName(Pageable pageable);
+
+    /** 按企微状态分页查询，按姓名排序 */
+    Page<Employee> findByWechatStatusOrderByName(Integer wechatStatus, Pageable pageable);
+
+    /** 按 userid 集合分页查询，按姓名排序 */
+    Page<Employee> findByUseridInOrderByName(Collection<String> userids, Pageable pageable);
+
+    /** 非分页全量查询（异常筛选路径用） */
+    List<Employee> findAllByOrderByName();
+
+    /** 非分页按企微状态查询（异常筛选路径用） */
+    List<Employee> findByWechatStatusOrderByName(Integer wechatStatus);
+
+    /** 按 userid 模糊搜索（关键词搜索用） */
+    List<Employee> findByUseridContaining(String userid);
 }

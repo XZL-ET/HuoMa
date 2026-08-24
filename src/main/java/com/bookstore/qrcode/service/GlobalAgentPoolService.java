@@ -12,13 +12,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 全局员工池服务 — 替代每码独立后备池。
@@ -47,6 +51,9 @@ public class GlobalAgentPoolService {
     private final EmployeeRepository employeeRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+
+    /** 部门树缓存：parentId → 所有子孙部门 ID。企微部门结构很少变动，实例级缓存即可。 */
+    private final Map<Long, Collection<Long>> deptTreeCache = new ConcurrentHashMap<>();
 
     /**
      * 从全局池取优先级最高（sortOrder 最小）的 standby 员工，排除指定 userid 集合。
@@ -105,6 +112,15 @@ public class GlobalAgentPoolService {
                 log.info("跳过并清理封号/熔断员工: userid={}", p.getAgentUserid());
                 continue;
             }
+            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
+            if (agent != null
+                && (agent.getRole() == Agent.AgentRole.service
+                 || agent.getRole() == Agent.AgentRole.dual)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
+                continue;
+            }
             // 取走后移至队尾，确保下次活码创建时补充到不同员工（公平轮转）
             int maxOrder = poolRepo.findFirstByOrderBySortOrderDesc()
                 .map(GlobalAgentPool::getSortOrder).orElse(0);
@@ -117,6 +133,135 @@ public class GlobalAgentPoolService {
             excludeUserids != null ? excludeUserids.size() : 0,
             skippedInactive, skippedWechatUnavailable, skippedBlocked);
         return null;
+    }
+
+    /**
+     * 从全局池取 standby 员工，优先匹配指定部门。
+     *
+     * <h3>取人优先级</h3>
+     * <ol>
+     *   <li>同部门（含子孙部门）standby → 按 sort_order 取</li>
+     *   <li>同部门无可用 → 降级为全局取人（任意部门）</li>
+     *   <li>全局枯竭 → 返回 null</li>
+     * </ol>
+     *
+     * @param excludeUserids 排除的 userid 集合
+     * @param preferredDepartmentId 优先部门 ID，null 时直接全局取人
+     * @return 可用 standby，或无可用时返回 null
+     */
+    @Transactional
+    public GlobalAgentPool takeStandby(Set<String> excludeUserids, Long preferredDepartmentId) {
+        // ① 收集子孙部门 ID（用于 IN 查询）
+        Collection<Long> deptIds = null;
+        if (preferredDepartmentId != null) {
+            deptIds = collectDescendantDeptIds(preferredDepartmentId);
+        }
+
+        // ② 查询同部门 standby（带行锁）
+        if (deptIds != null && !deptIds.isEmpty()) {
+            List<GlobalAgentPool> standbys = poolRepo.findStandbysByDeptForUpdate(deptIds,
+                GlobalAgentPool.PoolStatus.standby);
+            if (!standbys.isEmpty()) {
+                GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids);
+                if (result != null) return result;
+                log.info("同部门无可用 standby，降级为全局取人: deptId={}", preferredDepartmentId);
+            } else {
+                log.info("同部门({})无 standby 记录（池中无该部门员工），降级为全局取人", preferredDepartmentId);
+            }
+        }
+
+        // ③ 降级：全局取人（调用原方法）
+        return takeStandby(excludeUserids);
+    }
+
+    /**
+     * 从同部门候选列表中选取第一个可用员工（懒清理 + 公平轮转）。
+     *
+     * <p>逻辑与 {@link #takeStandby(Set)} 保持一致，
+     * 复用相同的懒清理规则（离职/企微不可用/封号熔断）。</p>
+     */
+    private GlobalAgentPool selectFromDeptCandidates(List<GlobalAgentPool> candidates,
+                                                      Set<String> excludeUserids) {
+        int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
+        for (GlobalAgentPool p : candidates) {
+            if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
+                continue;
+            }
+            // 过滤已离职员工 → 懒清理出池
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null && !emp.getActive()) {
+                skippedInactive++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 过滤企微侧不可用员工 → 懒清理出池
+            if (emp != null && emp.getWechatStatus() != null && emp.getWechatStatus() != 1) {
+                skippedWechatUnavailable++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 过滤封号/熔断员工 → 懒清理出池
+            Agent agent = agentRepo.findById(p.getAgentUserid()).orElse(null);
+            if (agent != null && (
+                agent.getOverallStatus() == Agent.OverallStatus.blocked
+                || agent.getOverallStatus() == Agent.OverallStatus.melted)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                continue;
+            }
+            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
+            if (agent != null
+                && (agent.getRole() == Agent.AgentRole.service
+                 || agent.getRole() == Agent.AgentRole.dual)) {
+                skippedBlocked++;
+                poolRepo.delete(p);
+                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
+                continue;
+            }
+            // 取走 → 推到队尾（公平轮转）
+            int currentMax = poolRepo.findFirstByOrderBySortOrderDesc()
+                .map(GlobalAgentPool::getSortOrder).orElse(0);
+            p.setSortOrder(currentMax + 1);
+            poolRepo.save(p);
+            return p;
+        }
+        if (skippedInactive > 0 || skippedWechatUnavailable > 0 || skippedBlocked > 0) {
+            log.info("同部门懒清理: 跳过离职={}, 企微不可用={}, 封号/熔断={}",
+                skippedInactive, skippedWechatUnavailable, skippedBlocked);
+        }
+        return null;
+    }
+
+    /**
+     * 收集指定部门的所有子孙部门 ID（带实例级缓存，避免重复调用企微 API）。
+     *
+     * <p>优先从 {@link #deptTreeCache} 获取，未命中时调用企微 API 拉取并缓存。
+     * 企微部门结构很少变动，实例级缓存生命周期同应用进程。</p>
+     */
+    private Collection<Long> collectDescendantDeptIds(Long parentId) {
+        return deptTreeCache.computeIfAbsent(parentId, this::doCollectDescendantDeptIds);
+    }
+
+    /**
+     * 递归拉取子孙部门 ID（无缓存，实际调用企微 API）。
+     */
+    private Collection<Long> doCollectDescendantDeptIds(Long parentId) {
+        Set<Long> ids = new LinkedHashSet<>();
+        ids.add(parentId);
+        try {
+            JsonNode resp = wecomApi.listDepartments(parentId);
+            if (resp.has("department") && resp.get("department").isArray()) {
+                for (JsonNode dept : resp.get("department")) {
+                    long childId = dept.get("id").asLong();
+                    if (!ids.contains(childId)) {
+                        ids.addAll(doCollectDescendantDeptIds(childId));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("拉取子孙部门失败: parentId={}, 仅用直接部门ID", parentId, e);
+        }
+        return ids;
     }
 
     /**
@@ -159,14 +304,24 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void ensureInPool(String userid, int dailyMax) {
-        if (poolRepo.findByAgentUserid(userid).isPresent()) return;
+        GlobalAgentPool existing = poolRepo.findByAgentUserid(userid).orElse(null);
+
+        // 优先从本地 Employee 表取部门（每 30 分钟从企微同步，命中率极高）
+        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
+        Long deptId = emp != null ? extractPrimaryDeptId(emp.getDepartment()) : null;
+
+        // 已有记录但 departmentId 为空 → 回填
+        if (existing != null && existing.getDepartmentId() == null && deptId != null) {
+            existing.setDepartmentId(deptId);
+            poolRepo.save(existing);
+            log.info("回填已有池记录的 departmentId: userid={}, deptId={}", userid, deptId);
+        }
+
+        if (existing != null) return;
 
         // 确保 Agent 全局表存在
+        String name = emp != null ? emp.getName() : null;
         if (!agentRepo.existsById(userid)) {
-            // 优先从本地 Employee 表取姓名（每 30 分钟从企微同步，命中率极高）
-            String name = employeeRepo.findByUserid(userid)
-                .map(Employee::getName)
-                .orElse(null);
             // 本地没有则回退到企微 API（仅新员工首次同步时可能走到此分支）
             if (name == null || name.isEmpty()) {
                 name = userid;
@@ -195,8 +350,25 @@ public class GlobalAgentPoolService {
         poolRepo.save(GlobalAgentPool.builder()
             .agentUserid(userid).dailyMax(dailyMax)
             .sortOrder(maxOrder + 1)
+            .departmentId(deptId)
             .status(GlobalAgentPool.PoolStatus.standby).build());
-        log.info("全局池新增员工: userid={}, dailyMax={}", userid, dailyMax);
+        log.info("全局池新增员工: userid={}, dailyMax={}, deptId={}", userid, dailyMax, deptId);
+    }
+
+    /**
+     * 从 Employee.department JSON 数组中提取主部门 ID（取第一个元素）。
+     */
+    private Long extractPrimaryDeptId(String departmentJson) {
+        if (departmentJson == null || departmentJson.isBlank()) return null;
+        try {
+            JsonNode arr = objectMapper.readTree(departmentJson);
+            if (arr.isArray() && arr.size() > 0) {
+                return arr.get(0).asLong();
+            }
+        } catch (Exception e) {
+            log.warn("解析部门 JSON 失败: {}", departmentJson, e);
+        }
+        return null;
     }
 
     /**
@@ -255,7 +427,7 @@ public class GlobalAgentPoolService {
      * @param agentUserid 企微员工 userid
      * @param errcode     企微 API 返回的错误码
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void blockAgentForWechatIssue(String agentUserid, int errcode) {
         // 标记 agent 为 blocked，记录原因
         Agent agent = agentRepo.findById(agentUserid).orElse(null);

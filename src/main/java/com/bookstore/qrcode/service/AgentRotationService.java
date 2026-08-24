@@ -20,8 +20,9 @@ import java.util.*;
 /**
  * 代理轮换服务 — 轮换/扩容逻辑，从原 AgentBindService 拆分。
  *
- * <p>消除 @Lazy @Autowired self 自注入：@Async 方法通过注入
- * WechatSyncHealingService 间接调用企微同步。</p>
+ * <p>@Async 方法通过注入 WechatSyncHealingService 间接调用企微同步
+ * （消除 @Async 的 self 自注入）；事务入口通过 @Lazy self 代理调用
+ * （修复 incrementDailyCount 自调用绕过 @Transactional）。</p>
  */
 @Slf4j
 @Service
@@ -38,6 +39,11 @@ public class AgentRotationService {
     private final AgentDailyCountService countService;
     private final WechatSyncHealingService healingService;
     private final AlertService alertService;
+
+    // 自注入代理：解决 incrementDailyCount → checkAndRotate 的 @Transactional 自调用失效问题
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private AgentRotationService self;
 
     // ==================== 日计数 + 轮换入口 ====================
 
@@ -90,7 +96,7 @@ public class AgentRotationService {
         }
 
         // 递增后立即检查全局阈值
-        checkAndRotate(qr.getId(), userId, (int) totalNew);
+        self.checkAndRotate(qr.getId(), userId, (int) totalNew);
     }
 
     // ==================== 日限检查 + 轮换 ====================
@@ -112,6 +118,27 @@ public class AgentRotationService {
 
         QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
         if (qr == null) return;
+
+        // 服务老师/双角色不参与轮换，即使日限到达也不下码，
+        // 但仍触发扩容加接待员分担流量，防止服务老师成为单点瓶颈
+        QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, userId).orElse(null);
+        if (qa != null && (qa.getRole() == QrAgent.AgentRole.service
+                        || qa.getRole() == QrAgent.AgentRole.dual)) {
+            int dailyMax = pool.getDailyMax();
+            if (dailyMax > 0) {
+                int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
+                if (globalCount >= dailyMax) {
+                    log.warn("服务老师/双角色 {} 日限到达 {}/{}，触发扩容分担流量（不下码）: qr={}",
+                        userId, globalCount, dailyMax, qrCodeId);
+                    preActivateBackup(qrCodeId, qr);
+                } else if (urgentThreshold > 0 && globalCount >= urgentThreshold) {
+                    log.info("服务老师/双角色 {} 紧急阈值 {}/{}，提前激活后备: qr={}",
+                        userId, globalCount, dailyMax, qrCodeId);
+                    preActivateBackup(qrCodeId, qr);
+                }
+            }
+            return;
+        }
 
         int dailyMax = pool.getDailyMax();
         if (dailyMax <= 0) {
@@ -163,6 +190,13 @@ public class AgentRotationService {
                 log.info("员工已下码，跳过重复扩容: qr={}, user={}", qrCodeId, fullUserId);
                 return;
             }
+            // 服务老师/双角色不参与轮换，不应走到这里（checkAndRotate 已拦截），防御兜底
+            if (fullAgent.getRole() == QrAgent.AgentRole.service
+                || fullAgent.getRole() == QrAgent.AgentRole.dual) {
+                log.warn("expandQrCodeUsers 被服务老师/双角色触发（不应发生），跳过: qr={}, user={}",
+                    qrCodeId, fullUserId);
+                return;
+            }
 
             // 构建排除列表
             Set<String> excludeUserids = new HashSet<>();
@@ -171,7 +205,7 @@ public class AgentRotationService {
                 .map(QrAgent::getAgentUserid)
                 .forEach(excludeUserids::add);
 
-            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
             if (backup == null) {
                 log.error("全局池枯竭！活码 {} 无法扩容", qrCodeId);
                 alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
@@ -181,7 +215,7 @@ public class AgentRotationService {
 
             QrAgent newAgent = QrAgent.builder()
                 .qrCodeId(qrCodeId).agentUserid(backupUserid)
-                .role(QrAgent.AgentRole.receptionist)
+                .role(fullAgent.getRole()) // 跟随被替换员工的角色
                 .dailyMax(backup.getDailyMax())
                 .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
                 .status(QrAgent.AgentStatus.active).build();
@@ -222,20 +256,40 @@ public class AgentRotationService {
 
     /**
      * 提前激活后备 — 在达到紧急阈值时触发，从全局池取人加入活码。
+     *
+     * <p><b>幂等性保护：</b>使用 Redis key {@code preactivate:done:{qrCodeId}}
+     * 确保每个活码每天最多触发一次预激活，防止接待员无限堆积。
+     * Key 的 TTL 为距离当日午夜的秒数，次日自动失效。</p>
      */
     @Transactional
     public void preActivateBackup(Long qrCodeId, QrCode qr) {
+        // ── 幂等性保护：当天已预激活过则跳过 ──
+        String doneKey = RedisConfig.PREACTIVATE_DONE_PREFIX + qrCodeId;
+        long ttlSeconds = getSecondsUntilMidnight();
+        Boolean firstAttempt = redisTemplate.opsForValue()
+            .setIfAbsent(doneKey, "1", Duration.ofSeconds(ttlSeconds));
+        if (Boolean.FALSE.equals(firstAttempt)) {
+            log.debug("当天已预激活，跳过: qr={}", qrCodeId);
+            return;
+        }
+
         String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
         String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, lockValue, Duration.ofSeconds(30));
         if (Boolean.FALSE.equals(locked)) {
             log.debug("轮换进行中（预激活等待），跳过: qr={}", qrCodeId);
+            // 并发冲突时删除幂等标记，允许后续回调重试
+            redisTemplate.delete(doneKey);
             return;
         }
 
         try {
-            if (qr.getRotateMode() == QrCode.RotateMode.manual) return;
+            if (qr.getRotateMode() == QrCode.RotateMode.manual) {
+                // manual 模式下不回退 preactivate 标记 -
+                // 管理员明确关闭自动轮换，标记应该保留到明天
+                return;
+            }
 
             Set<String> excludeUserids = new HashSet<>();
             qrAgentRepo.findByQrCodeId(qrCodeId).stream()
@@ -243,10 +297,12 @@ public class AgentRotationService {
                 .map(QrAgent::getAgentUserid)
                 .forEach(excludeUserids::add);
 
-            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids, qr.getDepartmentId());
             if (backup == null) {
                 log.warn("全局池无 standby，活码 {} 无法预激活", qrCodeId);
                 alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
+                // 池空时删除标记，等池恢复后可以重试
+                redisTemplate.delete(doneKey);
                 return;
             }
             String backupUserid = backup.getAgentUserid();

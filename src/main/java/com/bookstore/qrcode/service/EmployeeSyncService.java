@@ -1,15 +1,21 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.Agent;
+import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +48,22 @@ public class EmployeeSyncService {
     private final GlobalAgentPoolService poolService;
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
+    private final QrAgentRepository qrAgentRepo;
+    private final AlertService alertService;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 应用启动后回填存量池记录的 departmentId，确保部门匹配立即可用。
+     * 用 ApplicationReadyEvent 替代 PostConstruct，确保事务代理已就绪。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void initBackfillDepartmentIds() {
+        int backfilled = backfillPoolDepartmentIds();
+        if (backfilled > 0) {
+            log.info("启动时回填 departmentId 完成: {} 条记录", backfilled);
+        }
+    }
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
@@ -126,7 +148,64 @@ public class EmployeeSyncService {
         // 标记已不在企微通讯录中的员工为离职
         int deactivated = 0;
         if (!activeUserIds.isEmpty()) {
+            // 级联清理：先查出即将被标记离职的 userid，再同步更新 agent / qr_agent
+            // 避免离职员工的 userid 继续被推送到企微 API 导致 60111
+            List<String> toDeactivate = employeeRepo.findAllByActiveTrueOrderByName().stream()
+                .map(Employee::getUserid)
+                .filter(uid -> !activeUserIds.contains(uid))
+                .toList();
+
             deactivated = employeeRepo.deactivateNotIn(activeUserIds);
+
+            if (!toDeactivate.isEmpty()) {
+                // 安全网：如果要标记离职的人数超过当前在职员工的 30%，可能是 API 返回异常
+                // 此时跳过级联清理，只标记 employee.active=false（可恢复），避免误伤 agent/qr_agent
+                // 注：activeBefore 在 deactivateNotIn 之后查询，实际值略小于真实值，
+                //     这会使比率偏高（更保守），不影响安全性
+                int activeAfterDeactivate = employeeRepo.findAllByActiveTrueOrderByName().size();
+                double ratio = (double) toDeactivate.size() / Math.max(activeAfterDeactivate + toDeactivate.size(), 1);
+                if (ratio > 0.30) {
+                    log.error("员工离职比例异常({}/{}={}%)，跳过级联清理防止误伤。userids={}",
+                        toDeactivate.size(), activeAfterDeactivate + toDeactivate.size(),
+                        (int)(ratio * 100),
+                        toDeactivate.size() <= 20 ? toDeactivate : toDeactivate.subList(0, 20) + "…");
+                } else {
+                    // 先找出服务老师（在下码之前查），后续单独发告警
+                    List<String> serviceUserIds = qrAgentRepo.findServiceUseridsIn(toDeactivate);
+
+                    // 所有离职员工统一封禁 agent + 下码（防止 60111）
+                    int blocked = agentRepo.batchBlockByUserids(toDeactivate);
+                    int removed = qrAgentRepo.batchRemoveByAgentUserids(toDeactivate);
+
+                    // 服务老师/双角色额外创建告警，提醒管理员做在职继承
+                    int alerted = 0;
+                    if (!serviceUserIds.isEmpty()) {
+                        for (String uid : serviceUserIds) {
+                            try {
+                                // 下码后查询该老师所有受影响活码（此时 status 已变为 removed）
+                                List<String> qrNames = qrAgentRepo.findByAgentUserid(uid).stream()
+                                    .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.removed
+                                        && toDeactivate.contains(qa.getAgentUserid()))
+                                    .map(qa -> "活码" + qa.getQrCodeId())
+                                    .distinct()
+                                    .toList();
+                                alertService.createAlert(uid, "employee_departed_service",
+                                    AgentAlert.AlertSeverity.high,
+                                    String.format("服务老师 %s 已从企微离职，已自动下码，请手动处理在职继承。关联活码: %s",
+                                        uid, String.join(", ", qrNames)),
+                                    AgentAlert.AutoAction.none, null);
+                                alerted++;
+                            } catch (Exception e) {
+                                log.error("服务老师离职告警失败: userid={}", uid, e);
+                            }
+                        }
+                    }
+
+                    log.info("员工离职级联清理: 标记离职{}人, agent封禁{}人, qr_agent移除{}人, 服务老师告警{}人, userids={}",
+                        deactivated, blocked, removed, alerted,
+                        toDeactivate.size() <= 10 ? toDeactivate : toDeactivate.subList(0, 10) + "…共" + toDeactivate.size() + "人");
+                }
+            }
         }
 
         log.info("员工同步结果: 新增{}人, 更新{}人, 标记离职{}人, 在职共{}人",
@@ -168,7 +247,13 @@ public class EmployeeSyncService {
             }
         }
 
-        // 2. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
+        // 2. 回填已有池记录的 departmentId（存量数据兼容：旧记录该字段为 NULL）
+        int backfilled = backfillPoolDepartmentIds();
+        if (backfilled > 0) {
+            log.info("全局池同步：回填 {} 条记录的 departmentId", backfilled);
+        }
+
+        // 3. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
         Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
         // 在职但不在池中的员工（排除企微侧明确不可用的：已禁用/未激活/已离职）
@@ -176,6 +261,42 @@ public class EmployeeSyncService {
             .filter(e -> !pooledUserIds.contains(e.getUserid()))
             .filter(e -> e.getWechatStatus() == null || e.getWechatStatus() == 1)
             .toList();
+
+        // 额外排除 Agent 侧已封禁/已熔断的员工（防止刚被 blockAgentForWechatIssue
+        // 或 meltAgent 清理出池的员工又被 syncToGlobalPool 加回来）
+        if (!activeNotInPool.isEmpty()) {
+            List<String> candidateUserIds = activeNotInPool.stream()
+                .map(Employee::getUserid).toList();
+            Map<String, Agent> agentSnapshot = agentRepo.findAllById(candidateUserIds).stream()
+                .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
+            int before = activeNotInPool.size();
+            activeNotInPool = activeNotInPool.stream()
+                .filter(e -> {
+                    Agent a = agentSnapshot.get(e.getUserid());
+                    return a == null
+                        || (a.getOverallStatus() != Agent.OverallStatus.blocked
+                            && a.getOverallStatus() != Agent.OverallStatus.melted);
+                })
+                .toList();
+            if (activeNotInPool.size() < before) {
+                log.info("全局池同步：排除 {} 个已封禁/熔断员工",
+                    before - activeNotInPool.size());
+            }
+            // 排除已在活码上担任服务老师/双角色的员工（避免被其他活码借走）
+            int beforeSvc = activeNotInPool.size();
+            activeNotInPool = activeNotInPool.stream()
+                .filter(e -> {
+                    Agent a = agentSnapshot.get(e.getUserid());
+                    return a == null
+                        || (a.getRole() != Agent.AgentRole.service
+                            && a.getRole() != Agent.AgentRole.dual);
+                })
+                .toList();
+            if (activeNotInPool.size() < beforeSvc) {
+                log.info("全局池同步：排除 {} 个服务老师/双角色员工",
+                    beforeSvc - activeNotInPool.size());
+            }
+        }
 
         if (activeNotInPool.isEmpty()) {
             log.info("全局池同步：所有在职员工已在池中，无需新增");
@@ -207,10 +328,13 @@ public class EmployeeSyncService {
             }
 
             maxOrder++;
+            // 取主部门：Employee.department 是 JSON 数组如 "[1,2,3]"
+            Long primaryDeptId = extractPrimaryDeptId(emp.getDepartment());
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
-                .dailyMax(100)
+                .dailyMax(150)
                 .sortOrder(maxOrder)
+                .departmentId(primaryDeptId)
                 .status(GlobalAgentPool.PoolStatus.standby)
                 .build());
         }
@@ -224,5 +348,55 @@ public class EmployeeSyncService {
         log.info("全局池同步完成：新增 {} 人入池，清理离职 {} 人，池总数 {} 人",
             batch.size(), cleaned, pooledUserIds.size() + batch.size());
         return batch.size();
+    }
+
+    /**
+     * 回填已有池记录的 departmentId（存量数据兼容：旧记录该字段为 NULL）。
+     *
+     * <p>遍历所有 departmentId 为 NULL 的池记录，从本地 Employee 表查找对应部门。
+     * 每次 syncToGlobalPool 调用时执行，逐步修复存量数据。</p>
+     *
+     * @return 本次回填的记录数
+     */
+    private int backfillPoolDepartmentIds() {
+        // 先用 COUNT 判断是否需要回填，避免每次都加载全表
+        long nullCount = poolRepo.countWithNullDepartmentId();
+        if (nullCount == 0) return 0;
+
+        List<GlobalAgentPool> nullDeptRecords = poolRepo.findWithNullDepartmentId();
+        List<GlobalAgentPool> toUpdate = new ArrayList<>();
+        for (GlobalAgentPool p : nullDeptRecords) {
+            Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            if (emp != null) {
+                Long deptId = extractPrimaryDeptId(emp.getDepartment());
+                if (deptId != null) {
+                    p.setDepartmentId(deptId);
+                    toUpdate.add(p);
+                }
+            }
+        }
+        if (!toUpdate.isEmpty()) {
+            poolRepo.saveAll(toUpdate);
+        }
+        return toUpdate.size();
+    }
+
+    /**
+     * 从 Employee.department JSON 数组字符串中提取主部门 ID。
+     *
+     * <p>企微返回的 department 是 JSON 数组如 [1,2,3]，
+     * 取第一个元素作为主部门。如果解析失败或为空，返回 null。</p>
+     */
+    private Long extractPrimaryDeptId(String departmentJson) {
+        if (departmentJson == null || departmentJson.isBlank()) return null;
+        try {
+            JsonNode arr = objectMapper.readTree(departmentJson);
+            if (arr.isArray() && arr.size() > 0) {
+                return arr.get(0).asLong();
+            }
+        } catch (Exception e) {
+            log.warn("解析部门 JSON 失败: {}", departmentJson, e);
+        }
+        return null;
     }
 }

@@ -2,6 +2,11 @@ package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.QrAgent;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -135,4 +140,28 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
      * @return 所有匹配的接待员记录列表
      */
     List<QrAgent> findByQrCodeIdIn(Collection<Long> qrCodeIds);
+
+    /**
+     * 批量将指定员工的活码关联标记为已移除。
+     * <p>在企微通讯录同步发现员工离职时调用，防止已离职员工的 userid
+     * 继续被推送到企微 API 导致 60111 错误。</p>
+     *
+     * @param agentUserids 离职员工的 userid 列表
+     * @return 实际更新的行数
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE QrAgent qa SET qa.status = 'removed', qa.updatedAt = CURRENT_TIMESTAMP "
+         + "WHERE qa.agentUserid IN :agentUserids AND qa.status = 'active'")
+    int batchRemoveByAgentUserids(@Param("agentUserids") Collection<String> agentUserids);
+
+    /**
+     * 查找指定员工中担任服务老师/双角色的活码关联。
+     * <p>用于离职级联清理时区分处理：服务老师不下码只告警。</p>
+     */
+    @Query("SELECT DISTINCT qa.agentUserid FROM QrAgent qa "
+         + "WHERE qa.agentUserid IN :agentUserids "
+         + "AND qa.status = 'active' "
+         + "AND (qa.role = 'service' OR qa.role = 'dual')")
+    List<String> findServiceUseridsIn(@Param("agentUserids") Collection<String> agentUserids);
 }

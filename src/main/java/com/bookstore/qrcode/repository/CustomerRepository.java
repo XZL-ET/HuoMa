@@ -36,6 +36,17 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByExternalUserid(String externalUserid);
 
     /**
+     * 根据学校 ID 查询该学校下的所有客户。
+     * <p>
+     * 用于标签修复等批量操作场景，按学校维度获取客户列表。
+     * </p>
+     *
+     * @param schoolId 学校 ID，不可为 null
+     * @return 该学校下的所有客户列表
+     */
+    List<Customer> findBySchoolId(String schoolId);
+
+    /**
      * 判断指定 externalUserid 是否已存在客户记录。
      * <p>
      * 通常用于从企微回调或批量同步时判断客户是否已入库，避免重复创建。
@@ -162,6 +173,107 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     long countByAddedAgentAndAddTimeAfter(String addedAgent, LocalDateTime addTime);
 
     /**
+     * 统计指定接待员在指定学校下、晚于指定时间的客户数量。
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param addTime    添加时间下限（含）
+     * @return 满足条件的客户数量
+     */
+    long countByAddedAgentAndSchoolIdAndAddTimeAfter(
+        String addedAgent, String schoolId, LocalDateTime addTime);
+
+    /**
+     * 根据添加人和添加时间区间查询客户列表，按添加时间升序排列。
+     * <p>
+     * 用于在职继承夜间批量场景：查询某个接待员在前一天 21:00 到今天 08:00
+     * 之间添加的全部客户，由 08:30 定时任务统一发起转移。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid，不可为 null
+     * @param start      添加时间下限（含），不可为 null
+     * @param end        添加时间上限（不含），不可为 null
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndAddTimeBetween(String addedAgent,
+                                                      LocalDateTime start, LocalDateTime end);
+
+    /**
+     * 查询指定接待员添加的所有客户（不限时间），用于全量补转。
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @return 该接待员添加的全部客户列表，按添加时间升序
+     */
+    List<Customer> findByAddedAgent(String addedAgent);
+
+    /**
+     * 查询指定接待员在指定学校下添加的所有客户（不限时间），用于全量补转。
+     * <p>
+     * 与 {@link #findByAddedAgent(String)} 不同，此方法限定学校，
+     * 避免把一个接待员在其他活码下的客户也转给当前活码的服务老师。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @return 该接待员在该学校下添加的全部客户列表，按添加时间升序
+     */
+    List<Customer> findByAddedAgentAndSchoolId(String addedAgent, String schoolId);
+
+    /**
+     * 查询指定接待员在指定学校下、晚于指定时间的客户，按添加时间升序。
+     * <p>
+     * 用于在职继承手动触发/预览/选择性转移：限定学校防止串活码。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param addTime    添加时间下限（含）
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndSchoolIdAndAddTimeAfter(
+        String addedAgent, String schoolId, LocalDateTime addTime);
+
+    /**
+     * 查询指定接待员在指定学校下、指定时间区间内的客户，按添加时间升序。
+     * <p>
+     * 用于在职继承自动继承定时任务：限定学校防止串活码。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param start      添加时间下限（含）
+     * @param end        添加时间上限（不含）
+     * @return 满足条件的客户列表，按添加时间升序排列
+     */
+    List<Customer> findByAddedAgentAndSchoolIdAndAddTimeBetween(
+        String addedAgent, String schoolId, LocalDateTime start, LocalDateTime end);
+
+    /**
+     * 查询指定接待员在指定学校下、指定时间区间内<b>且无进行中/已完成转移记录</b>的客户，按添加时间升序。
+     * <p>
+     * 时间区间为左闭右开（{@code addTime >= start AND addTime < end}），
+     * 确保相邻批次窗口不重叠，避免同一边界客户被重复入队。
+     * </p>
+     * <p>
+     * 用于在职继承定时任务：排除 pending_confirm / confirmed / api_failed 状态的客户，
+     * 仅 timeout / rejected / retry_limit 的客户允许重新入队发起转移。
+     * api_failed 的重试由 {@code TransferService.retryFailedTransfers()} 独立控制，不经过 Stream。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param start      添加时间下限（含）
+     * @param end        添加时间上限（不含）
+     * @return 无进行中/已完成转移记录的客户列表，按添加时间升序排列
+     */
+    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime >= :start AND c.addTime < :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed', 'api_failed'))")
+    List<Customer> findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
+        @Param("addedAgent") String addedAgent,
+        @Param("schoolId") String schoolId,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end);
+
+    /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。
      * 仅返回需要修复的记录，避免全表扫描。
      */
@@ -201,4 +313,44 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
            "AND c.sourceQrId IS NOT NULL")
     long countDistinctSourceQrByAddTimeBetween(@Param("start") LocalDateTime start,
                                                @Param("end") LocalDateTime end);
+
+    /**
+     * 批量统计活码的累计客户数和今日新增客户数。
+     * <p>
+     * 一次查询返回所有指定活码的统计结果，替代列表页的 N+1 循环查询。
+     * </p>
+     *
+     * @param qrIds      活码 ID 列表
+     * @param todayStart 今日起始时间（用于今日新增统计）
+     * @return 每行格式：[sourceQrId, totalCount, todayCount]
+     */
+    @Query("SELECT c.sourceQrId, COUNT(c), " +
+           "SUM(CASE WHEN c.addTime >= :todayStart THEN 1 ELSE 0 END) " +
+           "FROM Customer c WHERE c.sourceQrId IN :qrIds " +
+           "GROUP BY c.sourceQrId")
+    List<Object[]> countTotalAndTodayByQrIds(@Param("qrIds") List<Long> qrIds,
+                                              @Param("todayStart") LocalDateTime todayStart);
+
+    /**
+     * 批量统计活码在指定日期范围内的新增客户数和截止范围末日的累计客户数。
+     * <p>
+     * 与 {@link #countTotalAndTodayByQrIds} 的区别在于本方法对累计数和新增
+     * 均施加了 {@code addTime <= dateEnd} 上限，确保历史导出时统计数据不会包含
+     * 指定日期之后的数据。当 {@code dateStart} 为 null 时不设下限，
+     * "期间新增"即为从最开始到 dateEnd 的总数。
+     * </p>
+     *
+     * @param qrIds     活码 ID 列表
+     * @param dateStart 范围起始日 00:00:00（可为 null，表示不设下限）
+     * @param dateEnd   范围结束日 23:59:59（累计数上限和新增上限）
+     * @return 每行格式：[sourceQrId, totalUpToEndDate, rangeNewCount]
+     */
+    @Query("SELECT c.sourceQrId, COUNT(c), " +
+           "SUM(CASE WHEN (:dateStart IS NULL OR c.addTime >= :dateStart) "
+                  + "AND c.addTime <= :dateEnd THEN 1 ELSE 0 END) " +
+           "FROM Customer c WHERE c.sourceQrId IN :qrIds AND c.addTime <= :dateEnd " +
+           "GROUP BY c.sourceQrId")
+    List<Object[]> countTotalAndRangeByQrIds(@Param("qrIds") List<Long> qrIds,
+                                              @Param("dateStart") LocalDateTime dateStart,
+                                              @Param("dateEnd") LocalDateTime dateEnd);
 }

@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -45,11 +46,36 @@ public interface GlobalAgentPoolRepository
     /** 统计指定状态的员工数 */
     long countByStatus(GlobalAgentPool.PoolStatus status);
 
+    /**
+     * 查询指定部门的 standby 员工（含子孙部门），按 sort_order 升序，加行锁防并发。
+     *
+     * @param departmentIds 部门 ID 集合（含子孙部门），为空时退化为全量查询
+     * @param status 池状态（standby）
+     * @return 同部门 standby 列表
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.status = :status "
+         + "AND (:deptIds IS NULL OR p.departmentId IN :deptIds) "
+         + "ORDER BY p.sortOrder ASC")
+    List<GlobalAgentPool> findStandbysByDeptForUpdate(
+        @Param("deptIds") Collection<Long> departmentIds,
+        @Param("status") GlobalAgentPool.PoolStatus status);
+
     /** 取 sortOrder 最大的记录（用于队尾追加），池空时返回空 */
     Optional<GlobalAgentPool> findFirstByOrderBySortOrderDesc();
 
     /** 全量分页查询，按 sortOrder 升序 */
     Page<GlobalAgentPool> findAllByOrderBySortOrder(Pageable pageable);
+
+    /**
+     * 全量分页查询，按状态优先级排序（standby → full → blocked），
+     * 同状态按 sortOrder 升序，替代原内存排序。
+     */
+    @Query("SELECT p FROM GlobalAgentPool p ORDER BY "
+            + "CASE p.status WHEN 'standby' THEN 0 WHEN 'full' THEN 1 ELSE 2 END, "
+            + "p.sortOrder ASC")
+    Page<GlobalAgentPool> findAllWithStatusPriority(Pageable pageable);
 
     /** 按 userid 模糊匹配（不分页），用于收集匹配 userid 集合 */
     List<GlobalAgentPool> findByAgentUseridContaining(String agentUserid);
@@ -115,4 +141,12 @@ public interface GlobalAgentPoolRepository
             + "WHERE p.status = :status")
     int batchResetDailyCurrent(
             @Param("status") GlobalAgentPool.PoolStatus status);
+
+    /** 查询 departmentId 为 NULL 的池记录（存量数据回填用） */
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.departmentId IS NULL")
+    List<GlobalAgentPool> findWithNullDepartmentId();
+
+    /** 统计 departmentId 为 NULL 的池记录数 */
+    @Query("SELECT COUNT(p) FROM GlobalAgentPool p WHERE p.departmentId IS NULL")
+    long countWithNullDepartmentId();
 }

@@ -4,6 +4,9 @@ import com.bookstore.qrcode.entity.CustomerTransfer;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -45,10 +48,9 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     List<CustomerTransfer> findByStatus(CustomerTransfer.TransferStatus status);
 
     /**
-     * 查询指定状态下重试次数未超过上限的转移记录。
+     * 查询指定状态下 API 重试次数未超过上限的转移记录。
      * <p>
-     * 用于定时任务扫描「待重试」状态的转移，排除已达到最大重试次数的记录，
-     * 避免对已失败的转移无限重试。
+     * 用于 retryFailedTransfers：扫描 api_failed 状态、retryCount &lt; 3 的记录。
      * </p>
      *
      * @param status     转移状态
@@ -57,6 +59,19 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      */
     List<CustomerTransfer> findByStatusAndRetryCountLessThan(
             CustomerTransfer.TransferStatus status, int maxRetries);
+
+    /**
+     * 查询指定状态下轮询次数未超过上限的转移记录。
+     * <p>
+     * 用于 trackResults：扫描 pending_confirm 状态、pollCount &lt; 48 的记录。
+     * </p>
+     *
+     * @param status     转移状态
+     * @param maxPolls   最大允许轮询次数
+     * @return 可继续轮询的转移记录列表
+     */
+    List<CustomerTransfer> findByStatusAndPollCountLessThan(
+            CustomerTransfer.TransferStatus status, int maxPolls);
 
     /**
      * 统计指定时间范围内的客户转移总次数。
@@ -98,4 +113,148 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      */
     long countByTransferTimeBetweenAndStatus(
             LocalDateTime start, LocalDateTime end, CustomerTransfer.TransferStatus status);
+
+    /**
+     * 判断指定客户是否存在处于给定状态集合中的转移记录。
+     * <p>
+     * 用于在职继承去重：在发起新转移前检查该客户是否已有
+     * pending_confirm 或 confirmed 的记录，避免重复转移。
+     * </p>
+     *
+     * @param customerId 客户 ID
+     * @param statuses   状态集合
+     * @return true 如果存在匹配记录
+     */
+    boolean existsByCustomerIdAndStatusIn(Long customerId, List<CustomerTransfer.TransferStatus> statuses);
+
+    /**
+     * 统计指定活码下所有转移记录总数。
+     */
+    long countByQrCodeId(Long qrCodeId);
+
+    /**
+     * 统计指定活码下特定状态的转移记录数。
+     */
+    long countByQrCodeIdAndStatus(Long qrCodeId, CustomerTransfer.TransferStatus status);
+
+    /**
+     * 统计指定目标员工在指定状态下的转移记录总数。
+     * <p>
+     * 用于检测某服务老师/双角色的转移失败是否已积累到告警阈值。
+     * 跨批次累积统计，而非仅看单次重试批量。
+     * </p>
+     *
+     * @param toUserid 目标员工企微 userid
+     * @param status   转移状态（通常为 retry_limit）
+     * @return 该目标在指定状态下的转移记录总数
+     */
+    long countByToUseridAndStatus(String toUserid, CustomerTransfer.TransferStatus status);
+
+    /**
+     * 查找 retry_limit 积累达到告警阈值的服务老师/双角色及其记录数。
+     * <p>
+     * 一次 JOIN 查询覆盖所有到达 {@code retry_limit} 的路径
+     * （{@code initiate()} 终端错误 + {@code api_failed} 重试耗尽）。
+     * 使用子查询而非 JOIN 避免一个老师挂多个活码时笛卡尔积导致 COUNT 虚高。
+     * </p>
+     *
+     * <p><b>三层防护：</b>
+     * <ol>
+     *   <li>排除终端/不可操作类型（84061/84073/84096/84100/45035/60111/40003/轮询耗尽/已有进行中转移），只统计需人工介入的服务老师侧问题</li>
+     *   <li>7 天时间窗口，防止历史记录导致永久重复告警</li>
+     *   <li>HAVING COUNT &ge; 3，在数据库侧完成阈值过滤</li>
+     * </ol>
+     * </p>
+     *
+     * @param since 统计起始时间（transferTime &ge; since），调用方传入 7 天前
+     * @return 每行 [toUserid, count]，仅包含 count &ge; 3 的老师
+     */
+    @Query("SELECT t.toUserid, COUNT(t) FROM CustomerTransfer t "
+        + "WHERE t.status = 'retry_limit' "
+        + "AND t.transferTime >= :since "
+        + "AND t.toUserid IN ("
+        + "  SELECT a.agentUserid FROM QrAgent a "
+        + "  WHERE a.role IN ('service', 'dual') "
+        + "  AND a.status <> 'removed') "
+        + "AND (t.failReason IS NULL OR t.failReason = '' "
+        + "  OR (t.failReason NOT LIKE '%errcode=84061%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84073%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84096%' "
+        + "    AND t.failReason NOT LIKE '%errcode=84100%' "
+        + "    AND t.failReason NOT LIKE '%errcode=45035%' "
+        + "    AND t.failReason NOT LIKE '%轮询次数耗尽%' "
+        + "    AND t.failReason NOT LIKE '%已有进行中的转移%' "
+        + "    AND t.failReason NOT LIKE '%errcode=60111%' "
+        + "    AND t.failReason NOT LIKE '%errcode=40003%')) "
+        + "GROUP BY t.toUserid "
+        + "HAVING COUNT(t) >= 3")
+    List<Object[]> findRetryLimitTeachers(@Param("since") LocalDateTime since);
+
+    /**
+     * 查询指定状态下 API 重试次数已达上限的转移记录。
+     * <p>
+     * 用于将 retryCount 耗尽但仍处于 api_failed 的记录标记为 retry_limit。
+     * 注意：trackResults 的轮询耗尽使用 {@link #findByStatusAndPollCountGreaterThanEqual}。
+     * </p>
+     */
+    List<CustomerTransfer> findByStatusAndRetryCountGreaterThanEqual(
+            CustomerTransfer.TransferStatus status, int minRetries);
+
+    /**
+     * 查询已确认且有表单提交的转移记录，用于修复损坏的备注。
+     */
+    @Query("SELECT DISTINCT ct FROM CustomerTransfer ct "
+        + "JOIN FormSubmission fs ON fs.customerId = ct.customerId "
+        + "WHERE ct.status = 'confirmed' AND ct.greetingSent = true "
+        + "AND ct.noteSent = true")
+    List<CustomerTransfer> findConfirmedWithFormSubmission();
+
+    /**
+     * 查询指定状态下轮询次数已达上限的转移记录。
+     * <p>
+     * 用于 trackResults 安全网：将 pollCount ≥ 48 但仍处于 pending_confirm
+     * 的记录标记为 retry_limit。
+     * </p>
+     */
+    List<CustomerTransfer> findByStatusAndPollCountGreaterThanEqual(
+            CustomerTransfer.TransferStatus status, int minPolls);
+
+    /**
+     * 查询已确认但欢迎语未发送的转移记录，限定确认时间窗口以防止无限重试。
+     * <p>
+     * 用于定时补偿发送失败的交接欢迎语。仅重试 24 小时内的记录，
+     * 超过 24 小时的认为发送窗口已过，不再重试。
+     * </p>
+     *
+     * @param status       转移状态（通常为 confirmed）
+     * @param greetingSent 欢迎语是否已发送（false = 未发送）
+     * @param confirmSince 确认时间下限（含）
+     * @return 符合条件且未超期的记录列表
+     */
+    List<CustomerTransfer> findByStatusAndGreetingSentAndConfirmTimeAfter(
+        CustomerTransfer.TransferStatus status, boolean greetingSent,
+        java.time.LocalDateTime confirmSince);
+
+    /**
+     * 查询状态为 terminal（timeout/rejected/retry_limit）且更新时间超过指定天数的记录。
+     * <p>
+     * 用于定期清理已终结的旧转移记录，避免表无限膨胀。
+     * </p>
+     */
+    @Query("SELECT t FROM CustomerTransfer t WHERE t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt < :cutoff")
+    List<CustomerTransfer> findTerminalOlderThan(@Param("cutoff") LocalDateTime cutoff);
+
+    /**
+     * 批量删除指定 ID 列表中的记录（单条 DELETE 语句，避免 N+1）。
+     */
+    @Modifying
+    @Query("DELETE FROM CustomerTransfer t WHERE t.id IN :ids")
+    void deleteAllByIdIn(@Param("ids") List<Long> ids);
+
+    /**
+     * 判断指定客户是否存在最近 N 天内的 terminal 转移记录
+     * （timeout / rejected / retry_limit），用于冷却期检查。
+     */
+    @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt >= :since")
+    boolean existsRecentTerminalByCustomerId(@Param("customerId") Long customerId, @Param("since") LocalDateTime since);
 }

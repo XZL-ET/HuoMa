@@ -9,6 +9,35 @@
     var chartAddAlerts = null;
     var chartPool = null;
     var hasChartJs = (typeof Chart !== 'undefined');
+    var chartLoadRetried = false;
+
+    // ── Chart.js CDN 回退（BootCDN 不可用时切 jsDelivr） ──
+    function ensureChartJs(callback) {
+        if (hasChartJs) { callback(); return; }
+        if (chartLoadRetried) {
+            // 已重试过仍失败，显示降级提示
+            showChartFallback();
+            return;
+        }
+        chartLoadRetried = true;
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+        s.onload = function () {
+            hasChartJs = true;
+            callback();
+        };
+        s.onerror = function () {
+            showChartFallback();
+        };
+        document.head.appendChild(s);
+    }
+
+    function showChartFallback() {
+        var c1 = document.getElementById('chartAddAlerts');
+        var c2 = document.getElementById('chartPool');
+        if (c1) c1.parentElement.innerHTML = '<div class="text-muted text-center py-5">图表库加载失败，请刷新页面重试</div>';
+        if (c2) c2.parentElement.innerHTML = '<div class="text-muted text-center py-5">图表库加载失败，请刷新页面重试</div>';
+    }
 
     // ── 初始化 ──────────────────────────────────
 
@@ -54,12 +83,9 @@
     }
 
     function renderTrends(d) {
-        // Chart.js CDN 不可用时前端降级为隐藏图表
+        // Chart.js 不可用时尝试备用 CDN 加载
         if (!hasChartJs) {
-            var c1 = document.getElementById('chartAddAlerts');
-            var c2 = document.getElementById('chartPool');
-            if (c1) c1.parentElement.innerHTML = '<div class="text-muted text-center py-5">图表库加载失败，请刷新页面重试</div>';
-            if (c2) c2.parentElement.innerHTML = '<div class="text-muted text-center py-5">图表库加载失败，请刷新页面重试</div>';
+            ensureChartJs(function () { renderTrends(d); });
             return;
         }
         // 客户 + 告警双轴折线图

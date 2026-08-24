@@ -104,6 +104,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("全局池日重置失败; ");
+            log.error("全局池日重置失败", e);
         }
 
         // 3. 恢复 full 状态的员工（通过代理调用确保 @Transactional 生效）
@@ -112,6 +113,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("full员工恢复失败; ");
+            log.error("full员工恢复失败", e);
         }
 
         // 4. 生成昨日日报（通过代理调用确保 @Transactional 生效）
@@ -120,6 +122,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("日报生成失败; ");
+            log.error("日报生成失败", e);
         }
 
         // 5. 清零熔断计数，防止跨天累积永久封禁
@@ -129,6 +132,7 @@ public class DailyResetWorker {
         } catch (Exception e) {
             failures++;
             failDetails.append("熔断计数清零失败; ");
+            log.error("熔断计数清零失败", e);
         }
 
         // 任一步骤失败均告警
@@ -136,7 +140,7 @@ public class DailyResetWorker {
             String msg = String.format("每日重置 %d 项失败: %s", failures, failDetails);
             log.error(msg);
             try {
-                alertService.createAlert("system", "daily_reset_failure",
+                alertService.createAlert(null, "daily_reset_failure",
                     AgentAlert.AlertSeverity.high, msg, AgentAlert.AutoAction.none, null);
             } catch (Exception e) {
                 log.error("告警发送失败", e);
@@ -206,6 +210,18 @@ public class DailyResetWorker {
             if (agent != null
                 && agent.getOverallStatus() != Agent.OverallStatus.blocked
                 && agent.getOverallStatus() != Agent.OverallStatus.melted) {
+                // 服务老师/双角色不应出现 full 状态（应被 checkAndRotate 拦截），
+                // 若出现则告警（说明有漏洞），并正常恢复为 active
+                if (qa.getRole() == QrAgent.AgentRole.service
+                    || qa.getRole() == QrAgent.AgentRole.dual) {
+                    log.warn("服务老师/双角色异常出现在 full 状态: qrCodeId={}, userid={}, role={}",
+                        qa.getQrCodeId(), qa.getAgentUserid(), qa.getRole());
+                    alertService.createAlert(qa.getAgentUserid(), "service_teacher_full_recovered",
+                        AgentAlert.AlertSeverity.high,
+                        String.format("服务老师/双角色 %s 异常出现在 full 状态（活码=%d），已自动恢复",
+                            qa.getAgentUserid(), qa.getQrCodeId()),
+                        AgentAlert.AutoAction.none, qa.getQrCodeId());
+                }
                 qa.setStatus(QrAgent.AgentStatus.active);
                 qrAgentRepo.save(qa);
                 affectedQrIds.add(qa.getQrCodeId());

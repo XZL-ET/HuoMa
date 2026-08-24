@@ -1,10 +1,289 @@
 <!DOCTYPE html>
-<!-- 异常告警页面 — 实时展示员工熔断、封号、后备池空、通过率低等异常事件（开发中） -->
+<!-- 异常告警中心 — 实时展示员工熔断、封号、后备池空、添加失败等异常事件 -->
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='异常告警', content=~{::main})}">
 <main>
-    <h4>异常告警</h4>
-    <!-- 开发占位提示 -->
-    <div class="alert alert-warning"><i class="bi bi-exclamation-triangle"></i> 异常告警面板开发中 — 将实时展示员工熔断、封号、后备池空、通过率低等异常事件。</div>
+    <!-- 页面标题 + 一键解决 -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>🚨 异常告警</h4>
+        <form th:if="${stats.openCount > 0}" method="post" th:action="@{/alerts/resolve-all}"
+              onsubmit="return confirm('确定要将所有未处理告警标记为已解决吗？')">
+            <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
+            <input type="hidden" name="page" th:value="${page}"/>
+            <input type="hidden" name="status" th:value="${statusFilter}"/>
+            <input type="hidden" name="severity" th:value="${severityFilter}"/>
+            <input type="hidden" name="type" th:value="${typeFilter}"/>
+            <input type="hidden" name="agent" th:value="${agentFilter}"/>
+            <input type="hidden" name="startDate" th:value="${startDate}"/>
+            <input type="hidden" name="endDate" th:value="${endDate}"/>
+            <button type="submit" class="btn btn-outline-warning btn-sm">
+                ✅ 一键解决全部（<span th:text="${stats.openCount}">0</span>）
+            </button>
+        </form>
+    </div>
+
+    <!-- 统计摘要卡片 -->
+    <div class="row g-3 mb-3">
+        <!-- 状态分布 -->
+        <div class="col-md-4">
+            <div class="card p-3">
+                <small class="text-muted">状态分布</small>
+                <div class="d-flex gap-3 mt-1">
+                    <div>
+                        <span class="badge bg-danger fs-6" th:text="${stats.openCount}">0</span>
+                        <small class="text-muted ms-1">未处理</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-success fs-6" th:text="${stats.resolvedCount}">0</span>
+                        <small class="text-muted ms-1">已解决</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-secondary fs-6" th:text="${stats.autoResolvedCount}">0</span>
+                        <small class="text-muted ms-1">自动恢复</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 严重程度分布 -->
+        <div class="col-md-3">
+            <div class="card p-3">
+                <small class="text-muted">严重程度</small>
+                <div class="d-flex gap-3 mt-1">
+                    <div>
+                        <span class="badge bg-danger fs-6" th:text="${stats.highCount}">0</span>
+                        <small class="text-muted ms-1">高</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-warning text-dark fs-6" th:text="${stats.mediumCount}">0</span>
+                        <small class="text-muted ms-1">中</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-secondary fs-6" th:text="${stats.lowCount}">0</span>
+                        <small class="text-muted ms-1">低</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- 时间统计 -->
+        <div class="col-md-5">
+            <div class="card p-3">
+                <small class="text-muted">时间统计</small>
+                <div class="d-flex gap-3 mt-1">
+                    <div>
+                        <span class="badge bg-primary fs-6" th:text="${stats.todayCount}">0</span>
+                        <small class="text-muted ms-1">今日新增</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-info fs-6" th:text="${stats.weekCount}">0</span>
+                        <small class="text-muted ms-1">近7天</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-dark fs-6" th:text="${stats.totalCount}">0</span>
+                        <small class="text-muted ms-1">历史总计</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 筛选栏 -->
+    <div class="card p-3 mb-3">
+        <form class="row g-2" method="get" th:action="@{/alerts}">
+            <div class="col-md-2">
+                <select name="status" class="form-select form-select-sm">
+                    <option value="">全部状态</option>
+                    <option value="open" th:selected="${statusFilter == 'open'}">未处理</option>
+                    <option value="resolved" th:selected="${statusFilter == 'resolved'}">已解决</option>
+                    <option value="auto_resolved" th:selected="${statusFilter == 'auto_resolved'}">自动恢复</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="severity" class="form-select form-select-sm">
+                    <option value="">全部严重程度</option>
+                    <option value="high" th:selected="${severityFilter == 'high'}">🔴 高</option>
+                    <option value="medium" th:selected="${severityFilter == 'medium'}">🟡 中</option>
+                    <option value="low" th:selected="${severityFilter == 'low'}">⚪ 低</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="type" class="form-select form-select-sm">
+                    <option value="">全部类型</option>
+                    <option value="add_fail" th:selected="${typeFilter == 'add_fail'}">添加失败</option>
+                    <option value="greeting_fail" th:selected="${typeFilter == 'greeting_fail'}">欢迎语失败</option>
+                    <option value="melt" th:selected="${typeFilter == 'melt'}">熔断</option>
+                    <option value="empty_backup" th:selected="${typeFilter == 'empty_backup'}">后备池空</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <input type="text" name="agent" class="form-control form-control-sm"
+                       placeholder="搜索员工账号..." th:value="${agentFilter}">
+            </div>
+            <div class="col-md-2">
+                <input type="date" name="startDate" class="form-control form-control-sm"
+                       th:value="${startDate}" title="起始日期">
+            </div>
+            <div class="col-md-1">
+                <input type="date" name="endDate" class="form-control form-control-sm"
+                       th:value="${endDate}" title="结束日期">
+            </div>
+            <div class="col-md-auto">
+                <button type="submit" class="btn btn-primary btn-sm">🔍 筛选</button>
+                <a href="/alerts" class="btn btn-outline-secondary btn-sm">重置</a>
+            </div>
+        </form>
+    </div>
+
+    <!-- 告警表格 -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0" th:if="${!alertPage.isEmpty()}">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:55px;">#</th>
+                        <th style="width:85px;">类型</th>
+                        <th style="width:65px;">级别</th>
+                        <th style="width:110px;">员工</th>
+                        <th>详情</th>
+                        <th style="width:100px;">关联活码</th>
+                        <th style="width:75px;">自动动作</th>
+                        <th style="width:95px;">状态</th>
+                        <th style="width:145px;">创建时间</th>
+                        <th style="width:70px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="alert,iter : ${alertPage.content}"
+                        th:classappend="${alert.status.name() == 'open' && alert.severity.name() == 'high' ? 'table-danger' : (alert.status.name() == 'open' ? 'table-warning' : '')}">
+                        <td class="text-muted small" th:text="${alertPage.number * alertPage.size + iter.count}">1</td>
+                        <!-- 类型标签 -->
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${alert.alertType == 'melt' ? 'bg-dark' : (alert.alertType == 'add_fail' ? 'bg-danger' : (alert.alertType == 'greeting_fail' ? 'bg-warning text-dark' : (alert.alertType == 'empty_backup' ? 'bg-info text-dark' : 'bg-secondary')))}"
+                                  th:text="${alert.alertType == 'melt' ? '熔断' : (alert.alertType == 'add_fail' ? '添加失败' : (alert.alertType == 'greeting_fail' ? '欢迎语失败' : (alert.alertType == 'empty_backup' ? '后备池空' : alert.alertType)))}">类型</span>
+                        </td>
+                        <!-- 严重级别 -->
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${alert.severity.name() == 'high' ? 'bg-danger' : (alert.severity.name() == 'medium' ? 'bg-warning text-dark' : 'bg-secondary')}"
+                                  th:text="${alert.severity.name() == 'high' ? '高' : (alert.severity.name() == 'medium' ? '中' : '低')}">级别</span>
+                        </td>
+                        <!-- 员工 -->
+                        <td>
+                            <span th:if="${alert.agentUserid != null && !alert.agentUserid.isEmpty()}"
+                                  class="small">
+                                <span class="fw-semibold" th:text="${agentNameMap.getOrDefault(alert.agentUserid, alert.agentUserid)}">姓名</span>
+                                <br><code class="text-muted small" th:text="${alert.agentUserid}">userid</code>
+                            </span>
+                            <span th:unless="${alert.agentUserid != null && !alert.agentUserid.isEmpty()}"
+                                  class="text-muted small">-</span>
+                        </td>
+                        <!-- 详情摘要 — 从 detail JSON 提取关键信息 -->
+                        <td>
+                            <small class="text-muted d-block text-truncate" style="max-width:260px;"
+                                  th:title="${alert.detail}"
+                                  th:text="${alert.detail}">详情</small>
+                        </td>
+                        <!-- 关联活码 -->
+                        <td>
+                            <a th:if="${alert.qrCodeId != null}"
+                               th:href="@{/qrcodes/{id}(id=${alert.qrCodeId})}"
+                               class="small" th:text="${qrNameMap.getOrDefault(alert.qrCodeId, '活码#' + alert.qrCodeId)}">活码</a>
+                            <span th:unless="${alert.qrCodeId != null}" class="text-muted small">-</span>
+                        </td>
+                        <!-- 自动动作 -->
+                        <td>
+                            <span th:if="${alert.autoAction.name() != 'none'}"
+                                  class="badge bg-dark"
+                                  th:text="${alert.autoAction.name() == 'melted' ? '熔断' : (alert.autoAction.name() == 'paused' ? '暂停' : (alert.autoAction.name() == 'removed' ? '移除' : alert.autoAction.name()))}">动作</span>
+                            <span th:unless="${alert.autoAction.name() != 'none'}" class="text-muted small">-</span>
+                        </td>
+                        <!-- 状态 -->
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${alert.status.name() == 'open' ? 'bg-danger' : (alert.status.name() == 'resolved' ? 'bg-success' : 'bg-secondary')}"
+                                  th:text="${alert.status.name() == 'open' ? '未处理' : (alert.status.name() == 'resolved' ? '已解决' : '自动恢复')}">状态</span>
+                            <small th:if="${alert.resolvedBy != null}" class="text-muted d-block"
+                                   th:text="'by ' + ${alert.resolvedBy}"></small>
+                        </td>
+                        <!-- 创建时间 -->
+                        <td class="text-muted small" th:text="${#temporals.format(alert.createdAt, 'MM-dd HH:mm:ss')}">01-01 12:00</td>
+                        <!-- 操作 -->
+                        <td>
+                            <form th:if="${alert.status.name() == 'open'}"
+                                  method="post" th:action="@{/alerts/{id}/resolve(id=${alert.id})}"
+                                  onsubmit="return confirm('确认将此告警标记为已解决？')">
+                                <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
+                                <input type="hidden" name="page" th:value="${page}"/>
+                                <input type="hidden" name="status" th:value="${statusFilter}"/>
+                                <input type="hidden" name="severity" th:value="${severityFilter}"/>
+                                <input type="hidden" name="type" th:value="${typeFilter}"/>
+                                <input type="hidden" name="agent" th:value="${agentFilter}"/>
+                                <input type="hidden" name="startDate" th:value="${startDate}"/>
+                                <input type="hidden" name="endDate" th:value="${endDate}"/>
+                                <button type="submit" class="btn btn-outline-success btn-sm" title="标记为已解决">
+                                    ✔
+                                </button>
+                            </form>
+                            <span th:unless="${alert.status.name() == 'open'}" class="text-muted small">-</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- 无数据说明 -->
+            <div th:if="${alertPage.isEmpty()}" class="text-center text-muted py-5">
+                <p class="mb-2 fs-5">🎉 暂无告警</p>
+                <p class="mb-1" th:if="${statusFilter != null || severityFilter != null || typeFilter != null || agentFilter != null || startDate != null || endDate != null}">
+                    当前筛选条件下无匹配告警，请调整筛选条件
+                </p>
+                <small>系统会在员工触发异常时自动生成告警记录</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 分页导航 -->
+    <div class="d-flex justify-content-between align-items-center mt-3" th:if="${alertPage.totalPages > 1}">
+        <small class="text-muted">
+            共 <strong th:text="${alertPage.totalElements}">0</strong> 条告警，
+            第 <span th:text="${alertPage.number + 1}">1</span>/<span th:text="${alertPage.totalPages}">1</span> 页
+        </small>
+        <nav>
+            <ul class="pagination pagination-sm mb-0">
+                <!-- 上一页 -->
+                <li class="page-item" th:classappend="${alertPage.first} ? 'disabled'">
+                    <th:block th:if="${!alertPage.first}">
+                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number - 1},size=${size})}">上一页</a>
+                    </th:block>
+                    <th:block th:if="${alertPage.first}">
+                        <span class="page-link">上一页</span>
+                    </th:block>
+                </li>
+                <!-- 页码 -->
+                <th:block th:each="i : ${#numbers.sequence(pageStart, pageEnd)}">
+                    <li class="page-item" th:classappend="${i == alertPage.number} ? 'active'">
+                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${i},size=${size})}"
+                           th:text="${i + 1}">1</a>
+                    </li>
+                </th:block>
+                <!-- 下一页 -->
+                <li class="page-item" th:classappend="${alertPage.last} ? 'disabled'">
+                    <th:block th:if="${!alertPage.last}">
+                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number + 1},size=${size})}">下一页</a>
+                    </th:block>
+                    <th:block th:if="${alertPage.last}">
+                        <span class="page-link">下一页</span>
+                    </th:block>
+                </li>
+            </ul>
+        </nav>
+    </div>
+
+    <!-- 图例说明 -->
+    <small class="text-muted mt-2 d-block">
+        💡 行背景色：<span class="badge bg-danger">红色</span> 高级别未处理 &nbsp;
+        <span class="badge bg-warning text-dark">黄色</span> 普通未处理 &nbsp;
+        无底色 已关闭/自动恢复。
+        点击 ✔ 按钮手动关闭告警，或使用「一键解决全部」批量处理。
+    </small>
 </main>
 </html>

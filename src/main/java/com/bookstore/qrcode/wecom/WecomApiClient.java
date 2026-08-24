@@ -474,7 +474,8 @@ public class WecomApiClient {
      *   {
      *     "handover_userid": "zhangsan",    // 原添加人
      *     "takeover_userid": "lisi",        // 接替人
-     *     "external_userid": ["wmxxxxxx"]   // 待转移的客户列表
+     *     "external_userid": ["wmxxxxxx"],  // 待转移的客户列表
+     *     "transfer_success_msg": "..."     // 可选，转接成功后发给客户的消息，最多200字符
      *   }
      * 响应:
      *   {"errcode":0,"errmsg":"ok"}
@@ -483,17 +484,25 @@ public class WecomApiClient {
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
      * @param externalUserid 待转移客户的 external_userid
+     * @param transferSuccessMsg 转接成功后发给客户的通知消息，{@code null}=不传字段（企微发默认消息），
+     *                           {@code ""}=传空字符串（抑制通知），最多200字符
      * @return JsonNode {@code {errcode, errmsg}}
      * @throws WecomApiException API 调用失败时抛出
      */
     public JsonNode transferCustomer(String handoverUserid, String takeoverUserid,
-                                      String externalUserid) {
+                                      String externalUserid, String transferSuccessMsg) {
         String url = BASE_URL + "/externalcontact/transfer_customer?access_token=" + getAccessToken();
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
             bodyMap.put("external_userid", List.of(externalUserid));
+            if (transferSuccessMsg != null) {
+                // 企微接口限制 200 字符，防御性截断
+                String msg = transferSuccessMsg.length() > 200
+                        ? transferSuccessMsg.substring(0, 200) : transferSuccessMsg;
+                bodyMap.put("transfer_success_msg", msg);
+            }
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
             return parseAndCheck(resp, "在职继承");
@@ -524,9 +533,12 @@ public class WecomApiClient {
      *     "errcode": 0,
      *     "errmsg": "ok",
      *     "customer": [
-     *       {"external_userid": "wmxxx", "status": 1}  // 1=成功 2=失败
+     *       {"external_userid": "wmxxx", "status": 1}
+     *       // status: 1=接替完毕 2=等待接替 3=客户拒绝 4=接替成员客户达上限 5=无接替记录
      *     ]
      *   }
+     * @apiNote 此接口 (get_transfer_result) 已于 2023/11/30 标记废弃，企微推荐使用
+     *          transfer_result 接口（cursor 分页）；当前仍可用但未来可能移除
      * </pre>
      *
      * @param handoverUserid 原添加人（转出方）的 userid
@@ -535,20 +547,49 @@ public class WecomApiClient {
      * @return JsonNode 包含 {@code customer} 数组，每个元素含 {@code external_userid} 和 {@code status}
      * @throws WecomApiException API 调用失败时抛出
      */
+    /**
+     * 查询在职继承结果（无 cursor，返回第一页）。
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 目标客户 external_userid（传给企微 API 用于精确定位）
+     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
+     */
     public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
                                        String externalUserid) {
+        return getTransferResult(handoverUserid, takeoverUserid, externalUserid, null);
+    }
+
+    /**
+     * 查询在职继承结果（带 cursor 分页）。
+     * <p>
+     * 企微 API 接受 {@code handover_userid}、{@code takeover_userid}、{@code external_userid}
+     * 和可选 {@code cursor} 四个参数。{@code external_userid} 用于精确定位目标客户。
+     * </p>
+     *
+     * @param handoverUserid 原添加人（转出方）的 userid
+     * @param takeoverUserid 接替人（转入方）的 userid
+     * @param externalUserid 目标客户 external_userid
+     * @param cursor         分页游标，{@code null} 或空字符串表示第一页
+     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
+     */
+    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
+                                       String externalUserid, String cursor) {
         String url = BASE_URL + "/externalcontact/get_transfer_result?access_token=" + getAccessToken();
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
             bodyMap.put("external_userid", externalUserid);
+            if (cursor != null && !cursor.isEmpty()) {
+                bodyMap.put("cursor", cursor);
+            }
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);
             return parseAndCheck(resp, "查询继承结果");
         } catch (WecomApiException e) {
             throw e;
-        } catch (Exception e) {
+         } catch (Exception e) {
             throw new WecomTransientException(-1,
                 "查询继承结果失败: " + e.getMessage(), null);
         }
@@ -725,6 +766,109 @@ public class WecomApiClient {
     }
 
     /**
+     * 向客户发送文本卡片消息（可点击跳转）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/message/send}
+     * <pre>
+     * 请求:
+     *   {
+     *     "sender": "zhangsan",
+     *     "external_userid": "wmxxx",
+     *     "msgtype": "textcard",
+     *     "textcard": {
+     *       "title": "领奖通知",
+     *       "description": "&lt;div class=\"normal\"&gt;恭喜中奖&lt;/div&gt;",
+     *       "url": "https://work.weixin.qq.com",
+     *       "btntxt": "更多"
+     *     }
+     *   }
+     * </pre>
+     * <b>注意：</b>description 支持简单 HTML 标签和 class（gray/normal/highlight），
+     * 用于控制文字颜色和大小。
+     *
+     * @param sender         发送消息的企业成员 userid
+     * @param externalUserid 接收消息的客户 external_userid
+     * @param title          卡片标题（不超过 128 字符）
+     * @param description    卡片描述（支持 HTML，不超过 512 字符）
+     * @param url            点击卡片跳转的 URL
+     * @param btnText        按钮文字（可选，如"去填写"）
+     * @throws WecomApiException 发送失败时抛出
+     */
+    public void sendTextCard(String sender, String externalUserid,
+                             String title, String description, String url, String btnText) {
+        String apiUrl = BASE_URL + "/externalcontact/message/send?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> card = new java.util.LinkedHashMap<>();
+            card.put("title", title);
+            card.put("description", description);
+            card.put("url", url);
+            if (btnText != null && !btnText.isEmpty()) {
+                card.put("btntxt", btnText);
+            }
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("sender", sender);
+            bodyMap.put("external_userid", externalUserid);
+            bodyMap.put("msgtype", "textcard");
+            bodyMap.put("textcard", card);
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(apiUrl, body);
+            parseAndCheck(resp, "发送卡片消息");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "发送卡片消息失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
+     * 发送欢迎语给新添加的客户。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/send_welcome_msg}
+     * <pre>
+     * 请求:
+     *   {
+     *     "welcome_code": "CODE_FROM_CALLBACK",
+     *     "text": {"content": "您好，欢迎添加"},
+     *     "attachments": [
+     *       {"msgtype": "link", "link": {"title": "表单", "url": "...", ...}}
+     *     ]
+     *   }
+     * </pre>
+     * <p><b>与 sendMessage 的区别：</b>
+     * <ul>
+     *   <li>send_welcome_msg 使用回调返回的 welcome_code，不受每日推送次数限制</li>
+     *   <li>welcome_code 仅在 add_external_contact 回调后约 20 秒内有效</li>
+     *   <li>一个 welcome_code 只能使用一次</li>
+     * </ul>
+     *
+     * @param welcomeCode 回调 XML 中的 WelcomeCode 字段值
+     * @param text        欢迎语文案
+     * @param attachments 可选附件（文本卡片等），可为 null
+     * @throws WecomApiException 发送失败时抛出（如 welcome_code 已过期、已使用等）
+     */
+    public void sendWelcomeMsg(String welcomeCode, String text,
+                               List<Map<String, Object>> attachments) {
+        String url = BASE_URL + "/externalcontact/send_welcome_msg?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("welcome_code", welcomeCode);
+            bodyMap.put("text", Map.of("content", text));
+            if (attachments != null && !attachments.isEmpty()) {
+                bodyMap.put("attachments", attachments);
+            }
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            parseAndCheck(resp, "发送欢迎语");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "发送欢迎语失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
      * 修改客户备注。
      * POST /cgi-bin/externalcontact/remark
      */
@@ -806,7 +950,7 @@ public class WecomApiClient {
      * <ul>
      *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
      *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
-     *   <li>-1（网络/解析异常）、≥50000（服务端错误）→ {@link WecomTransientException}</li>
+     *   <li>45035（操作冲突）、-1（网络/解析异常）、50000–59999（服务端错误）→ {@link WecomTransientException}</li>
      *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
      * </ul>
      *
@@ -821,7 +965,7 @@ public class WecomApiClient {
         if (errcode == 45009) {
             throw new WecomRateLimitException(errcode, errmsg, body, 60);
         }
-        if (errcode == -1 || errcode >= 50000) {
+        if (errcode == 45035 || errcode == -1 || (errcode >= 50000 && errcode < 60000)) {
             throw new WecomTransientException(errcode, errmsg, body);
         }
         throw new WecomPermanentException(errcode, errmsg, body);
@@ -883,5 +1027,25 @@ public class WecomApiClient {
             + "&scope=snsapi_base"
             + "&state=" + state
             + "#wechat_redirect";
+    }
+
+    /**
+     * 获取企微部门列表。
+     *
+     * <p><b>企微接口：</b>{@code GET /cgi-bin/department/list}
+     *
+     * @param parentId 父部门 ID，传 null 表示获取全部部门
+     * @return 企微 API 响应 JSON，包含 department 数组
+     * @throws WecomApiException API 调用失败时抛出
+     */
+    public JsonNode listDepartments(Long parentId) throws WecomApiException {
+        String accessToken = getAccessToken();
+        StringBuilder url = new StringBuilder(
+            "https://qyapi.weixin.qq.com/cgi-bin/department/list?access_token=" + accessToken);
+        if (parentId != null) {
+            url.append("&id=").append(parentId);
+        }
+        String resp = restTemplate.getForObject(url.toString(), String.class);
+        return parseAndCheck(resp, "获取部门列表");
     }
 }

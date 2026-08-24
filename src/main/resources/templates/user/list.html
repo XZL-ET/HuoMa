@@ -6,7 +6,7 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4>用户管理</h4>
         <a href="/users/create" class="btn btn-primary btn-sm">
-            <i class="bi bi-plus-lg"></i> 创建用户
+            ➕ 创建用户
         </a>
     </div>
 
@@ -57,14 +57,14 @@
                                     data-bs-toggle="modal"
                                     data-bs-target="#pwdModal"
                                     th:attr="data-userid=${user.id},data-username=${user.username}">
-                                <i class="bi bi-key"></i>
+                                🔑
                             </button>
                             <!-- 启用/禁用按钮 -->
                             <form th:action="@{/users/{id}/toggle(id=${user.id})}" method="post" class="d-inline">
                                 <button type="submit" class="btn btn-sm"
                                         th:classappend="${user.enabled} ? 'btn-outline-warning' : 'btn-outline-success'"
                                         th:title="${user.enabled} ? '禁用' : '启用'">
-                                    <i class="bi" th:classappend="${user.enabled} ? 'bi-pause-circle' : 'bi-play-circle'"></i>
+                                    <span th:text="${user.enabled} ? '⏸' : '▶'"></span>
                                 </button>
                             </form>
                             <!-- 删除按钮（仅非当前用户） -->
@@ -72,7 +72,7 @@
                                   th:if="${#authentication.name != user.username}"
                                   onsubmit="return confirm('确定要删除该用户吗？')">
                                 <button type="submit" class="btn btn-outline-danger btn-sm" title="删除">
-                                    <i class="bi bi-trash"></i>
+                                    🗑️
                                 </button>
                             </form>
                         </td>

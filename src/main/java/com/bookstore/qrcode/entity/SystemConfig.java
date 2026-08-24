@@ -23,6 +23,9 @@ public class SystemConfig {
     @Column(name = "config_key", length = 64)
     private String configKey;
 
+    @Column(name = "config_name", length = 100)
+    private String configName;
+
     @Column(name = "config_value", columnDefinition = "TEXT")
     private String configValue;
 

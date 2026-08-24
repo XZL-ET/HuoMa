@@ -9,18 +9,18 @@
             <div class="btn-group w-100 w-md-auto" role="group">
                 <a th:href="@{/download(mode='mine',keyword=${keyword})}"
                    class="btn" th:classappend="${mode == 'mine' ? 'btn-primary' : 'btn-outline-primary'}">
-                    <i class="bi bi-person-check"></i> 我的活码
+                    ✅ 我的活码
                 </a>
                 <a th:href="@{/download(mode='all',keyword=${keyword})}"
                    class="btn" th:classappend="${mode == 'all' ? 'btn-primary' : 'btn-outline-primary'}">
-                    <i class="bi bi-grid"></i> 全部活码
+                    📋 全部活码
                 </a>
             </div>
             <input type="hidden" name="mode" th:value="${mode}">
             <input type="search" name="keyword" class="form-control" style="max-width: 400px;"
                    th:value="${keyword}" placeholder="🔍 搜索学校名称、城市、区县…">
             <button type="submit" class="btn btn-primary w-100 w-md-auto">
-                <i class="bi bi-search"></i> 搜索
+                🔍 搜索
             </button>
         </form>
     </div>
@@ -30,12 +30,12 @@
         <div class="col-12 col-sm-6 col-lg-4 col-xl-3" th:each="qr : ${qrCodes.content}">
             <div class="card qr-card h-100 border-0 shadow-sm">
                 <div th:if="${downloadedIds.contains(qr.id)}" class="badge-downloaded">
-                    <i class="bi bi-check-circle-fill"></i> 已下载
+                    ✅ 已下载
                 </div>
                 <div class="card-body text-center">
                     <h6 class="card-title mb-1" th:text="${qr.schoolName}">学校名</h6>
                     <p class="text-muted small mb-2">
-                        <i class="bi bi-geo-alt"></i>
+                        📍
                         <span th:text="${qr.regionCity + ' · ' + qr.regionDistrict}">城市 · 区县</span>
                     </p>
                     <!-- 负责人 -->
@@ -55,7 +55,7 @@
                              th:alt="${qr.schoolName}" loading="lazy">
                     </div>
                     <div class="qr-preview-placeholder mb-3" th:unless="${qr.qrUrl != null}">
-                        <i class="bi bi-qr-code" style="font-size: 4rem; color: #ccc;"></i>
+                        <span style="font-size: 4rem;">📱</span>
                     </div>
                     <!-- 下载按钮 -->
                     <a th:href="@{'/download/' + ${qr.id} + '/download'}"
@@ -75,7 +75,7 @@
 
     <!-- 空状态 -->
     <div class="text-center py-5" th:unless="${qrCodes != null && !qrCodes.content.isEmpty()}">
-        <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+        <span style="font-size: 4rem;">📦</span>
         <p class="text-muted mt-3" th:if="${mode == 'mine'}">你还没有绑定任何活码，切换到「全部活码」浏览</p>
         <p class="text-muted mt-3" th:unless="${mode == 'mine'}">没有找到匹配的活码</p>
     </div>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='学校分类管理', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>📂 学校分类管理</h5>
+        <button type="button" class="btn btn-primary btn-sm"
+                data-bs-toggle="modal" data-bs-target="#createModal">+ 新建分类</button>
+    </div>
+
+    <!-- Flash message -->
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
+        ✅ <span th:text="${message}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show" role="alert">
+        ❌ <span th:text="${error}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- Category list -->
+    <div th:if="${categories.isEmpty()}" class="text-muted text-center py-4">
+        暂无分类，点击「新建分类」创建第一个
+    </div>
+    <table th:if="${!categories.isEmpty()}" class="table table-sm table-hover">
+        <thead class="table-light">
+            <tr>
+                <th style="width:60px">排序</th>
+                <th>名称</th>
+                <th>默认欢迎语</th>
+                <th>默认表单模板</th>
+                <th style="width:80px">学校数</th>
+                <th style="width:160px">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr th:each="c : ${categories}">
+                <td th:text="${c.sortOrder}"></td>
+                <td><strong th:text="${c.name}"></strong></td>
+                <td>
+                    <span th:if="${c.defaultWelcomeText}" class="text-truncate d-inline-block"
+                          style="max-width:200px" th:text="${c.defaultWelcomeText}"></span>
+                    <span th:unless="${c.defaultWelcomeText}" class="text-muted">—</span>
+                </td>
+                <td>
+                    <span th:if="${c.defaultFormTemplateId}" class="text-muted small"
+                          th:text="${templateNameMap.get(c.defaultFormTemplateId)}"></span>
+                    <span th:unless="${c.defaultFormTemplateId}" class="text-muted">—</span>
+                </td>
+                <td>
+                    <span class="badge bg-secondary"
+                          th:text="${schoolCounts.getOrDefault(c.id, 0)}"></span>
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-outline-secondary me-1 edit-btn"
+                            th:data-id="${c.id}" th:data-name="${c.name}"
+                            th:data-sort-order="${c.sortOrder}"
+                            th:data-welcome-text="${c.defaultWelcomeText}"
+                            th:data-form-template-id="${c.defaultFormTemplateId}"
+                            data-bs-toggle="modal" data-bs-target="#editModal">
+                        ✏️ 编辑
+                    </button>
+                    <form th:action="@{/admin/categories/{id}/delete(id=${c.id})}"
+                          method="post" class="d-inline delete-form"
+                          th:data-category-name="${c.name}"
+                          th:data-school-count="${schoolCounts.getOrDefault(c.id, 0)}">
+                        <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
+                        <button type="submit" class="btn btn-sm btn-outline-danger">🗑️ 删除</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ===== Create Modal ===== -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form th:action="@{/admin/categories/create}" method="post">
+                <div class="modal-header">
+                    <h5 class="modal-title">➕ 新建分类</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">分类名称 <span class="text-danger">*</span></label>
+                        <input type="text" name="name" class="form-control" required
+                               placeholder="如：小学、初中、高中">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">排序号</label>
+                        <input type="number" name="sortOrder" class="form-control"
+                               value="0" min="0">
+                        <div class="form-text">数字越小越靠前</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">默认欢迎语</label>
+                        <textarea name="defaultWelcomeText" class="form-control" rows="2"
+                                  placeholder="留空继承系统默认，支持 {{school_name}}、{{teacher_name}}"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">默认表单模板</label>
+                        <select name="defaultFormTemplateId" class="form-select">
+                            <option value="">无</option>
+                            <option th:each="t : ${formTemplates}"
+                                    th:value="${t.id}" th:text="${t.name}"></option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Edit Modal ===== -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editForm" method="post" th:action="@{/admin/categories/0/update}">
+                <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
+                <div class="modal-header">
+                    <h5 class="modal-title">✏️ 编辑分类</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">分类名称 <span class="text-danger">*</span></label>
+                        <input type="text" name="name" id="editName" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">排序号</label>
+                        <input type="number" name="sortOrder" id="editSortOrder" class="form-control"
+                               min="0">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">默认欢迎语</label>
+                        <textarea name="defaultWelcomeText" id="editWelcomeText" class="form-control"
+                                  rows="2" placeholder="留空继承系统默认"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">默认表单模板</label>
+                        <select name="defaultFormTemplateId" id="editFormTemplateId" class="form-select">
+                            <option value="">无</option>
+                            <option th:each="t : ${formTemplates}"
+                                    th:value="${t.id}" th:text="${t.name}"></option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Populate edit modal from button data attributes
+document.querySelectorAll('.edit-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        var id = this.getAttribute('data-id');
+        document.getElementById('editForm').action = '/admin/categories/' + id + '/update';
+        document.getElementById('editName').value = this.getAttribute('data-name') || '';
+        document.getElementById('editSortOrder').value = this.getAttribute('data-sort-order') || '0';
+        document.getElementById('editWelcomeText').value = this.getAttribute('data-welcome-text') || '';
+        var ftId = this.getAttribute('data-form-template-id');
+        document.getElementById('editFormTemplateId').value = ftId || '';
+    });
+});
+
+// Delete confirmation — reads data attributes to avoid Thymeleaf/JS escaping issues
+document.querySelectorAll('.delete-form').forEach(form => {
+    form.addEventListener('submit', function(e) {
+        var name = this.getAttribute('data-category-name');
+        var count = parseInt(this.getAttribute('data-school-count')) || 0;
+        if (name === '未分类') {
+            alert('默认分类不可删除');
+            e.preventDefault();
+            return;
+        }
+        var msg = '确定删除该分类？';
+        if (count > 0) {
+            msg += '\n该分类下有 ' + count + ' 所学校，删除后它们将失去分类默认配置。';
+        }
+        if (!confirm(msg)) e.preventDefault();
+    });
+});
+</script>
+
+</main>
+</html>

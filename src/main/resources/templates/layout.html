@@ -6,63 +6,120 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>">
     <!-- 页面标题，默认显示"XX书店 · 活码管理平台" -->
     <title th:text="${title} ?: 'XX书店 · 活码管理平台'">火马平台</title>
     <!-- Bootstrap 样式库 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
-          crossorigin="anonymous" rel="stylesheet">
+          rel="stylesheet">
     <!-- Bootstrap 图标库 -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
-          integrity="sha384-tViUnnbYAV00FlIhFb5jb4OUn5AYeA8KQnPFUE3eZ2nMxwdF8eNAdU9GnM4bGl9"
-          crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <!-- htmx — 支持 AJAX 局部刷新 -->
-    <script src="https://unpkg.com/htmx.org@1.9.12"
-            integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
-            crossorigin="anonymous"></script>
-    <!-- Chart.js — 数据看板图表 -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-            integrity="sha384-IMtUoGBJWWv8a1lP2cBkZ8YrJeMF4kSQUh7XC6Xu+kwNINLyVJkeGJk2Z0N8MeAF"
-            crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <!-- Chart.js — 数据看板图表（BootCDN 国内节点） -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
     <style>
-        body { background: #f5f7fa; }
+        body { background: #f5f7fa; padding-top: 72px; }
         .navbar-brand { font-weight: 700; }
         .card { border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
         .table th { font-weight: 600; color: #555; }
+
+        /* ===== 下拉子菜单 ===== */
+        .dropdown-submenu { position: relative; }
+        .dropdown-submenu > .dropdown-item {
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .dropdown-submenu > .dropdown-item::after {
+            content: "›"; font-size: 1.2em; margin-left: 0.5em; line-height: 1;
+        }
+        .dropdown-submenu > .dropdown-menu {
+            display: none;
+            position: absolute;
+            left: 100%; top: 0;
+            margin-top: -5px;  /* 对齐父级顶部 */
+            min-width: 10rem;
+        }
+        .dropdown-submenu.show > .dropdown-menu { display: block; }
+        /* 点击空白处关闭 */
+        .dropdown-submenu-backdrop { position: fixed; inset: 0; z-index: 999; display: none; }
     </style>
 </head>
 <body>
     <!-- 顶部导航栏 -->
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm fixed-top">
         <div class="container-fluid">
-            <a class="navbar-brand" href="/">📚 火马平台</a>
+            <a class="navbar-brand" href="/">火马平台</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
-                <!-- 导航菜单项 -->
+                <!-- 导航菜单 — 按业务域分4组下拉 -->
                 <div class="navbar-nav">
-                    <a class="nav-link" href="/qrcodes"><i class="bi bi-qr-code"></i> 活码管理</a>
-                    <a class="nav-link" href="/customers"><i class="bi bi-people"></i> 客户管理</a>
-                    <a class="nav-link" href="/agents"><i class="bi bi-person-badge"></i> 员工管理</a>
-                    <a class="nav-link" href="/dashboard"><i class="bi bi-speedometer2"></i> 数据看板</a>
-                    <a class="nav-link" href="/alerts"><i class="bi bi-exclamation-triangle"></i> 异常告警</a>
-                    <a class="nav-link" href="/admin/download-stats"><i class="bi bi-download"></i> 下载统计</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/schools"><i class="bi bi-building"></i> 学校管理</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/district-managers"><i class="bi bi-person-gear"></i> 区县负责人</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/school-entry"><i class="bi bi-qr-code"></i> 入口二维码</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/admin/system-config"><i class="bi bi-gear"></i> 系统配置</a>
-                    <a sec:authorize="hasRole('ADMIN')" class="nav-link" href="/users"><i class="bi bi-gear"></i> 系统设置</a>
+                    <!-- 活码运营 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">活码运营</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/qrcodes">活码管理</a>
+                            <a class="dropdown-item" href="/agents">员工管理</a>
+                            <a class="dropdown-item" href="/admin/groups">联盟管理</a>
+                            <a class="dropdown-item" href="/admin/school-entry">入口二维码</a>
+                        </div>
+                    </div>
+                    <!-- 客户运营 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">客户运营</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/customers">客户管理</a>
+                            <a class="dropdown-item" href="/admin/form-templates">表单模板</a>
+                        </div>
+                    </div>
+                    <!-- 数据分析 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">数据分析</a>
+                        <div class="dropdown-menu">
+                            <a class="dropdown-item" href="/dashboard">数据看板</a>
+                            <a class="dropdown-item" href="/alerts">异常告警</a>
+                            <a class="dropdown-item" href="/admin/download-stats">下载统计</a>
+                        </div>
+                    </div>
+                    <!-- 系统管理 -->
+                    <div class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">系统管理</a>
+                        <div class="dropdown-menu">
+                            <!-- 学校管理 二级菜单 -->
+                            <div class="dropdown-submenu">
+                                <a class="dropdown-item dropdown-submenu-toggle" href="#"
+                                   role="button" aria-expanded="false">学校管理</a>
+                                <div class="dropdown-menu">
+                                    <a class="dropdown-item" href="/admin/schools">学校列表</a>
+                                    <a class="dropdown-item" href="/admin/categories">分类管理</a>
+                                </div>
+                            </div>
+                            <a class="dropdown-item" href="/admin/district-managers">区县负责人</a>
+                            <!-- 系统设置 二级菜单 -->
+                            <div class="dropdown-submenu">
+                                <a class="dropdown-item dropdown-submenu-toggle" href="#"
+                                   role="button" aria-expanded="false">系统设置</a>
+                                <div class="dropdown-menu">
+                                    <a class="dropdown-item" href="/admin/system-config">系统配置</a>
+                                    <a class="dropdown-item" href="/users">用户管理</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <!-- 右侧用户区域：显示当前登录用户和退出按钮 -->
                 <div class="navbar-nav ms-auto" th:if="${currentUser != null}">
                     <span class="navbar-text me-3">
-                        <i class="bi bi-person-circle"></i>
                         <span th:text="${currentUser}">管理员</span>
                     </span>
                     <form th:action="@{/logout}" method="post" class="d-flex align-items-center">
                         <button type="submit" class="btn btn-outline-light btn-sm">
-                            <i class="bi bi-box-arrow-right"></i> 退出
+                            退出
                         </button>
                     </form>
                 </div>
@@ -71,18 +128,18 @@
     </nav>
 
     <!-- 主内容区 -->
-    <div class="container-fluid px-4">
+    <div class="container-fluid px-4 pt-3">
         <!-- 成功消息提示，model 中存在 message 时显示 -->
         <th:block th:if="${message}">
             <div class="alert alert-success alert-dismissible fade show" role="alert">
-                <i class="bi bi-check-circle"></i> <span th:text="${message}"></span>
+                ✅ <span th:text="${message}"></span>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         </th:block>
         <!-- 错误消息提示，model 中存在 error 时显示 -->
         <th:block th:if="${error}">
             <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <i class="bi bi-exclamation-circle"></i> <span th:text="${error}"></span>
+                ❌ <span th:text="${error}"></span>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         </th:block>
@@ -92,9 +149,65 @@
     </div>
 
     <!-- Bootstrap JS 组件（依赖 Popper） -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
-            crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- 下拉子菜单控制 -->
+    <script>
+    (function() {
+        // 给每个子菜单 toggle 绑定直接事件（阻止冒泡到 Bootstrap）
+        document.querySelectorAll('.dropdown-submenu-toggle').forEach(function(toggle) {
+            toggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var sub = toggle.closest('.dropdown-submenu');
+                var wasOpen = sub.classList.contains('show');
+                // 关闭所有子菜单
+                document.querySelectorAll('.dropdown-submenu.show').forEach(function(s) {
+                    s.classList.remove('show');
+                    var t = s.querySelector('.dropdown-submenu-toggle');
+                    if (t) t.setAttribute('aria-expanded', 'false');
+                });
+                // 切换当前
+                if (!wasOpen) {
+                    sub.classList.add('show');
+                    toggle.setAttribute('aria-expanded', 'true');
+                }
+            });
+        });
+
+        // 点击页面其他地方关闭子菜单（用 document 委托）
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.dropdown-submenu')) {
+                document.querySelectorAll('.dropdown-submenu.show').forEach(function(sub) {
+                    sub.classList.remove('show');
+                    var t = sub.querySelector('.dropdown-submenu-toggle');
+                    if (t) t.setAttribute('aria-expanded', 'false');
+                });
+            }
+        });
+
+        // 父级下拉关闭时也关闭子菜单
+        document.querySelectorAll('.nav-item.dropdown > .dropdown-toggle').forEach(function(parentToggle) {
+            var parentMenu = parentToggle.nextElementSibling;
+            if (!parentMenu) return;
+            var observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                    if (m.attributeName === 'class') {
+                        var shown = parentMenu.classList.contains('show');
+                        if (!shown) {
+                            parentMenu.querySelectorAll('.dropdown-submenu.show').forEach(function(sub) {
+                                sub.classList.remove('show');
+                                var t = sub.querySelector('.dropdown-submenu-toggle');
+                                if (t) t.setAttribute('aria-expanded', 'false');
+                            });
+                        }
+                    }
+                });
+            });
+            observer.observe(parentMenu, { attributes: true, attributeFilter: ['class'] });
+        });
+    })();
+    </script>
 
     <!-- 可搜索下拉组合框样式（区县负责人配置页） -->
     <style>

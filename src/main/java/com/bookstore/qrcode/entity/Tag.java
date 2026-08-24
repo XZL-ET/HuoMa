@@ -35,8 +35,8 @@ public class Tag {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** 标签名称，长度不超过 100 个字符。支持中文、英文及特殊字符。唯一约束防并发重复创建。 */
-    @Column(nullable = false, length = 100, unique = true)
+    /** 标签名称，长度不超过 100 个字符。支持中文、英文及特殊字符。与 groupKeyword 构成复合唯一约束。 */
+    @Column(nullable = false, length = 100)
     private String name;
 
     /** 标签来源类型：system（系统自动打标）、form（表单自动打标）、manual（手动创建/企微同步）。默认值为 manual。 */
@@ -52,6 +52,11 @@ public class Tag {
     /** 企业微信（企微）平台中的标签 ID，用于双向同步。为 null 或空串时表示未关联企微标签。 */
     @Column(name = "wecom_tag_id", length = 50)
     private String wecomTagId;
+
+    /** 企微标签组关键词，与 name 构成复合唯一约束。如"市州"、"县区"、"学校-兰州市"。默认空串兼容旧数据。 */
+    @Column(name = "group_keyword", nullable = false, length = 100)
+    @Builder.Default
+    private String groupKeyword = "";
 
     /** 记录创建时间，由 {@link #prePersist()} 自动填充，不可更新。 */
     @Column(name = "created_at", updatable = false)

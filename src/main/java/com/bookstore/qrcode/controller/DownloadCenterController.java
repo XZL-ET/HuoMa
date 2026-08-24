@@ -5,12 +5,14 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.*;
+import com.bookstore.qrcode.util.QrUrlAllowlist;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -53,6 +55,9 @@ public class DownloadCenterController {
     private final QrCodeService qrCodeService;
     private final EmployeeRepository employeeRepository;
 
+    @Value("${app.oauth.dev-login-enabled:false}")
+    private boolean devLoginEnabled;
+
     // ==================== OAuth 认证 ====================
 
     /**
@@ -62,7 +67,7 @@ public class DownloadCenterController {
     public String oauthEntry(HttpServletRequest request) {
         String redirectUri = request.getRequestURL().toString()
             .replace("/entry", "/callback");
-        String authUrl = wecomOAuthService.buildAuthUrl(redirectUri);
+        String authUrl = wecomOAuthService.buildAuthUrl(redirectUri, request.getSession());
         return "redirect:" + authUrl;
     }
 
@@ -71,8 +76,17 @@ public class DownloadCenterController {
      */
     @GetMapping("/oauth/callback")
     public String oauthCallback(@RequestParam String code,
+                                @RequestParam(required = false) String state,
                                 HttpSession session,
                                 Model model) {
+        // OAuth state 回验，防 CSRF
+        String expectedState = (String) session.getAttribute(WecomOAuthService.SESSION_OAUTH_STATE);
+        if (expectedState == null || !expectedState.equals(state)) {
+            log.warn("OAuth state 校验失败: expected={}, actual={}", expectedState, state);
+            model.addAttribute("error", "OAuth state 校验失败，请重新登录");
+            return "download/error";
+        }
+        session.removeAttribute(WecomOAuthService.SESSION_OAUTH_STATE);
         try {
             Employee employee = wecomOAuthService.authenticate(code, session);
             return "redirect:/download";
@@ -86,11 +100,15 @@ public class DownloadCenterController {
     /**
      * 开发环境快捷登录：直接指定 userid 写入 Session，跳过企微 OAuth。
      */
-    @Profile("dev")
+    @Profile("!prod")
     @GetMapping("/oauth/dev-login")
     public String devLogin(@RequestParam String userid,
                            HttpSession session,
                            Model model) {
+        if (!devLoginEnabled) {
+            model.addAttribute("error", "开发快捷登录未启用");
+            return "download/error";
+        }
         Employee employee = employeeRepository.findByUserid(userid).orElse(null);
         if (employee == null) {
             model.addAttribute("error", "员工不存在: " + userid);
@@ -137,7 +155,7 @@ public class DownloadCenterController {
         Page<QrCode> qrCodePage;
         if ("all".equals(mode)) {
             // 全部活码模式
-            qrCodePage = qrCodeRepo.search(keyword, null, null, QrCode.QrCodeStatus.active,
+            qrCodePage = qrCodeRepo.search(keyword, null, null, QrCode.QrCodeStatus.active, null,
                 PageRequest.of(page, size));
         } else {
             // 我的活码模式：只显示绑定的 — 一次性批量加载，避免 N+1
@@ -219,6 +237,11 @@ public class DownloadCenterController {
         QrCode qr = qrCodeService.getById(id);
         if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "该活码暂无二维码图片");
+            return;
+        }
+
+        if (!QrUrlAllowlist.isAllowedQrUrl(qr.getQrUrl())) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "非法的二维码图片地址");
             return;
         }
 

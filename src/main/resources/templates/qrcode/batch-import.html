@@ -7,19 +7,25 @@
         <h5 class="mb-3">批量导入活码</h5>
         <!-- Excel 格式说明 -->
         <div class="alert alert-info">
-            <strong>Excel 格式要求：</strong><br>
-            第1行：表头（学校名称 / 学校ID / 市 / 区 / 备注）<br>
-            第2行起：数据行，每行一个学校
+            <strong>Excel 格式要求（14列）：</strong><br>
+            第1行表头：学校名称* | 学校ID | 市* | 区* | 服务老师* | 学校人数 | 初始上码员工数 | 接待员 | 服务老师日上限 | 欢迎语 | 备注 | 场景 | 部门ID/名称 | 分类名称<br>
+            第2行起数据行，*为必填列，学校ID留空自动生成，初始上码员工数填了学校人数会自动计算，服务老师日上限默认200，场景不填默认为daily_push<br>
+            服务老师支持中文姓名（自动转userid）或直接填userid，接待员可选
         </div>
 
-        <!-- 上传表单：th:if="${taskId == null}" 表示当前没有正在执行的任务时才显示 -->
+        <!-- 模板下载 + 上传表单 -->
+        <div class="mb-3" th:if="${taskId == null}">
+            <a href="/qrcodes/batch-import/template" class="btn btn-outline-info mb-2"><i class="bi bi-download"></i> 下载模板</a>
+        </div>
+
         <form method="post" th:action="@{/qrcodes/batch-import}" enctype="multipart/form-data"
               th:if="${taskId == null}">
+            <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
             <div class="mb-3">
                 <label class="form-label">选择 Excel 文件 (.xlsx)</label>
                 <input type="file" name="file" class="form-control" accept=".xlsx" required>
             </div>
-            <button type="submit" class="btn btn-primary"><i class="bi bi-upload"></i> 开始导入</button>
+            <button type="submit" class="btn btn-primary">📤 开始导入</button>
             <a href="/qrcodes" class="btn btn-outline-secondary">返回列表</a>
         </form>
 
@@ -62,6 +68,22 @@
                     const fail = parseInt(data.fail) || 0;
                     const processed = parseInt(data.processed) || 0;
                     const status = data.status || 'processing';
+                    const error = data.error || '';
+                    const failDetails = data.failDetails || [];
+
+                    /* 显示错误状态 */
+                    if (status === 'error') {
+                        clearInterval(pollTimer);
+                        const bar = document.getElementById('progressBar');
+                        bar.style.width = '100%';
+                        bar.textContent = '失败';
+                        bar.className = 'progress-bar bg-danger';
+                        document.getElementById('progressStats').innerHTML =
+                            '<span class="text-danger">错误：' + escHtml(error) + '</span>';
+                        document.getElementById('doneActions').style.display = 'block';
+                        renderFailDetails(failDetails);
+                        return;
+                    }
 
                     /* 计算并更新进度条百分比 */
                     const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
@@ -72,18 +94,55 @@
                         (status === 'done' ? '' : ' progress-bar-animated') +
                         (status === 'done' ? (fail > 0 ? ' bg-warning' : ' bg-success') : '');
 
-                    /* 更新统计文本 */
-                    document.getElementById('progressStats').textContent =
-                        '总计 ' + total + ' | 已处理 ' + processed +
+                    /* 更新统计文本 + 阶段描述 */
+                    const msg = data.message || '';
+                    const skipped = parseInt(data.skipped) || 0;
+                    let statsHtml = '<div>总计 ' + total + ' | 已处理 ' + processed +
                         ' | 成功 ' + success + ' | 失败 ' + fail;
+                    if (skipped > 0) statsHtml += ' | <span class="text-muted">跳过 ' + skipped + '</span>';
+                    statsHtml += '</div>';
+                    if (msg) statsHtml += '<div class="text-muted small mt-1">' + escHtml(msg) + '</div>';
+                    document.getElementById('progressStats').innerHTML = statsHtml;
 
-                    /* 导入完成时停止轮询，显示完成后的操作按钮 */
-                    if (status === 'done') {
+                    /* 导入完成时停止轮询，显示完成后的操作按钮和失败详情 */
+                    if (status === 'done' || status === 'interrupted') {
                         clearInterval(pollTimer);
                         document.getElementById('doneActions').style.display = 'block';
+                        if (status === 'interrupted') {
+                            document.getElementById('progressStats').textContent += ' ⚠ 导入被中断';
+                            bar.className = 'progress-bar bg-warning';
+                        }
+                        renderFailDetails(failDetails);
                     }
                 })
                 .catch(() => clearInterval(pollTimer));
+        }
+
+        /* 渲染失败详情列表 */
+        function renderFailDetails(details) {
+            const container = document.getElementById('failDetails');
+            if (!details || details.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            let html = '<div class="alert alert-warning mt-3"><strong>⚠ 失败详情（' + details.length + '条）：</strong>';
+            html += '<ul class="mb-0 mt-1" style="max-height:300px;overflow-y:auto;">';
+            for (const d of details) {
+                // 格式: 行号|学校名称|失败原因
+                const parts = d.split('|');
+                const row = escHtml(parts[0] || '?');
+                const name = escHtml(parts[1] || '?');
+                const reason = escHtml(parts.slice(2).join('|') || '未知错误');
+                html += '<li class="small"><b>第' + row + '行</b> ' + name + '：' + reason + '</li>';
+            }
+            html += '</ul></div>';
+            container.innerHTML = html;
+        }
+
+        function escHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
         }
 
         /* 每 500ms 轮询一次进度 */
