@@ -223,10 +223,10 @@ public class QrCodeController {
 
         // ---- 5. 客服数统计 ----
         Map<Long, String> agentCountMap = new HashMap<>();
+        long poolStandby = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby); // 全局计数只查一次
         for (QrCode qr : qrCodes.getContent()) {
             long activeCount = qrAgentRepo.findByQrCodeIdAndStatus(
                 qr.getId(), QrAgent.AgentStatus.active).size();
-            long poolStandby = poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby);
             agentCountMap.put(qr.getId(), activeCount + "/" + poolStandby);
         }
 
