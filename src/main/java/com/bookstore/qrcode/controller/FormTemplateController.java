@@ -12,6 +12,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.UUID;
 
 @Slf4j
@@ -25,6 +26,8 @@ public class FormTemplateController {
     @Value("${upload.card-pic-dir:./data/uploads/card-pics}")
     private String cardPicDir;
 
+    private static final Set<String> ALLOWED_EXT = Set.of("png", "jpg", "jpeg", "gif", "webp");
+
     /** 保存上传的卡片图片，返回访问路径 */
     private String saveCardPic(MultipartFile file) {
         if (file == null || file.isEmpty()) return null;
@@ -35,6 +38,10 @@ public class FormTemplateController {
             String ext = "";
             if (origName != null && origName.contains(".")) {
                 ext = origName.substring(origName.lastIndexOf('.'));
+            }
+            String extKey = ext.length() > 1 ? ext.substring(1).toLowerCase() : "";
+            if (!ALLOWED_EXT.contains(extKey)) {
+                throw new RuntimeException("不支持的图片格式: " + ext);
             }
             String filename = UUID.randomUUID().toString().substring(0, 8) + ext;
             Path target = dir.resolve(filename);

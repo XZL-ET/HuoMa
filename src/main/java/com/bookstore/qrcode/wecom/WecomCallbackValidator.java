@@ -84,7 +84,7 @@ public class WecomCallbackValidator {
         try {
             // SHA-1 签名校验：token + timestamp + nonce + echostr 字典序拼接
             String signature = sha1(config.getCallbackToken(), timestamp, nonce, echostr);
-            if (!signature.equals(msgSignature)) {
+            if (!constantTimeEquals(signature, msgSignature)) {
                 log.error("回调URL验证失败: 签名不匹配");
                 throw new RuntimeException("签名验证失败");
             }
@@ -140,7 +140,7 @@ public class WecomCallbackValidator {
             log.info("回调签名调试: timestamp={}, nonce={}, encrypt前20字符={}",
                 timestamp, nonce, encrypt != null ? encrypt.substring(0, Math.min(20, encrypt.length())) : "null");
             String signature = sha1(callbackToken, timestamp, nonce, encrypt);
-            if (!signature.equals(msgSignature)) {
+            if (!constantTimeEquals(signature, msgSignature)) {
                 log.error("回调消息签名校验失败, 期望={}, 实际={}", msgSignature, signature);
                 throw new RuntimeException("回调签名校验失败");
             }
@@ -198,6 +198,12 @@ public class WecomCallbackValidator {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    /** 恒定时间字符串比较，防时序侧信道 */
+    private boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(
+            a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

@@ -34,14 +34,18 @@ public class WecomOAuthService {
     public static final String SESSION_EMPLOYEE_USERID = "employeeUserid";
     public static final String SESSION_EMPLOYEE_NAME = "employeeName";
 
+    /** Session 属性名：OAuth state（防 CSRF） */
+    public static final String SESSION_OAUTH_STATE = "oauth_state";
+
     /**
      * 构造授权 URL 并返回。
      *
      * @param redirectUri 回调完整 URL
      * @return 企微 OAuth 授权 URL
      */
-    public String buildAuthUrl(String redirectUri) {
+    public String buildAuthUrl(String redirectUri, HttpSession session) {
         String state = UUID.randomUUID().toString().substring(0, 8);
+        session.setAttribute(SESSION_OAUTH_STATE, state);
         return wecomApiClient.buildOAuthUrl(redirectUri, state);
     }
 

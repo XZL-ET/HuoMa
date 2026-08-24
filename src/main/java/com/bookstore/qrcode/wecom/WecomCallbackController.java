@@ -171,7 +171,7 @@ public class WecomCallbackController {
             // 步骤2: 校验签名 + AES 解密 → 得到明文 XML
             // ================================================================
             String decryptedXml = validator.decryptMessage(msgSignature, timestamp, nonce, body);
-            log.info("解密后的XML: {}", decryptedXml);
+            log.debug("解密后的XML: {}", decryptedXml);
 
             // ================================================================
             // 步骤3: 快速提取事件关键字段

@@ -307,9 +307,13 @@ public class CustomerController {
     /** CSV 字段转义：双引号、换行符、回车符 */
     private static String csvEscape(String s) {
         if (s == null) return "";
-        return s.replace("\"", "\"\"")
+        String v = s.replace("\"", "\"\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r");
+        if (v.startsWith("=") || v.startsWith("+") || v.startsWith("-") || v.startsWith("@")) {
+            v = "'" + v;
+        }
+        return v;
     }
 
     /**

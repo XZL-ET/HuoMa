@@ -67,7 +67,7 @@ public class DownloadCenterController {
     public String oauthEntry(HttpServletRequest request) {
         String redirectUri = request.getRequestURL().toString()
             .replace("/entry", "/callback");
-        String authUrl = wecomOAuthService.buildAuthUrl(redirectUri);
+        String authUrl = wecomOAuthService.buildAuthUrl(redirectUri, request.getSession());
         return "redirect:" + authUrl;
     }
 
@@ -76,8 +76,17 @@ public class DownloadCenterController {
      */
     @GetMapping("/oauth/callback")
     public String oauthCallback(@RequestParam String code,
+                                @RequestParam(required = false) String state,
                                 HttpSession session,
                                 Model model) {
+        // OAuth state 回验，防 CSRF
+        String expectedState = (String) session.getAttribute(WecomOAuthService.SESSION_OAUTH_STATE);
+        if (expectedState == null || !expectedState.equals(state)) {
+            log.warn("OAuth state 校验失败: expected={}, actual={}", expectedState, state);
+            model.addAttribute("error", "OAuth state 校验失败，请重新登录");
+            return "download/error";
+        }
+        session.removeAttribute(WecomOAuthService.SESSION_OAUTH_STATE);
         try {
             Employee employee = wecomOAuthService.authenticate(code, session);
             return "redirect:/download";

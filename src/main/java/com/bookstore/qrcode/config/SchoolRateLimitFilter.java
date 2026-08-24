@@ -78,7 +78,9 @@ public class SchoolRateLimitFilter implements Filter {
             return;
         }
 
-        String ip = request.getRemoteAddr();
+        String ip = request.getHeader("X-Forwarded-For");
+        if (ip == null || ip.isBlank()) ip = request.getRemoteAddr();
+        else ip = ip.split(",")[0].trim();
         boolean exceeded;
 
         try {

@@ -424,7 +424,7 @@ public class QrCodeController {
         if (needApiCall) {
             try {
                 wecomTagResp = wecomApiClient.getCorpTagList();
-                log.info("企微标签 API 原始响应: {}", wecomTagResp.toString());
+                log.debug("企微标签 API 原始响应: {}", wecomTagResp.toString());
                 // 同步到本地 DB
                 tagService.syncTagsFromWecom(wecomTagResp);
                 // 直接从企微标签组提取下拉选项（先提取数据，成功后再更新时间戳）
