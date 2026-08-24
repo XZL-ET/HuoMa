@@ -84,15 +84,13 @@ public class TransferWorker {
                     Map<String, String> fields = new LinkedHashMap<>();
                     fields.put("event", eventJson);
 
-                    // 检查 _retry_at 时间戳（锁竞争延迟重试 / 指数退避），未到时间则跳过
+                    // 检查 _retry_at 时间戳（锁竞争延迟重试 / 指数退避），未到时间则不 ACK、留在 PEL
+                    // 由 MessageGuardService.recoverOrphanedPending 在 idle>30s 后重投
                     String retryAt = (String) value.get("_retry_at");
                     if (retryAt != null) {
                         try {
                             if (Long.parseLong(retryAt) > Instant.now().getEpochSecond()) {
-                                redisTemplate.opsForStream().acknowledge(
-                                    RedisConfig.TRANSFER_STREAM_KEY,
-                                    RedisConfig.TRANSFER_CONSUMER_GROUP, msgId);
-                                continue;
+                                continue; // 不 ACK，留 PEL 等待延迟重投
                             }
                         } catch (NumberFormatException ignored) {}
                     }

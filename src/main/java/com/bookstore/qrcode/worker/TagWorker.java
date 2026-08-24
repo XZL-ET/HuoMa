@@ -132,16 +132,13 @@ public class TagWorker {
                     }
                     Map<String, String> fields = Map.of("event", eventJson);
 
-                    // 检查 _retry_at 时间戳（指数退避），未到时间则跳过
+                    // 检查 _retry_at 时间戳（指数退避），未到时间则不 ACK、留在 PEL
+                    // 由 MessageGuardService.recoverOrphanedPending 在 idle>30s 后重投
                     String retryAt = (String) value.get("_retry_at");
                     if (retryAt != null) {
                         try {
                             if (Long.parseLong(retryAt) > java.time.Instant.now().getEpochSecond()) {
-                                // 尚未到重试时间，放回并 ACK（会在 PEL 回收时重新处理）
-                                redisTemplate.opsForStream().acknowledge(
-                                    RedisConfig.TAG_STREAM_KEY,
-                                    RedisConfig.TAG_CONSUMER_GROUP, msgId);
-                                continue;
+                                continue; // 不 ACK，留 PEL 等待延迟重投
                             }
                         } catch (NumberFormatException ignored) {}
                     }
