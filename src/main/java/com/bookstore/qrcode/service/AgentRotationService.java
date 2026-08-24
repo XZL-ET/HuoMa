@@ -39,6 +39,11 @@ public class AgentRotationService {
     private final WechatSyncHealingService healingService;
     private final AlertService alertService;
 
+    // 自注入代理：解决 incrementDailyCount → checkAndRotate 的 @Transactional 自调用失效问题
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private AgentRotationService self;
+
     // ==================== 日计数 + 轮换入口 ====================
 
     /**
@@ -90,7 +95,7 @@ public class AgentRotationService {
         }
 
         // 递增后立即检查全局阈值
-        checkAndRotate(qr.getId(), userId, (int) totalNew);
+        self.checkAndRotate(qr.getId(), userId, (int) totalNew);
     }
 
     // ==================== 日限检查 + 轮换 ====================
