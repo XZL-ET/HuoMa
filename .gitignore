@@ -19,3 +19,6 @@ BOOT-INF/
 *.env
 !*.env.template
 !*.env.example
+
+# superpowers 插件工作区（含本地运行时状态，勿提交）
+.superpowers/
