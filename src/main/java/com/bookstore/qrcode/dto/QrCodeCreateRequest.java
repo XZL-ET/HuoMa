@@ -2,6 +2,8 @@ package com.bookstore.qrcode.dto;
 
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.entity.Scene;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 /**
@@ -23,6 +25,7 @@ public class QrCodeCreateRequest {
     // ==================== 学校基本信息 ====================
 
     /** 学校名称，用于标识活码所属学校 */
+    @NotBlank(message = "学校名称不能为空")
     private String schoolName;
 
     /** 学校唯一标识（如教育局编号或系统内部 ID），用于后续数据关联 */
@@ -35,6 +38,7 @@ public class QrCodeCreateRequest {
     private String regionDistrict;
 
     /** 学校学生人数，用于自动计算所需接待员数量（每100学生配1人，最少1人，最多100人） */
+    @Min(value = 0, message = "学生人数不能为负")
     private Integer studentCount;
 
     /** 活码创建场景：daily_push-日常推送, parent_meeting-家长会，默认 daily_push */

@@ -43,6 +43,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.beans.factory.annotation.Value;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -668,7 +669,7 @@ public class QrCodeController {
      * @return 重定向到活码列表页 {@code "redirect:/qrcodes"}
      */
     @PostMapping("/create")
-    public Object create(@ModelAttribute QrCodeCreateRequest req,
+    public Object create(@ModelAttribute @Valid QrCodeCreateRequest req,
                           RedirectAttributes redirect,
                           HttpServletRequest request) {
         boolean isAjax = "XMLHttpRequest".equals(request.getHeader("X-Requested-With"));
