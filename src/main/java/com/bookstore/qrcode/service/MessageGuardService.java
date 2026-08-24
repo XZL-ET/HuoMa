@@ -193,15 +193,19 @@ public class MessageGuardService {
     /**
      * 扫描指定 Stream 的 PEL，回收 idle 超时的孤消息。
      *
-     * <p>正常流程中 Worker 会在处理成功后 ACK，PEL 应接近空。
-     * PEL 有消息意味着：Worker 在 READ 和 ACK 之间崩溃（JVM crash / kill -9）。</p>
+     * <p>PEL 里有消息意味着两种情况：</p>
+     * <ol>
+     *   <li>Worker 在 READ 和 ACK 之间崩溃（JVM crash / kill -9）——真孤儿；</li>
+     *   <li>带 {@code _retry_at} 的退避重试消息未到期，Worker 故意不 ACK 留在 PEL。</li>
+     * </ol>
      *
      * <p><b>回收逻辑（对每条 idle > idleMs 的消息）：</b>
      * <ol>
-     *   <li>INCR 重试计数器</li>
-     *   <li>retryCount ≤ 3 → XCLAIM 获取消息体 → XADD 回原 Stream 尾部
-     *       → ACK 原消息。正常 Worker 会重新消费到。</li>
-     *   <li>retryCount > 3 → XRANGE 读消息体 → 移入 DLQ → ACK 原消息</li>
+     *   <li>读 {@code _retry_at}：若仍在未来，跳过（留 PEL 等待到期），不 INCR、不重投；</li>
+     *   <li>到期或缺失 → INCR 重试计数器；</li>
+     *   <li>retryCount ≤ 3 → XADD 回原 Stream 尾部（不再设置 {@code _retry_at}，让
+     *       Worker 立即处理）→ ACK 原消息；</li>
+     *   <li>retryCount > 3 → 移入 DLQ → ACK 原消息。</li>
      * </ol>
      *
      * <p><b>为什么 XCLAIM 后必须 re-enqueue：</b>
@@ -262,7 +266,19 @@ public class MessageGuardService {
                     fields.remove("_dlq_retry_count");
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
-                    fields.remove("_retry_at");
+
+                    // 尊重退避窗口：若 _retry_at 仍在未来，说明这是正常退避重试而非崩溃孤儿，
+                    // 跳过（留 PEL）待到期后由下一轮回收重投，避免 INCR 计数器导致消息被误判 DLQ
+                    String retryAt = fields.remove("_retry_at");
+                    if (retryAt != null) {
+                        try {
+                            if (Long.parseLong(retryAt) > Instant.now().getEpochSecond()) {
+                                log.debug("PEL 回收跳过（退避未到期）: stream={}, msgId={}, retryAt={}",
+                                    streamKey, msgId, retryAt);
+                                continue;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
 
                     // 基于消息内容生成逻辑 ID，与 markRetryOrDead 共享计数器
                     String logicalId = computeLogicalId(fields);
@@ -273,13 +289,12 @@ public class MessageGuardService {
                     redisTemplate.expire(retryKey, Duration.ofSeconds(RETRY_TTL_SECONDS));
 
                     if (retryCount <= MAX_RETRIES) {
-                        // 指数退避重试
-                        long delaySec = Math.min((long) Math.pow(2, retryCount), MAX_BACKOFF_SECONDS);
-                        fields.put("_retry_at", String.valueOf(Instant.now().getEpochSecond() + delaySec));
+                        // 退避已到期或本就无 _retry_at（真崩溃孤儿），直接重投（不再设置 _retry_at），
+                        // 让 Worker 下次读到后立即处理，避免“退避→回收→再退避”的死循环
                         redisTemplate.opsForStream().add(streamKey, fields);
                         ackSafely(streamKey, consumerGroup, msgId);
-                        log.warn("PEL 回收: XCLAIM + re-enqueue ({}s 退避), stream={}, msgId={}, idle={}ms, retry={}",
-                            delaySec, streamKey, msgId, idle, retryCount);
+                        log.warn("PEL 回收: XCLAIM + re-enqueue, stream={}, msgId={}, idle={}ms, retry={}",
+                            streamKey, msgId, idle, retryCount);
                         recovered++;
                     } else {
                         moveToDlq(streamKey, msgId, fields, retryCount,

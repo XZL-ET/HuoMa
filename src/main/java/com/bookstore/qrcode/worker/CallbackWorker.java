@@ -149,7 +149,7 @@ public class CallbackWorker {
                     Map<String, String> fields = Map.of("event", eventJson);
 
                     // 检查 _retry_at 时间戳（指数退避），未到时间则不 ACK、留在 PEL
-                    // 由 MessageGuardService.recoverOrphanedPending 在 idle>30s 后重投
+                    // 由 MessageGuardService.recoverOrphanedPending 在 idle>120s 后重投
                     String retryAt = (String) value.get("_retry_at");
                     if (retryAt != null) {
                         try {

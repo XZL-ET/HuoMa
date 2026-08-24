@@ -345,8 +345,9 @@ public class PatrolWorker {
      * 五个 Stream 的 Consumer Group。</p>
      *
      * <p><b>与正常重试的关系：</b>正常 Worker 处理失败时会走
-     * {@link MessageGuardService#markRetryOrDead} 主动重试或移入 DLQ，
-     * 不会让消息留在 PEL。PEL 里有消息一定是意外崩溃。</p>
+     * {@link MessageGuardService#markRetryOrDead} 主动重试或移入 DLQ；
+     * 未到期的退避重试消息（带 {@code _retry_at}）则由 Worker 故意留在 PEL 等待重投。
+     * 因此 PEL 里有消息可能是意外崩溃，也可能是等待退避到期的重试消息。</p>
      */
     @Scheduled(cron = "30 */1 * * * *")
     public void recoverOrphanedPending() {
