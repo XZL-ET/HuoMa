@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.*;
+import com.bookstore.qrcode.util.QrUrlAllowlist;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -227,6 +228,11 @@ public class DownloadCenterController {
         QrCode qr = qrCodeService.getById(id);
         if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "该活码暂无二维码图片");
+            return;
+        }
+
+        if (!QrUrlAllowlist.isAllowedQrUrl(qr.getQrUrl())) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "非法的二维码图片地址");
             return;
         }
 

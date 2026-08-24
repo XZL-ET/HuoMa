@@ -28,6 +28,7 @@ import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
 import com.bookstore.qrcode.service.TagService;
+import com.bookstore.qrcode.util.QrUrlAllowlist;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
@@ -1854,6 +1855,12 @@ public class QrCodeController {
             response.sendError(HttpServletResponse.SC_NOT_FOUND, "该活码暂无二维码图片");
             return;
         }
+
+        if (!QrUrlAllowlist.isAllowedQrUrl(qr.getQrUrl())) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "非法的二维码图片地址");
+            return;
+        }
+
         // 服务端代理抓取企微原图，设置 attachment 强制浏览器下载
         URL url = new URL(qr.getQrUrl());
         URLConnection conn = url.openConnection();
@@ -1900,6 +1907,11 @@ public class QrCodeController {
                     QrCode qr = qrCodeService.getById(id);
                     if (qr.getQrUrl() == null || qr.getQrUrl().isBlank()) {
                         log.warn("批量下载跳过（无原图URL）: id={}", id);
+                        continue;
+                    }
+
+                    if (!QrUrlAllowlist.isAllowedQrUrl(qr.getQrUrl())) {
+                        log.warn("批量下载跳过（非白名单URL）: id={}", id);
                         continue;
                     }
 

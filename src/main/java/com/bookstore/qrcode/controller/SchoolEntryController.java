@@ -8,6 +8,7 @@ import com.bookstore.qrcode.entity.School;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.SchoolAccessLogService;
 import com.bookstore.qrcode.service.SchoolService;
+import com.bookstore.qrcode.util.QrUrlAllowlist;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
@@ -164,6 +165,11 @@ public class SchoolEntryController {
             log.info("Download logged: qrCodeId={}, schoolId={}", qr.getId(), schoolId);
         } else {
             log.warn("QrCode not found for schoolId={}", schoolId);
+        }
+
+        if (!QrUrlAllowlist.isAllowedQrUrl(detail.getQrUrl())) {
+            log.warn("Download refused: 非法 QR URL, school={}", schoolId);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
         // 代理下载企微活码图片，并在底部添加学校名称
