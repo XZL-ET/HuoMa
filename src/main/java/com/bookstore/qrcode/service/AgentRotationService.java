@@ -20,8 +20,9 @@ import java.util.*;
 /**
  * 代理轮换服务 — 轮换/扩容逻辑，从原 AgentBindService 拆分。
  *
- * <p>消除 @Lazy @Autowired self 自注入：@Async 方法通过注入
- * WechatSyncHealingService 间接调用企微同步。</p>
+ * <p>@Async 方法通过注入 WechatSyncHealingService 间接调用企微同步
+ * （消除 @Async 的 self 自注入）；事务入口通过 @Lazy self 代理调用
+ * （修复 incrementDailyCount 自调用绕过 @Transactional）。</p>
  */
 @Slf4j
 @Service
