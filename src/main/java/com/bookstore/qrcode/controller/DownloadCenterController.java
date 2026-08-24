@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -53,6 +54,9 @@ public class DownloadCenterController {
     private final QrCodeService qrCodeService;
     private final EmployeeRepository employeeRepository;
 
+    @Value("${app.oauth.dev-login-enabled:false}")
+    private boolean devLoginEnabled;
+
     // ==================== OAuth 认证 ====================
 
     /**
@@ -86,11 +90,15 @@ public class DownloadCenterController {
     /**
      * 开发环境快捷登录：直接指定 userid 写入 Session，跳过企微 OAuth。
      */
-    @Profile("dev")
+    @Profile("!prod")
     @GetMapping("/oauth/dev-login")
     public String devLogin(@RequestParam String userid,
                            HttpSession session,
                            Model model) {
+        if (!devLoginEnabled) {
+            model.addAttribute("error", "开发快捷登录未启用");
+            return "download/error";
+        }
         Employee employee = employeeRepository.findByUserid(userid).orElse(null);
         if (employee == null) {
             model.addAttribute("error", "员工不存在: " + userid);

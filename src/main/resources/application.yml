@@ -1,7 +1,7 @@
 # 应用配置
 spring:
   profiles:
-    active: dev
+    active: ${SPRING_PROFILES_ACTIVE:dev}
   main:
     allow-circular-references: true   # 允许自注入（DailyResetWorker/PatrolWorker 通过 self 代理引用调用 @Transactional）
   thymeleaf:
@@ -53,6 +53,8 @@ app:
   admin:
     default-username: ${ADMIN_DEFAULT_USERNAME:admin}
     default-password: ${ADMIN_DEFAULT_PASSWORD:}   # 生产必设，空则跳过自建
+  oauth:
+    dev-login-enabled: ${OAUTH_DEV_LOGIN_ENABLED:false}
   font:
     resource-path: ${FONT_RESOURCE_PATH:fonts/NotoSansSC-Regular.ttf}  # classpath 中文字体（空字符串禁用）
   qr-image:
