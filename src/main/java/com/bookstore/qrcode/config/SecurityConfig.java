@@ -84,6 +84,10 @@ public class SecurityConfig {
                         .requestMatchers("/admin/school-entry/**").hasRole("ADMIN")
                         // 登录页面及静态资源
                         .requestMatchers("/login", "/css/**", "/js/**").permitAll()
+                        // 运维端点：仅 admin（health 详情含 Stream/PEL 深度，dlq 重放为破坏性操作）
+                        .requestMatchers("/api/health/**").hasRole("ADMIN")
+                        // 自动在职继承全局开关：仅 admin（破坏性，影响全局继承行为）
+                        .requestMatchers("/api/inheritance/**").hasRole("ADMIN")
                         // 其余所有请求需要登录
                         .anyRequest().authenticated()
                 )
