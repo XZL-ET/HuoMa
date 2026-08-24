@@ -149,7 +149,8 @@ public class QrCode {
     /** 创建方式：manual-手动创建, batch_import-批量导入 */
     @Column(name = "create_mode", nullable = false, length = 20)
     @Enumerated(EnumType.STRING)
-    private CreateMode createMode;
+    @Builder.Default
+    private CreateMode createMode = CreateMode.manual;
 
     /** 备注说明 */
     @Column(length = 500)

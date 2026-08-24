@@ -1112,8 +1112,11 @@ public class QrCodeController {
         example.createCell(12).setCellValue("");
         example.createCell(13).setCellValue("初中");
         for (int i = 0; i < headers.length; i++) sheet.autoSizeColumn(i);
-        wb.write(response.getOutputStream());
-        wb.close();
+        try {
+            wb.write(response.getOutputStream());
+        } finally {
+            wb.close();
+        }
     }
 
     /**

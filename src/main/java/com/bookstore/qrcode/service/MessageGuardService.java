@@ -87,7 +87,7 @@ public class MessageGuardService {
             byte[] digest = md.digest(seed.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < 16; i++) {  // 128-bit, collision prob ≈ 1/2^64
-                sb.append(String.format("%02x", digest[i]));
+                sb.append(String.format("%02x", digest[i] & 0xff));
             }
             return sb.toString();
         } catch (Exception e) {
