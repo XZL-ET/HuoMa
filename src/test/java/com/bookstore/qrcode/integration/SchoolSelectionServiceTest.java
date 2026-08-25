@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.integration;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.SchoolSelectionService;
@@ -139,7 +141,7 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
     }
 
     @Test
-    void 发起县区转接_写入转接流() {
+    void 发起县区转接_写入转接流() throws Exception {
         buildSchoolQr("s1", "白银一小", "svc_a");
         boolean published = service.initiateCountyTransfer(
             123L, "rec_county", "wm-external", "s1", "白银一小");
@@ -148,6 +150,15 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
         var records = redisTemplate.opsForStream()
             .range(RedisConfig.TRANSFER_STREAM_KEY,
                 org.springframework.data.domain.Range.unbounded());
-        assertThat(records).isNotEmpty();
+        assertThat(records).hasSize(1);
+
+        String eventJson = (String) records.get(0).getValue().get("event");
+        assertThat(eventJson).isNotBlank();
+        JsonNode event = new ObjectMapper().readTree(eventJson);
+        assertThat(event.get("customer_id").asText()).isEqualTo("123");
+        assertThat(event.get("from_userid").asText()).isEqualTo("rec_county");
+        assertThat(event.get("to_userid").asText()).isEqualTo("svc_a");
+        assertThat(event.get("external_userid").asText()).isEqualTo("wm-external");
+        assertThat(event.get("state").asText()).isEqualTo("s1");
     }
 }
