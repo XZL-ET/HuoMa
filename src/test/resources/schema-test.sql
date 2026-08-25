@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
         CHECK (status IN ('pending_confirm','confirmed','rejected','timeout','api_failed','retry_limit')),
     retry_count INT NOT NULL DEFAULT 0,
     poll_count INT NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMP,
     fail_reason VARCHAR(500),
     form_filled_at_transfer BOOLEAN,
     note_sent BOOLEAN NOT NULL DEFAULT FALSE,

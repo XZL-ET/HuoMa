@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='转接记录', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>🔄 转接记录</h5>
+    </div>
+
+    <!-- 时间范围筛选 -->
+    <form class="row g-2 align-items-end mb-3" method="get" th:action="@{/transfers}">
+        <div class="col-auto">
+            <div class="btn-group" role="group" aria-label="时间预设">
+                <input type="radio" class="btn-check" name="range" id="r-today" value="today"
+                       th:checked="${range == 'today'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-today">今天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-7d" value="7d"
+                       th:checked="${range == '7d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-7d">近7天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-30d" value="30d"
+                       th:checked="${range == '30d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-30d">近30天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-custom" value="custom"
+                       th:checked="${range == 'custom'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-custom">自定义</label>
+            </div>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">起</label>
+            <input type="date" class="form-control form-control-sm" name="start" th:value="${start}">
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">止</label>
+            <input type="date" class="form-control form-control-sm" name="end" th:value="${end}">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary btn-sm">查询</button>
+        </div>
+    </form>
+
+    <!-- 汇总表 -->
+    <table class="table table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>学校名</th>
+                <th class="text-end">新增客户数</th>
+                <th class="text-end">转接成功</th>
+                <th class="text-end">转接失败</th>
+                <th class="text-end">进行中</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr th:each="item : ${items}">
+                <td th:text="${item.schoolName}"></td>
+                <td class="text-end" th:text="${item.newCount}"></td>
+                <td class="text-end">
+                    <span class="badge bg-success" th:text="${item.successCount}"></span>
+                </td>
+                <td class="text-end">
+                    <span class="badge bg-danger" th:text="${item.failCount}"></span>
+                </td>
+                <td class="text-end">
+                    <span class="badge bg-info" th:text="${item.pendingCount}"></span>
+                </td>
+                <td class="text-end">
+                    <a class="btn btn-sm btn-outline-primary"
+                       th:href="@{/transfers/{id}(id=${item.qrCodeId}, range=${range}, start=${start}, end=${end})}">
+                        查看明细
+                    </a>
+                </td>
+            </tr>
+            <tr th:if="${#lists.isEmpty(items)}">
+                <td colspan="6" class="text-center text-muted py-4">该时间段内暂无新增客户</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+</main>
+</html>

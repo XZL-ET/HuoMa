@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS customer_transfer (
     status ENUM('pending_confirm','confirmed','rejected','timeout','api_failed','retry_limit') NOT NULL DEFAULT 'pending_confirm',  -- pending_confirm 待确认 / confirmed 已确认 / rejected 已拒绝 / timeout 超时 / api_failed 接口失败 / retry_limit 达重试上限
     retry_count INT NOT NULL DEFAULT 0 COMMENT 'API重试次数 (api_failed状态)',
     poll_count INT NOT NULL DEFAULT 0 COMMENT '轮询追踪次数 (pending_confirm状态)',
+    next_retry_at DATETIME COMMENT '下次重试时间 (api_failed退避重试)',
     fail_reason VARCHAR(500) COMMENT '失败原因',
     form_filled_at_transfer BOOLEAN COMMENT '继承时是否已填写收集表单',
     note_sent BOOLEAN NOT NULL DEFAULT FALSE COMMENT '继承备注是否已写入',
@@ -289,6 +290,14 @@ PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 历史数据迁移：将现有 retry_count 值复制到 poll_count（仅影响 pending_confirm 行）
 UPDATE customer_transfer SET poll_count = retry_count WHERE status = 'pending_confirm' AND poll_count = 0;
+
+-- customer_transfer 新增字段（V15 迁移：api_failed 退避重试时间）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND COLUMN_NAME = 'next_retry_at') = 0,
+    'ALTER TABLE customer_transfer ADD COLUMN next_retry_at DATETIME COMMENT ''下次重试时间 (api_failed退避重试)'' AFTER poll_count',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- daily_report：日报表
 -- 日报表

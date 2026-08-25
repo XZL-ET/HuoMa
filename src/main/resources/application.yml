@@ -96,6 +96,8 @@ app:
     day-start-hour: 8          # 白天窗口起始（含），此时间到 day-end 内的新客户立即转移
     day-end-hour: 21           # 白天窗口结束（不含），此时间到次日 day-start 的新客户延迟到 08:30 批量转移
     cron: 0 30 8 * * *         # 夜间批量转移的 cron 表达式
+  reconciliation:
+    cron: 0 0 8 * * *          # 每日转接对账推送的 cron 表达式（默认早 8 点）
 
 ---
 spring:
@@ -126,6 +128,7 @@ wecom:
   corp-secret: ${WECOM_CORP_SECRET:}                                      # 企业微信应用 Secret（不设默认值）
   callback-token: ${WECOM_CALLBACK_TOKEN:dev-token}                       # 回调 URL 验证 Token
   callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY:}                   # 回调消息 AES 密钥（不设默认值）
+  agent-id: ${WECOM_AGENT_ID:}                                            # 应用 AgentId（用于应用消息推送，如转接对账）
 
 ---
 spring:
@@ -161,6 +164,7 @@ wecom:
   corp-secret: ${WECOM_CORP_SECRET}                      # 企业微信应用 Secret（环境变量注入）
   callback-token: ${WECOM_CALLBACK_TOKEN}                # 回调 URL 验证 Token（环境变量注入）
   callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY}   # 回调消息 AES 密钥（环境变量注入）
+  agent-id: ${WECOM_AGENT_ID:}                           # 应用 AgentId（环境变量注入，未配置则应用消息推送不可用）
 
 ---
 spring:

@@ -65,6 +65,23 @@ public class TransferService {
     /** 冷却期：最近 N 天内已有 timeout/rejected/retry_limit 的客户不再重转 */
     private static final Duration TRANSFER_COOLDOWN = Duration.ofDays(7);
 
+    /** API 失败重试上限：达到后标记 retry_limit（区别于 poll_count 的轮询上限） */
+    private static final int MAX_RETRIES = 5;
+
+    /**
+     * 退避间隔表：retryCount（已失败重试次数）→ 下次重试等待时长。
+     * <p>首次失败 30 分钟，之后 2h → 8h → 24h（封顶），
+     * 避免固定 30 分钟周期内无脑重试冲击企微 API。</p>
+     */
+    private static Duration retryBackoff(int retryCount) {
+        return switch (retryCount) {
+            case 0 -> Duration.ofMinutes(30);
+            case 1 -> Duration.ofHours(2);
+            case 2 -> Duration.ofHours(8);
+            default -> Duration.ofHours(24); // 3、4 → 24h 封顶
+        };
+    }
+
     /** 收集表单链接，可通过 app.transfer.form-url 配置，空则使用占位符 */
     @Value("${app.transfer.form-url:}")
     private String formUrl;
@@ -127,7 +144,7 @@ public class TransferService {
         // ---- 去重：避免同一客户重复发起继承 ----
         // 只排除进行中/已完成的转移（pending_confirm / confirmed），
         // timeout / rejected / api_failed / retry_limit 的客户允许重新转移。
-        // api_failed 的重试由 retryFailedTransfers() 独立控制（最多 3 次），不经过 Stream。
+        // api_failed 的重试由 retryFailedTransfers() 独立控制（最多 5 次，指数退避），不经过 Stream。
         List<CustomerTransfer.TransferStatus> dedupStatuses = List.of(
             CustomerTransfer.TransferStatus.pending_confirm,
             CustomerTransfer.TransferStatus.confirmed);
@@ -203,6 +220,7 @@ public class TransferService {
                 .transferTime(LocalDateTime.now())
                 .status(CustomerTransfer.TransferStatus.api_failed)
                 .failReason("目标服务老师异常: " + anomaly)
+                .nextRetryAt(LocalDateTime.now().plus(retryBackoff(0)))
                 .build());
             return;
         }
@@ -290,6 +308,8 @@ public class TransferService {
                     .transferTime(LocalDateTime.now())
                     .status(failStatus)
                     .failReason(failReason)
+                    .nextRetryAt(failStatus == CustomerTransfer.TransferStatus.api_failed
+                        ? LocalDateTime.now().plus(retryBackoff(0)) : null)
                     .build());
 
                 if (terminal) {
@@ -310,6 +330,7 @@ public class TransferService {
                     .transferTime(LocalDateTime.now())
                     .status(CustomerTransfer.TransferStatus.api_failed)
                     .failReason(e.getMessage())
+                    .nextRetryAt(LocalDateTime.now().plus(retryBackoff(0)))
                     .build());
             }
         } finally {
@@ -565,9 +586,12 @@ public class TransferService {
     /**
      * 重试 API 调用失败的转移记录（由定时任务周期性调用）。
      * <p>
-     * 查询所有状态为 {@link CustomerTransfer.TransferStatus#api_failed} 且重试次数 < 3 的记录，
-     * 重新调用企微 {@code transfer_customer} API。成功后状态变为 pending_confirm，
-     * 失败则累加重试次数，达到上限（≥3）标记为 retry_limit。
+     * 查询所有状态为 {@link CustomerTransfer.TransferStatus#api_failed} 且重试次数 < 5、
+     * 退避已到期（{@code nextRetryAt} 为空或已过）的记录，重新调用企微
+     * {@code transfer_customer} API。成功后状态变为 pending_confirm 并清空退避时间；
+     * 失败则累加重试次数并推进退避时间（30min → 2h → 8h → 24h 封顶），
+     * 达到上限（≥5）标记为 retry_limit。终端错误码（84061/84096/84097/84100/84073/45035）
+     * 不参与退避，直接标记 retry_limit。
      * </p>
      * <p>
      * 注意：此方法不标注 @Transactional，每条失败记录独立事务提交，避免长事务超时。
@@ -576,8 +600,8 @@ public class TransferService {
      * </p>
      */
     public void retryFailedTransfers() {
-        List<CustomerTransfer> failed = transferRepo
-            .findByStatusAndRetryCountLessThan(CustomerTransfer.TransferStatus.api_failed, 3);
+        List<CustomerTransfer> failed = transferRepo.findDueForRetry(
+            CustomerTransfer.TransferStatus.api_failed, MAX_RETRIES, LocalDateTime.now());
 
         for (CustomerTransfer t : failed) {
             // ---- Redis 分布式锁：防止同客户两条 api_failed 记录并发重试 ----
@@ -638,6 +662,7 @@ public class TransferService {
                     fillTransferSuccessMsg(resolveRetryTransferSuccessMsg(t), t.getToUserid()));
                 t.setStatus(CustomerTransfer.TransferStatus.pending_confirm);
                 t.setRetryCount(t.getRetryCount() + 1);
+                t.setNextRetryAt(null); // 转回 pending_confirm，清空退避时间
                 transferRepo.save(t);
                 log.info("api_failed 重试成功: transferId={}", t.getId());
             } catch (WecomApiException e) {
@@ -669,17 +694,23 @@ public class TransferService {
                 } else {
                     t.setRetryCount(t.getRetryCount() + 1);
                     t.setFailReason("重试失败: errcode=" + e.getErrcode() + " " + e.getErrmsg());
-                    if (t.getRetryCount() >= 3) {
+                    if (t.getRetryCount() >= MAX_RETRIES) {
                         t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
+                        t.setNextRetryAt(null);
+                    } else {
+                        t.setNextRetryAt(LocalDateTime.now().plus(retryBackoff(t.getRetryCount())));
                     }
                     transferRepo.save(t);
                     log.error("api_failed 重试失败: transferId={}, errcode={}", t.getId(), e.getErrcode());
                 }
             } catch (Exception e) {
                 t.setRetryCount(t.getRetryCount() + 1);
-                if (t.getRetryCount() >= 3) {
+                if (t.getRetryCount() >= MAX_RETRIES) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
                     t.setFailReason("重试耗尽: " + e.getMessage());
+                    t.setNextRetryAt(null);
+                } else {
+                    t.setNextRetryAt(LocalDateTime.now().plus(retryBackoff(t.getRetryCount())));
                 }
                 transferRepo.save(t);
                 log.error("api_failed 重试异常: transferId={}", t.getId(), e);
@@ -693,10 +724,10 @@ public class TransferService {
             log.info("api_failed 重试完成: 处理 {} 条", failed.size());
         }
 
-        // 安全网：retryCount ≥3 但仍为 api_failed 的记录（极端崩溃场景兜底）
+        // 安全网：retryCount ≥5 但仍为 api_failed 的记录（极端崩溃场景兜底）
         List<CustomerTransfer> exhaustedRetries = transferRepo
             .findByStatusAndRetryCountGreaterThanEqual(
-                CustomerTransfer.TransferStatus.api_failed, 3);
+                CustomerTransfer.TransferStatus.api_failed, MAX_RETRIES);
         for (CustomerTransfer t : exhaustedRetries) {
             t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
             if (t.getFailReason() == null || t.getFailReason().isBlank()) {
@@ -719,7 +750,7 @@ public class TransferService {
      * retry_limit 的三大来源（按常见程度排序）：
      * <ol>
      *   <li>{@code initiate()} 终端错误 — errcode=40205 企微票据过期 / 84097 客户数上限</li>
-     *   <li>{@code retryFailedTransfers()} 重试耗尽 — API 调用经 3 次重试仍失败</li>
+     *   <li>{@code retryFailedTransfers()} 重试耗尽 — API 调用经 5 次退避重试仍失败</li>
      *   <li>{@code trackResults()} 轮询耗尽 — 仅未满 24h 但 pollCount 已 ≥48 的极端情况</li>
      * </ol>
      * 注意：24h 超时的 pending_confirm 记录在 trackResults 中已直接标记 confirmed，

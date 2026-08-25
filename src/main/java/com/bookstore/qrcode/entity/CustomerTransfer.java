@@ -86,7 +86,8 @@ public class CustomerTransfer {
     /**
      * API 调用重试次数（仅用于 api_failed 状态的重试）。
      * <p>
-     * 重新调用 transfer_customer 的次数，上限 3 次，达到后标记为 retry_limit。
+     * 重新调用 transfer_customer 的次数，上限 5 次，达到后标记为 retry_limit。
+     * 配合 {@link #nextRetryAt} 做指数退避（30min → 2h → 8h → 24h 封顶）。
      * </p>
      */
     @Column(name = "retry_count")
@@ -104,6 +105,17 @@ public class CustomerTransfer {
     @Column(name = "poll_count")
     @Builder.Default
     private Integer pollCount = 0;
+
+    /**
+     * 下次重试时间（仅用于 api_failed 状态的退避重试）。
+     * <p>
+     * 指数退避：首次失败后 30 分钟，之后 2h、8h、24h（封顶）。
+     * {@code retryFailedTransfers} 仅扫描 nextRetryAt 已到期（或为 null）的记录，
+     * 避免固定 30 分钟周期内无脑重试造成 API 冲击。成功转回 pending_confirm 后清空。
+     * </p>
+     */
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
 
     /**
      * 最后一次失败的原因。

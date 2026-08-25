@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.TransferService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomTransientException;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -427,29 +428,134 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("retryFailedTransfers：retryCount >= 3 → 不会被查询处理")
+    @DisplayName("retryFailedTransfers：retryCount >= 5 → 不再重试，安全网标记 retry_limit")
     void shouldNotRetryBeyondLimit() {
-        // given: retryCount = 3（已达上限），状态仍为 api_failed
-        transferRepo.save(CustomerTransfer.builder()
+        // given: retryCount = 5（已达上限），状态仍为 api_failed，退避已到期
+        CustomerTransfer exhausted = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.api_failed)
+            .retryCount(5).pollCount(0)
+            .nextRetryAt(LocalDateTime.now().minusMinutes(1))
+            .failReason("已达重试上限").build());
+
+        // when
+        transferService.retryFailedTransfers();
+
+        // then: 未被重试（transferCustomer 未调用），安全网将其标记 retry_limit
+        verify(wecomApi, never()).transferCustomer(anyString(), anyString(), anyString(), any());
+        CustomerTransfer updated = transferRepo.findById(exhausted.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.retry_limit);
+    }
+
+    @Test
+    @DisplayName("retryFailedTransfers：非终端错误 → 递增 retryCount + 设置 nextRetryAt(8h 退避) + 保持 api_failed")
+    void shouldBackoffWithIncreasingDelayOnTransientFailure() {
+        // given: api_failed 且 retryCount=1，退避已到期
+        CustomerTransfer failed = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.api_failed)
+            .retryCount(1).pollCount(0)
+            .nextRetryAt(LocalDateTime.now().minusMinutes(1))
+            .failReason("errcode=-1 网络超时").build());
+
+        // mock transferCustomer 抛瞬态异常
+        doThrow(new WecomTransientException(-1, "网络超时", null))
+            .when(wecomApi).transferCustomer(anyString(), anyString(), anyString(), any());
+
+        // when
+        transferService.retryFailedTransfers();
+
+        // then: retryCount 1→2，nextRetryAt 推进到 8h 后，状态保持 api_failed（未达上限）
+        CustomerTransfer updated = transferRepo.findById(failed.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.api_failed);
+        assertThat(updated.getRetryCount()).isEqualTo(2);
+        assertThat(updated.getNextRetryAt())
+            .isAfter(LocalDateTime.now().plusHours(7))
+            .isBefore(LocalDateTime.now().plusHours(9));
+    }
+
+    @Test
+    @DisplayName("retryFailedTransfers：nextRetryAt 未到期 → 跳过，不调用 API")
+    void shouldSkipRetryWhenBackoffNotDue() {
+        // given: api_failed 且 nextRetryAt 在未来（退避未到期）
+        CustomerTransfer pending = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.api_failed)
+            .retryCount(1).pollCount(0)
+            .nextRetryAt(LocalDateTime.now().plusHours(2))
+            .failReason("errcode=-1 网络超时").build());
+
+        // when
+        transferService.retryFailedTransfers();
+
+        // then: 未调用 transferCustomer，retryCount 保持 1，状态不变
+        verify(wecomApi, never()).transferCustomer(anyString(), anyString(), anyString(), any());
+        CustomerTransfer updated = transferRepo.findById(pending.getId()).orElseThrow();
+        assertThat(updated.getRetryCount()).isEqualTo(1);
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.api_failed);
+    }
+
+    @Test
+    @DisplayName("retryFailedTransfers：退避封顶 24h（retryCount 3→4）")
+    void shouldCapBackoffAt24Hours() {
+        // given: api_failed 且 retryCount=3
+        CustomerTransfer failed = transferRepo.save(CustomerTransfer.builder()
             .customerId(testCustomer.getId())
             .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
             .qrCodeId(testQr.getId())
             .transferTime(LocalDateTime.now())
             .status(CustomerTransfer.TransferStatus.api_failed)
             .retryCount(3).pollCount(0)
-            .failReason("已达重试上限").build());
+            .nextRetryAt(LocalDateTime.now().minusMinutes(1))
+            .failReason("errcode=-1 网络超时").build());
 
-        long countBefore = transferRepo.count();
+        doThrow(new WecomTransientException(-1, "网络超时", null))
+            .when(wecomApi).transferCustomer(anyString(), anyString(), anyString(), any());
 
         // when
         transferService.retryFailedTransfers();
 
-        // then: 不会多出 pending_confirm（retryCount >= 3 的记录被 findByStatusAndRetryCountLessThan 排除）
-        long pendingCount = transferRepo
-            .findByStatus(CustomerTransfer.TransferStatus.pending_confirm).size();
-        assertThat(pendingCount).isEqualTo(0);
-        // 原有记录未被删除或修改
-        assertThat(transferRepo.count()).isEqualTo(countBefore);
+        // then: retryCount 3→4，nextRetryAt 封顶为 24h
+        CustomerTransfer updated = transferRepo.findById(failed.getId()).orElseThrow();
+        assertThat(updated.getRetryCount()).isEqualTo(4);
+        assertThat(updated.getNextRetryAt())
+            .isAfter(LocalDateTime.now().plusHours(23))
+            .isBefore(LocalDateTime.now().plusHours(25));
+    }
+
+    @Test
+    @DisplayName("retryFailedTransfers：第 5 次失败 → retry_limit")
+    void shouldReachRetryLimitOnFifthFailure() {
+        // given: api_failed 且 retryCount=4（即将达到上限 5）
+        CustomerTransfer failed = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.api_failed)
+            .retryCount(4).pollCount(0)
+            .nextRetryAt(LocalDateTime.now().minusMinutes(1))
+            .failReason("errcode=-1 网络超时").build());
+
+        doThrow(new WecomTransientException(-1, "网络超时", null))
+            .when(wecomApi).transferCustomer(anyString(), anyString(), anyString(), any());
+
+        // when
+        transferService.retryFailedTransfers();
+
+        // then: retryCount 4→5，达到上限 → retry_limit
+        CustomerTransfer updated = transferRepo.findById(failed.getId()).orElseThrow();
+        assertThat(updated.getRetryCount()).isEqualTo(5);
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.retry_limit);
     }
 
     // ================================================================
