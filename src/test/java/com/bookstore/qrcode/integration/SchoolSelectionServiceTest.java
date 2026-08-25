@@ -1,13 +1,16 @@
 package com.bookstore.qrcode.integration;
 
+import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.SchoolSelectionService;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -20,6 +23,10 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
     @Autowired private SchoolCategoryRepository categoryRepo;
     @Autowired private QrCodeRepository qrCodeRepo;
     @Autowired private QrCodeGroupRepository groupRepo;
+    @Autowired private QrAgentRepository qrAgentRepo;
+    @Autowired private AgentRepository agentRepo;
+    @Autowired private EmployeeRepository employeeRepo;
+    @Autowired private StringRedisTemplate redisTemplate;
 
     private QrCode countyQr;
 
@@ -27,6 +34,8 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
     void setUp() {
         schoolRepo.deleteAll();
         groupRepo.deleteAll();
+        qrAgentRepo.deleteAll();
+        agentRepo.deleteAll();
         qrCodeRepo.deleteAll();
 
         countyQr = new QrCode();
@@ -76,5 +85,69 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
             .containsExactly("一年级", "二年级", "三年级", "四年级", "五年级", "六年级");
         assertThat(service.listGrades("幼儿园")).containsExactly("小班", "中班", "大班");
         assertThat(service.listGrades("不存在的学段")).isEmpty();
+    }
+
+    private QrCode buildSchoolQr(String schoolId, String schoolName, String serviceUserid) {
+        QrCode qr = new QrCode();
+        qr.setSchoolName(schoolName);
+        qr.setSchoolId(schoolId);
+        qr.setRegionCity("白银市");
+        qr.setRegionDistrict("白银区");
+        qr.setStatus(QrCode.QrCodeStatus.active);
+        qr.setScene(Scene.daily_push);
+        qr.setCreateMode(QrCode.CreateMode.manual);
+        qr = qrCodeRepo.save(qr);
+        if (serviceUserid != null) {
+            agentRepo.save(Agent.builder().userid(serviceUserid).name(serviceUserid)
+                .role(Agent.AgentRole.service).dailyTotalCap(500).build());
+            qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId())
+                .agentUserid(serviceUserid).role(QrAgent.AgentRole.service)
+                .status(QrAgent.AgentStatus.active).build());
+        }
+        return qr;
+    }
+
+    @Test
+    void 解析链_一校一码() {
+        buildSchoolQr("s1", "白银一小", "svc_a");
+        Optional<SchoolSelectionService.TransferTarget> target =
+            service.resolveTransferTarget("s1", "白银一小");
+        assertThat(target).isPresent();
+        assertThat(target.get().state()).isEqualTo("s1");
+        assertThat(target.get().toUserid()).isEqualTo("svc_a");
+    }
+
+    @Test
+    void 解析链_学区码兜底() {
+        // 学校无独立活码，但包在学区码 schoolList 里
+        QrCode allianceQr = buildSchoolQr("alliance:白银区", "白银区联盟", "svc_district");
+        groupRepo.save(QrCodeGroup.builder().name("白银联盟").regionCity("白银市")
+            .regionDistrict("白银区").groupType("alliance")
+            .qrCodeId(allianceQr.getId())
+            .schoolList("白银一小\n白银二小").build());
+
+        Optional<SchoolSelectionService.TransferTarget> target =
+            service.resolveTransferTarget("s9", "白银二小");
+        assertThat(target).isPresent();
+        assertThat(target.get().state()).isEqualTo("alliance:白银区");
+        assertThat(target.get().toUserid()).isEqualTo("svc_district");
+    }
+
+    @Test
+    void 解析链_既无独立活码也不在学区码() {
+        assertThat(service.resolveTransferTarget("s99", "幽灵学校")).isEmpty();
+    }
+
+    @Test
+    void 发起县区转接_写入转接流() {
+        buildSchoolQr("s1", "白银一小", "svc_a");
+        boolean published = service.initiateCountyTransfer(
+            123L, "rec_county", "wm-external", "s1", "白银一小");
+        assertThat(published).isTrue();
+
+        var records = redisTemplate.opsForStream()
+            .range(RedisConfig.TRANSFER_STREAM_KEY,
+                org.springframework.data.domain.Range.unbounded());
+        assertThat(records).isNotEmpty();
     }
 }

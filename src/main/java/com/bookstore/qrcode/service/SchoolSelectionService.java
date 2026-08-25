@@ -76,4 +76,81 @@ public class SchoolSelectionService {
 
     public record SchoolOption(String schoolId, String schoolName) {}
     public record TransferTarget(String state, String toUserid) {}
+
+    /**
+     * 学校 → 服务老师解析链（见 spec §3.2）：
+     * ① 学校有独立活码 → 取该活码的 service 老师；② 否则包在学区码 → 取学区码活码的 service 老师。
+     *
+     * @return state=目标活码 schoolId（传给 TransferService.initiate 反查活码），toUserid=目标服务老师
+     */
+    public Optional<TransferTarget> resolveTransferTarget(String schoolId, String schoolName) {
+        // ① 一校一码：学校自己有活码
+        QrCode schoolQr = qrCodeRepo.findBySchoolId(schoolId).orElse(null);
+        if (schoolQr != null) {
+            String toUserid = findServiceAgent(schoolQr);
+            if (toUserid != null) return Optional.of(new TransferTarget(schoolId, toUserid));
+            log.warn("学校 {} 有活码但未配置服务老师，无法转接", schoolName);
+            return Optional.empty();
+        }
+        // ② 学区码兜底：学校名在联盟 schoolList 里
+        if (schoolName == null) return Optional.empty();
+        for (QrCodeGroup g : groupRepo.findByGroupType("alliance")) {
+            if (!containsSchool(g, schoolName)) continue;
+            if (g.getQrCodeId() == null) continue;
+            QrCode allianceQr = qrCodeRepo.findById(g.getQrCodeId()).orElse(null);
+            if (allianceQr == null) continue;
+            String toUserid = findServiceAgent(allianceQr);
+            if (toUserid != null) return Optional.of(new TransferTarget(allianceQr.getSchoolId(), toUserid));
+        }
+        log.warn("学校 {} 既无独立活码也不在学区码，留在县区接待员", schoolName);
+        return Optional.empty();
+    }
+
+    /**
+     * 表单提交后发起县区码在职继承：解析目标老师并写入 TRANSFER_STREAM_KEY 异步转接。
+     *
+     * @return true=已发布转接事件，false=未解析到目标（留在县区接待员）
+     */
+    public boolean initiateCountyTransfer(Long customerId, String fromUserid,
+                                           String externalUserid, String schoolId, String schoolName) {
+        Optional<TransferTarget> target = resolveTransferTarget(schoolId, schoolName);
+        if (target.isEmpty()) return false;
+        TransferTarget t = target.get();
+        try {
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("customer_id", String.valueOf(customerId));
+            event.put("from_userid", fromUserid);
+            event.put("to_userid", t.toUserid());
+            event.put("external_userid", externalUserid);
+            event.put("state", t.state());
+            redisTemplate.opsForStream().add(
+                RedisConfig.TRANSFER_STREAM_KEY,
+                Map.of("event", objectMapper.writeValueAsString(event)));
+            log.info("县区码转接事件已发布: customer={}, to={}, state={}",
+                customerId, t.toUserid(), t.state());
+            return true;
+        } catch (Exception e) {
+            log.error("发布县区码转接事件失败: customer={}", customerId, e);
+            return false;
+        }
+    }
+
+    /** 取活码第一个未移除的 service/dual 老师 */
+    private String findServiceAgent(QrCode qr) {
+        return qrAgentRepo.findByQrCodeId(qr.getId()).stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                      || a.getRole() == QrAgent.AgentRole.dual)
+            .map(QrAgent::getAgentUserid)
+            .findFirst().orElse(null);
+    }
+
+    /** schoolList 一行一个学校名，精确匹配整行 */
+    private boolean containsSchool(QrCodeGroup g, String schoolName) {
+        if (g.getSchoolList() == null) return false;
+        for (String line : g.getSchoolList().split("\\n")) {
+            if (line.strip().equals(schoolName)) return true;
+        }
+        return false;
+    }
 }
