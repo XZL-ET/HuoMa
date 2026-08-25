@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.repository.SchoolCategoryRepository;
 import com.bookstore.qrcode.repository.SchoolRepository;
+import com.bookstore.qrcode.service.SchoolSelectionService;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class FormController {
     private final SchoolRepository schoolRepo;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final SchoolSelectionService schoolSelectionService;
 
     @GetMapping("/form/{qrCodeId}")
     public String fillForm(@PathVariable Long qrCodeId,
@@ -73,6 +75,12 @@ public class FormController {
                 model.addAttribute("schoolList", schools);
                 model.addAttribute("groupName", group.getName());
             }
+        }
+
+        // 县区码：三级级联选校（学段→学校→年级班级）
+        if (schoolSelectionService.isCountyCode(qr)) {
+            model.addAttribute("countyCode", true);
+            model.addAttribute("district", qr.getRegionDistrict());
         }
 
         return "form/fill";
@@ -151,6 +159,25 @@ public class FormController {
             log.error("表单提交失败", e);
             result.put("success", false); result.put("error", e.getMessage());
         }
+        return result;
+    }
+
+    @GetMapping("/api/form/schools")
+    @ResponseBody
+    public Map<String, Object> schools(@RequestParam Long qrCodeId,
+                                       @RequestParam(required = false) String category) {
+        List<SchoolSelectionService.SchoolOption> schools =
+            schoolSelectionService.listSchools(qrCodeId, category);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("schools", schools);
+        return result;
+    }
+
+    @GetMapping("/api/form/grades")
+    @ResponseBody
+    public Map<String, Object> grades(@RequestParam String category) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("grades", schoolSelectionService.listGrades(category));
         return result;
     }
 
