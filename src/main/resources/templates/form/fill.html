@@ -145,6 +145,7 @@
         document.querySelectorAll('#stageButtons .stage-btn').forEach(function(btn) {
             btn.addEventListener('click', function() {
                 selectedStage = btn.dataset.stage;
+                selectedSchool = null;
                 document.querySelectorAll('#stageButtons .stage-btn').forEach(function(b){ b.classList.remove('active'); });
                 btn.classList.add('active');
                 loadSchools(selectedStage);
