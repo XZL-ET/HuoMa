@@ -71,8 +71,8 @@ public class InheritanceJob {
     @org.springframework.beans.factory.annotation.Value("${app.inheritance.day-end-hour:21}")
     private int dayEndHour;
 
-    /** 上次缺服务老师告警时间戳 — 限流：每小时最多告警一次 */
-    private long lastNoServiceAlertTime = 0L;
+    /** 上次缺服务老师告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
+    private static volatile long lastNoServiceAlertTime = 0L;
 
     /** Redis key: 自动在职继承开关，值 "true"=开启 "false"=暂停，key 不存在视为开启 */
     public static final String AUTO_ENABLED_KEY = "inheritance:auto:enabled";

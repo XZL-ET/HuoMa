@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
 import com.bookstore.qrcode.wecom.*;
@@ -71,6 +72,7 @@ public class OutboundMsgWorker {
     private final FormTemplateRepository formTemplateRepo;
     private final SchoolCategoryRepository categoryRepo;
     private final SchoolRepository schoolRepo;
+    private final AlertService alertService;
 
     private volatile boolean running = true;
     @Value("${app.worker.outbound.threads:4}")
@@ -333,6 +335,11 @@ public class OutboundMsgWorker {
                 // 若 sendWelcomeMsg 已在上一次尝试中成功发出欢迎语，客户已收到，此处只是重复重试
                 log.error("sendMessage 失败，欢迎语可能未发出: to={}, sender={}",
                     externalUserId, userid, e);
+                // 48002 = 无客户联系权限：企微侧权限被回收但本地通讯录字段感知不到，兜底告警人工核验
+                if (e instanceof WecomPermanentException
+                        && ((WecomPermanentException) e).getErrcode() == 48002) {
+                    alertNoPermission(userid);
+                }
             }
         }
 
@@ -360,6 +367,28 @@ public class OutboundMsgWorker {
         if (formTemplateId == null) {
             log.info("未发送表单卡片: to={}, qrCodeId={}, 原因: formTemplateId=null (活码未绑定且分组未设置默认表单模板)",
                 externalUserId, qrCodeId);
+        }
+    }
+
+    /**
+     * 员工无客户联系权限（48002）时兜底告警，Redis 限流每员工 24h 一次。
+     * 48002 不体现在企微通讯录字段里，本地员工同步感知不到，只能靠发消息失败时兜底。
+     */
+    private void alertNoPermission(String userid) {
+        String key = "alert:48002:" + userid;
+        try {
+            Boolean first = redisTemplate.opsForValue()
+                .setIfAbsent(key, "1", Duration.ofHours(24));
+            if (Boolean.TRUE.equals(first)) {
+                alertService.createAlert(userid, "wechat_unavailable",
+                    AgentAlert.AlertSeverity.medium,
+                    String.format("员工 %s 无客户联系权限(errcode=48002)，欢迎语发送被企微拒绝，请在企微后台恢复其客户联系权限",
+                        userid),
+                    AgentAlert.AutoAction.none, null);
+                log.warn("48002 无权限兜底告警已创建: userid={}", userid);
+            }
+        } catch (Exception ex) {
+            log.warn("48002 告警限流失效: userid={}, err={}", userid, ex.getMessage());
         }
     }
 

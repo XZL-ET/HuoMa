@@ -62,11 +62,11 @@ public class PatrolWorker {
     @Autowired
     private PatrolWorker self;
 
-    /** 上次 DLQ 自动重放时间戳 — 限流：每 30 分钟最多重放一次 */
-    private long lastDlqReplayTime = 0L;
+    /** 上次 DLQ 自动重放时间戳 — 限流：每 30 分钟最多重放一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
+    private static volatile long lastDlqReplayTime = 0L;
 
-    /** 上次异常员工告警时间戳 — 限流：每小时最多告警一次 */
-    private long lastAnomalyAlertTime = 0L;
+    /** 上次异常员工告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
+    private static volatile long lastAnomalyAlertTime = 0L;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
