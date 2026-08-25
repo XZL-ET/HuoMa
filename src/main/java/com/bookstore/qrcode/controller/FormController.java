@@ -152,6 +152,19 @@ public class FormController {
                 redisTemplate.opsForStream().add(
                     RedisConfig.TAG_STREAM_KEY,
                     Map.of("event", objectMapper.writeValueAsString(tagEvent)));
+
+                // 县区码：表单提交后触发在职继承转接（异步，走 TRANSFER_STREAM_KEY）
+                if (schoolSelectionService.isCountyCode(qr)) {
+                    String schoolId = body.get("schoolId") != null
+                        ? body.get("schoolId").toString() : null;
+                    if (schoolId != null && !schoolId.isBlank()) {
+                        schoolSelectionService.initiateCountyTransfer(
+                            customerId,
+                            customer.getCurrentAgent(),
+                            customer.getExternalUserid(),
+                            schoolId, schoolName);
+                    }
+                }
             }
 
             result.put("success", true);
