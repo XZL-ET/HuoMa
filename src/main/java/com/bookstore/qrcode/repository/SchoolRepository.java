@@ -71,6 +71,17 @@ public interface SchoolRepository extends JpaRepository<School, Long> {
     /** 按分类查未删除学校 */
     List<School> findByCategoryIdAndDeletedFalse(Long categoryId);
 
+    /** 按区县查未删除学校（县区码：无学段筛选） */
+    List<School> findByRegionDistrictAndDeletedFalseOrderBySchoolName(String regionDistrict);
+
+    /** 按区县 + 分类查未删除学校（县区码：按学段收窄） */
+    List<School> findByRegionDistrictAndCategoryIdAndDeletedFalseOrderBySchoolName(
+            String regionDistrict, Long categoryId);
+
+    /** 按区县查未分类（categoryId 为 null）的未删除学校 */
+    List<School> findByRegionDistrictAndCategoryIdIsNullAndDeletedFalseOrderBySchoolName(
+            String regionDistrict);
+
     /** 批量更新学校分类 */
     @Modifying
     @Transactional

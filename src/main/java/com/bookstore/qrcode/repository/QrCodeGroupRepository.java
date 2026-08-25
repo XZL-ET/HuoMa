@@ -20,6 +20,9 @@ public interface QrCodeGroupRepository extends JpaRepository<QrCodeGroup, Long> 
     /** 根据关联活码 ID 反查联盟（理论上一个活码只属一个联盟，用 List 防御脏数据） */
     List<QrCodeGroup> findByQrCodeId(Long qrCodeId);
 
+    /** 按组类型查分组（县区码解析链：查 alliance 联盟，schoolList 在 Java 侧精确匹配） */
+    List<QrCodeGroup> findByGroupType(String groupType);
+
     /** 关键词搜索分页（联盟名称/市州/区县模糊匹配） */
     @Query("SELECT g FROM QrCodeGroup g WHERE " +
            "(:keyword IS NULL OR g.name LIKE %:keyword% OR g.regionCity LIKE %:keyword% " +
