@@ -229,9 +229,11 @@ public class QrCodeService {
 
         // 根据场景自动计算所需接待员总数
         // 公式：ceil(学生人数 × 场景扫码率 / 员工日限)，最少 1 人，最多 100 人
-        // 用户手动指定 initialAgentCount 时跳过自动计算
+        // 用户手动指定 initialAgentCount 时跳过自动计算；县区码接待员为中转角色，跳过自动估算
         if (req.getStudentCount() != null && req.getStudentCount() > 0
-            && req.getInitialAgentCount() == null) {
+            && req.getInitialAgentCount() == null
+            && !(req.getSchoolId() != null
+                && req.getSchoolId().startsWith(SchoolSelectionService.COUNTY_PREFIX))) {
             Scene scene = req.getScene() != null ? req.getScene() : Scene.daily_push;
             SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
             int expectedScans = (int) Math.ceil(req.getStudentCount() * preset.getScanRatio());
