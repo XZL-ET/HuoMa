@@ -52,12 +52,12 @@ public class TransferMonitorWorker {
     private static final String RETRY_GREETINGS_LOCK_KEY = "lock:transfer:retry-greetings";
     private static final Duration RETRY_LOCK_TTL = Duration.ofMinutes(5);
 
-    /** DLQ 告警限流：每小时最多告警一次 */
-    private long lastDlqAlertTime = 0L;
-    private int skippedDlqAlertCount = 0;
+    /** DLQ 告警限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
+    private static volatile long lastDlqAlertTime = 0L;
+    private static volatile int skippedDlqAlertCount = 0;
 
-    /** Stream 积压告警限流：每小时最多告警一次 */
-    private long lastStreamBacklogAlertTime = 0L;
+    /** Stream 积压告警限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
+    private static volatile long lastStreamBacklogAlertTime = 0L;
 
     /**
      * 每 30 分钟执行一次，追踪在职继承的确认结果。
@@ -184,8 +184,7 @@ public class TransferMonitorWorker {
 
             long now = System.currentTimeMillis();
             if (now - lastDlqAlertTime > 3600_000L) {
-                skippedDlqAlertCount++;
-                String suffix = skippedDlqAlertCount > 1
+                String suffix = skippedDlqAlertCount > 0
                     ? String.format("（过去 1 小时内累计触发 %d 次）", skippedDlqAlertCount)
                     : "";
                 lastDlqAlertTime = now;

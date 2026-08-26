@@ -72,6 +72,15 @@ public class WecomConfig {
     private String callbackEncodingAesKey;
 
     /**
+     * 企业微信应用 AgentId。
+     * <p>
+     * 用于 {@code /cgi-bin/message/send} 应用消息推送（如每日转接对账推送给负责人）。
+     * 可在企业微信管理后台「应用管理」中查看。未配置时应用消息推送不可用。
+     * </p>
+     */
+    private Integer agentId;
+
+    /**
      * 当前缓存的 access_token。
      * <p>
      * access_token 是企业微信 API 调用的全局唯一凭证，

@@ -61,6 +61,26 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
             CustomerTransfer.TransferStatus status, int maxRetries);
 
     /**
+     * 查询 api_failed 状态、重试次数未达上限、且退避已到期（nextRetryAt 为空或已过）的记录。
+     * <p>
+     * 用于 retryFailedTransfers 的退避重试扫描。nextRetryAt 为空表示历史遗留记录
+     * 或首次失败（尚未设置退避时间），视为立即可重试。
+     * </p>
+     *
+     * @param status     转移状态（api_failed）
+     * @param maxRetries 最大允许重试次数
+     * @param now        当前时间，用于判断退避是否到期
+     * @return 可立即重试的转移记录列表
+     */
+    @Query("SELECT t FROM CustomerTransfer t "
+        + "WHERE t.status = :status AND t.retryCount < :maxRetries "
+        + "AND (t.nextRetryAt IS NULL OR t.nextRetryAt <= :now)")
+    List<CustomerTransfer> findDueForRetry(
+            @Param("status") CustomerTransfer.TransferStatus status,
+            @Param("maxRetries") int maxRetries,
+            @Param("now") LocalDateTime now);
+
+    /**
      * 查询指定状态下轮询次数未超过上限的转移记录。
      * <p>
      * 用于 trackResults：扫描 pending_confirm 状态、pollCount &lt; 48 的记录。
@@ -257,4 +277,82 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      */
     @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt >= :since")
     boolean existsRecentTerminalByCustomerId(@Param("customerId") Long customerId, @Param("since") LocalDateTime since);
+
+    /**
+     * 按活码汇总指定加人时间范围内的转移结果（转接记录列表页一级视图）。
+     * <p>
+     * 以 {@link com.bookstore.qrcode.entity.Customer#addTime} 驱动时间筛选：
+     * 找出该时间段内通过活码新增的客户，并按其转移记录状态统计。
+     * 口径：成功 = confirmed；失败 = rejected/timeout/api_failed/retry_limit 之和；
+     * 进行中 = pending_confirm。
+     * </p>
+     *
+     * @param start 加人时间下限（含）
+     * @param end   加人时间上限（含）
+     * @return 每行格式 [qrCodeId, schoolName, newCustomerCount, confirmedCount, failedCount, pendingCount]
+     */
+    @Query("SELECT q.id, q.schoolName, "
+        + "COUNT(DISTINCT c.id), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'confirmed' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status IN ('rejected','timeout','api_failed','retry_limit') THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'pending_confirm' THEN 1 ELSE 0 END), 0) "
+        + "FROM QrCode q "
+        + "JOIN Customer c ON c.sourceQrId = q.id "
+        + "LEFT JOIN CustomerTransfer t ON t.customerId = c.id "
+        + "WHERE c.addTime >= :start AND c.addTime <= :end "
+        + "GROUP BY q.id, q.schoolName "
+        + "ORDER BY COUNT(DISTINCT c.id) DESC")
+    List<Object[]> summarizeTransfersByQrCode(@Param("start") LocalDateTime start,
+                                              @Param("end") LocalDateTime end);
+
+    /**
+     * 查询指定活码下、加人时间落在指定区间内的客户的转移记录（转接记录详情页）。
+     * <p>
+     * 与 {@link #summarizeTransfersByQrCode} 口径一致：时间筛选基于
+     * {@code Customer.addTime}，通过 customer 与 transfer 的显式 JOIN 关联。
+     * </p>
+     *
+     * @param qrCodeId 活码 ID
+     * @param start    加人时间下限（含）
+     * @param end      加人时间上限（含）
+     * @return 转移记录列表，按转移时间倒序
+     */
+    @Query("SELECT t FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "WHERE c.sourceQrId = :qrCodeId "
+        + "AND c.addTime >= :start AND c.addTime <= :end "
+        + "ORDER BY t.transferTime DESC")
+    List<CustomerTransfer> findByQrCodeAndCustomerAddTimeBetween(
+        @Param("qrCodeId") Long qrCodeId,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end);
+
+    /**
+     * 按区县负责人汇总指定转移时间范围内的转接结果（每日转接对账推送）。
+     * <p>
+     * 关联链：{@code CustomerTransfer → Customer(sourceQrId) → QrCode(regionCity/regionDistrict)
+     * → DistrictManager(managerUserid)}。时间筛选基于 {@code transferTime}（转移发起时间），
+     * 用于"昨日对账"：统计昨日发起的转接当天截至的各类状态。
+     * </p>
+     *
+     * @param start 转移时间下限（含）
+     * @param end   转移时间上限（不含）
+     * @return 每行格式 [managerUserid, managerName, total, confirmed, rejected, timeout, apiFailed, retryLimit, pending]
+     */
+    @Query("SELECT dm.managerUserid, dm.managerName, "
+        + "COUNT(t), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'confirmed' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'timeout' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'api_failed' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'retry_limit' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'pending_confirm' THEN 1 ELSE 0 END), 0) "
+        + "FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "JOIN QrCode q ON q.id = c.sourceQrId "
+        + "JOIN DistrictManager dm ON dm.regionCity = q.regionCity AND dm.regionDistrict = q.regionDistrict "
+        + "WHERE t.transferTime >= :start AND t.transferTime < :end "
+        + "GROUP BY dm.managerUserid, dm.managerName")
+    List<Object[]> summarizeTransfersByManager(@Param("start") LocalDateTime start,
+                                               @Param("end") LocalDateTime end);
 }

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='转接明细', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>🔄 转接明细 — <span th:text="${qr.schoolName}"></span></h5>
+        <a class="btn btn-sm btn-outline-secondary"
+           th:href="@{/transfers(range=${range}, start=${start}, end=${end})}">← 返回列表</a>
+    </div>
+
+    <!-- 汇总统计 -->
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <span class="badge bg-success fs-6" th:text="'成功 ' + ${successCount}"></span>
+        <span class="badge bg-danger fs-6" th:text="'失败 ' + ${failCount}"></span>
+        <span class="badge bg-info fs-6" th:text="'进行中 ' + ${pendingCount}"></span>
+    </div>
+
+    <!-- 转移明细表 -->
+    <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>客户姓名</th>
+                <th>转出方 → 转入方</th>
+                <th>状态</th>
+                <th>时间</th>
+                <th>失败原因</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr th:each="t : ${transfers}">
+                <td th:text="${customerNameMap.getOrDefault(t.customerId, '')}"></td>
+                <td>
+                    <span th:text="${nameMap.getOrDefault(t.fromUserid, t.fromUserid)}"></span>
+                    <span class="text-muted">→</span>
+                    <span th:text="${nameMap.getOrDefault(t.toUserid, t.toUserid)}"></span>
+                </td>
+                <td>
+                    <span class="badge"
+                          th:classappend="${t.status.name() == 'confirmed' ? 'bg-success'
+                              : t.status.name() == 'rejected' ? 'bg-danger'
+                              : t.status.name() == 'timeout' ? 'bg-warning'
+                              : t.status.name() == 'pending_confirm' ? 'bg-info'
+                              : t.status.name() == 'api_failed' ? 'bg-secondary'
+                              : t.status.name() == 'retry_limit' ? 'bg-dark'
+                              : 'bg-secondary'}"
+                          th:text="${t.status.name()}"></span>
+                </td>
+                <td th:text="${t.transferTime}"></td>
+                <td>
+                    <small class="text-muted" th:text="${t.failReason}"></small>
+                </td>
+            </tr>
+            <tr th:if="${#lists.isEmpty(transfers)}">
+                <td colspan="5" class="text-center text-muted py-4">该时间段内暂无转移记录</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+</main>
+</html>

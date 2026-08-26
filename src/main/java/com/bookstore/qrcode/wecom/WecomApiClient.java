@@ -766,6 +766,45 @@ public class WecomApiClient {
     }
 
     /**
+     * 向企业成员发送应用消息（主动推送）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/message/send}
+     * <pre>
+     * 请求:
+     *   {
+     *     "touser": "zhangsan",         // 接收消息的企业成员 userid
+     *     "msgtype": "text",            // 消息类型
+     *     "agentid": 1000002,           // 应用 AgentId
+     *     "text": {"content": "..."}
+     *   }
+     * </pre>
+     * 用于向内部成员（如区县负责人）推送系统通知，区别于 {@link #sendMessage}
+     * 面向外部客户的主动推送。文本内容不超过 2048 字节。
+     *
+     * @param toUser 接收消息的企业成员 userid
+     * @param text   消息文本内容
+     * @throws WecomApiException 发送失败时抛出
+     */
+    public void sendAppMessage(String toUser, String text) {
+        String url = BASE_URL + "/message/send?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("touser", toUser);
+            bodyMap.put("msgtype", "text");
+            bodyMap.put("agentid", config.getAgentId());
+            bodyMap.put("text", Map.of("content", text));
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String resp = postForJson(url, body);
+            parseAndCheck(resp, "发送应用消息");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "发送应用消息失败: " + e.getMessage(), null);
+        }
+    }
+
+    /**
      * 向客户发送文本卡片消息（可点击跳转）。
      * <p>
      * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/message/send}
@@ -950,7 +989,7 @@ public class WecomApiClient {
      * <ul>
      *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
      *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
-     *   <li>45035（操作冲突）、-1（网络/解析异常）、50000–59999（服务端错误）→ {@link WecomTransientException}</li>
+     *   <li>45035（操作冲突）、41096（欢迎语分发中）、-1（网络/解析异常）、50000–59999（服务端错误）→ {@link WecomTransientException}</li>
      *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
      * </ul>
      *
@@ -965,7 +1004,7 @@ public class WecomApiClient {
         if (errcode == 45009) {
             throw new WecomRateLimitException(errcode, errmsg, body, 60);
         }
-        if (errcode == 45035 || errcode == -1 || (errcode >= 50000 && errcode < 60000)) {
+        if (errcode == 45035 || errcode == 41096 || errcode == -1 || (errcode >= 50000 && errcode < 60000)) {
             throw new WecomTransientException(errcode, errmsg, body);
         }
         throw new WecomPermanentException(errcode, errmsg, body);

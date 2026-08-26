@@ -96,6 +96,7 @@ public class EmployeeSyncService {
         List<String> activeUserIds = new ArrayList<>();
         int inserted = 0;
         int updated = 0;
+        Map<String, Integer> wecomStatusMap = new HashMap<>();
 
         for (JsonNode u : resp.get("userlist")) {
             String userid = u.get("userid").asText();
@@ -105,6 +106,7 @@ public class EmployeeSyncService {
 
             if (userid.isEmpty()) continue;
             activeUserIds.add(userid);
+            wecomStatusMap.put(userid, wechatStatus);
 
             Optional<Employee> existing = employeeRepo.findByUserid(userid);
             if (existing.isPresent()) {
@@ -208,10 +210,51 @@ public class EmployeeSyncService {
             }
         }
 
+        // 自动解封已恢复员工（企微侧正常但本地仍 blocked 的 40098/41054 封禁）
+        autoUnblockRecoveredAgents(wecomStatusMap);
+
         log.info("员工同步结果: 新增{}人, 更新{}人, 标记离职{}人, 在职共{}人",
             inserted, updated, deactivated, activeUserIds.size());
 
         return activeUserIds.size();
+    }
+
+    /**
+     * 自动解封已恢复员工：企微侧已恢复正常（status=1）但本地 agent 仍卡在
+     * blocked（原因 40098 未实名 / 41054 未激活）的员工，恢复为 normal 并重新入池。
+     * <p>只解封「临时不可用」类封禁；「通讯录已移除」封禁代表真实离职，需人工在职继承，
+     * 不在自动解封范围内。</p>
+     */
+    private void autoUnblockRecoveredAgents(Map<String, Integer> wecomStatusMap) {
+        try {
+            List<Agent> blockedAgents = agentRepo.findByOverallStatus(Agent.OverallStatus.blocked);
+            int unblocked = 0;
+            for (Agent agent : blockedAgents) {
+                String reason = agent.getStatusReason();
+                if (reason == null || (!reason.contains("40098") && !reason.contains("41054"))) {
+                    continue;
+                }
+                Integer ws = wecomStatusMap.get(agent.getUserid());
+                if (ws == null || ws != 1) {
+                    continue; // 企微侧仍异常或已不在通讯录，保持封禁
+                }
+                agent.setOverallStatus(Agent.OverallStatus.normal);
+                agent.setStatusReason(null);
+                agent.setMeltedCount24h(0);
+                agentRepo.save(agent);
+                if (agent.getRole() == Agent.AgentRole.receptionist) {
+                    poolService.ensureInPool(agent.getUserid(), 150);
+                }
+                unblocked++;
+                log.info("自动解封已恢复员工: userid={}, name={}, role={}",
+                    agent.getUserid(), agent.getName(), agent.getRole());
+            }
+            if (unblocked > 0) {
+                log.info("自动解封完成：{} 名员工已恢复并重新入池", unblocked);
+            }
+        } catch (Exception e) {
+            log.error("自动解封失败（不影响员工同步）", e);
+        }
     }
 
     /**
