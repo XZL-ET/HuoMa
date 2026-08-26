@@ -160,7 +160,7 @@
                         <td>
                             <a th:href="@{/qrcodes/{id}(id=${qr.id})}" th:text="${qr.schoolName}"
                                class="text-decoration-none fw-semibold">学校名</a>
-                            <span th:if="${#strings.startsWith(qr.schoolId, 'county:')}"
+                            <span th:if="${#strings.startsWith(qr.schoolId, countyPrefix)}"
                                   class="badge bg-info ms-1">县区码</span>
                         </td>
                         <td>

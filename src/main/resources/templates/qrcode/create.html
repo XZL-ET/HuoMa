@@ -302,17 +302,17 @@ class EmployeePicker {
         this.el.innerHTML = `
             <div class="search-bar">
                 🔍
-                <input type="text" class="search-input" placeholder="${this.placeholder}" autocomplete="off">
+                <input type="text" class="search-input" placeholder="${this._escapeHtml(this.placeholder)}" autocomplete="off">
                 <span class="count">已选 <strong>${selCount}</strong> / ${this.items.length} 人</span>
             </div>
             <div class="list">
                 ${this.items.length === 0 ? '<div class="no-result">暂无员工数据</div>' : this.items.map(it => {
                     const dm = this.defaultDailyMax;
-                    return `<div class="row-item" data-userid="${it.userid}">
+                    return `<div class="row-item" data-userid="${this._escapeHtml(it.userid)}">
                         <input class="form-check-input" type="checkbox">
                         <div class="name-col">
-                            <div class="name">${it.name}</div>
-                            <div class="uid">${it.userid}</div>
+                            <div class="name">${this._escapeHtml(it.name)}</div>
+                            <div class="uid">${this._escapeHtml(it.userid)}</div>
                         </div>
                         <div class="limit-col">
                             <div class="input-group input-group-sm">
@@ -426,7 +426,7 @@ class EmployeePicker {
     }
 
     /** HTML 转义 */
-    _escape(s) {
+    _escapeHtml(s) {
         const div = document.createElement('div');
         div.textContent = s;
         return div.innerHTML;

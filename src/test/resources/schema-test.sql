@@ -389,7 +389,7 @@ VALUES ('global_contact_name',               '全局联系人名称',         '�
 -- form_template：表单模板
 CREATE TABLE IF NOT EXISTS form_template (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(100) NOT NULL UNIQUE,
     description VARCHAR(500),
     subtitle VARCHAR(200),
     card_title VARCHAR(100),

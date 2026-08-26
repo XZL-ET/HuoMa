@@ -29,6 +29,7 @@ import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
+import com.bookstore.qrcode.service.SchoolSelectionService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.util.QrUrlAllowlist;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -248,6 +249,7 @@ public class QrCodeController {
         model.addAttribute("totalCountMap", totalCountMap);
         model.addAttribute("groups", groups);
         model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
+        model.addAttribute("countyPrefix", SchoolSelectionService.COUNTY_PREFIX);
 
         return "qrcode/list";
     }
@@ -743,8 +745,8 @@ public class QrCodeController {
                 || receptionistUserid == null || receptionistUserid.isBlank()) {
                 throw new RuntimeException("市州、县区、县区接待员均不能为空");
             }
-            String schoolId = "county:" + city.trim() + ":" + district.trim();
-            if (schoolId.length() > 30) {
+            String schoolId = SchoolSelectionService.COUNTY_PREFIX + city.trim() + ":" + district.trim();
+            if (schoolId.getBytes(StandardCharsets.UTF_8).length > 30) {
                 throw new RuntimeException("市州+县区名称过长，无法生成县区码标识");
             }
             if (formTemplateId == null) {
