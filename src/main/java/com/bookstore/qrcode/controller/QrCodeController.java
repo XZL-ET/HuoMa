@@ -8,6 +8,7 @@ import com.bookstore.qrcode.dto.QrCodeTreeDto;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.CustomerTransfer;
 import com.bookstore.qrcode.entity.Employee;
+import com.bookstore.qrcode.entity.FormTemplate;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrCode;
@@ -24,6 +25,7 @@ import com.bookstore.qrcode.repository.QrRotateLogRepository;
 import com.bookstore.qrcode.repository.TagRepository;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
@@ -128,6 +130,7 @@ public class QrCodeController {
     private final OperationLogService operationLogService;
     private final ObjectMapper objectMapper;
     private final SceneConfigProperties sceneConfig;
+    private final FormTemplateService formTemplateService;
 
     @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
@@ -415,74 +418,7 @@ public class QrCodeController {
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
         model.addAttribute("suggestedSchoolId", suggestedSchoolId);
 
-        // ---- 调用企微接口获取全部标签（带缓存，10 分钟内不重复调） ----
-        JsonNode wecomTagResp = null;
-        boolean needApiCall = lastTagSyncTime == null
-            || java.time.Duration.between(lastTagSyncTime, java.time.LocalDateTime.now())
-                .toMinutes() >= TAG_CACHE_MINUTES;
-
-        if (needApiCall) {
-            try {
-                wecomTagResp = wecomApiClient.getCorpTagList();
-                log.debug("企微标签 API 原始响应: {}", wecomTagResp.toString());
-                // 同步到本地 DB
-                tagService.syncTagsFromWecom(wecomTagResp);
-                // 直接从企微标签组提取下拉选项（先提取数据，成功后再更新时间戳）
-                var extracted = extractOptionsFromGroups(wecomTagResp);
-                cachedCityOptions = extracted.get("city");
-                cachedDistrictOptions = extracted.get("district");
-                cachedSchoolOptions = extracted.get("school");
-                lastTagSyncTime = java.time.LocalDateTime.now();
-            } catch (Exception e) {
-                log.warn("企微标签同步失败，使用缓存数据: {}", e.getMessage());
-            }
-        } else {
-            log.debug("标签缓存未过期，跳过企微接口调用 (上次同步: {})", lastTagSyncTime);
-        }
-
-        // ---- 加载下拉框选项数据 ----
-        // 优先从企微标签组名称直接提取；缓存过期后刷新
-        try {
-            List<String> cityOptions = cachedCityOptions != null
-                ? new ArrayList<>(cachedCityOptions) : new ArrayList<>();
-            List<String> districtOptions = cachedDistrictOptions != null
-                ? new ArrayList<>(cachedDistrictOptions) : new ArrayList<>();
-            List<String> schoolOptions = cachedSchoolOptions != null
-                ? new ArrayList<>(cachedSchoolOptions) : new ArrayList<>();
-
-            // ── 降级：缓存全为空时用 DB + 命名规则兜底 ──
-            if (cityOptions.isEmpty() && districtOptions.isEmpty() && schoolOptions.isEmpty()) {
-                log.info("缓存为空，使用 DB 标签命名规则兜底");
-                List<Tag> allTags = tagRepo.findAll();
-                for (Tag t : allTags) {
-                    String name = t.getName();
-                    if (name.endsWith("市") || name.endsWith("州") || name.endsWith("盟")) {
-                        cityOptions.add(name);
-                    } else if (name.endsWith("区") || name.endsWith("县")
-                            || name.endsWith("旗") || name.endsWith("乡")) {
-                        districtOptions.add(name);
-                    } else if (isSchoolName(name)) {
-                        schoolOptions.add(name);
-                    }
-                }
-                Collections.sort(cityOptions);
-                Collections.sort(districtOptions);
-                Collections.sort(schoolOptions);
-            }
-
-            log.info("下拉选项统计: city={}, district={}, school={}",
-                cityOptions.size(), districtOptions.size(), schoolOptions.size());
-
-            model.addAttribute("cityOptions", cityOptions);
-            model.addAttribute("districtOptions", districtOptions);
-            model.addAttribute("schoolOptions", schoolOptions);
-        } catch (Exception e) {
-            // 下拉数据加载失败不影响页面使用，降级为空列表
-            log.warn("加载下拉选项数据失败: {}", e.getMessage());
-            model.addAttribute("cityOptions", List.of());
-            model.addAttribute("districtOptions", List.of());
-            model.addAttribute("schoolOptions", List.of());
-        }
+        loadRegionOptions(model);
 
         model.addAttribute("sceneConfig", sceneConfig);
         model.addAttribute("dailyMaxDefault", dailyMaxDefault);
@@ -521,6 +457,90 @@ public class QrCodeController {
         }
 
         return "qrcode/create";
+    }
+
+    /**
+     * 县区码建码页面 —— 加载市/区下拉、员工列表与县区码默认模板。
+     *
+     * <p>GET /qrcodes/create-county —— 返回视图 {@code qrcode/create-county}，
+     * 模型含 {@code userList}/{@code cityOptions}/{@code districtOptions}/
+     * {@code formTemplates}/{@code defaultTemplateId}。
+     */
+    @GetMapping("/create-county")
+    public String createCountyForm(Model model) {
+        model.addAttribute("userList", buildUserList());
+        loadRegionOptions(model);
+        model.addAttribute("formTemplates", formTemplateRepo.findAllByOrderByName());
+        FormTemplate defaultTpl = formTemplateService.ensureCountyTemplate();
+        model.addAttribute("defaultTemplateId", defaultTpl.getId());
+        return "qrcode/create-county";
+    }
+
+    /**
+     * 加载市/区/学校下拉选项（带缓存），并写入 {@link Model}。
+     *
+     * <p>优先从企微标签组名称提取（10 分钟缓存），缓存全空时降级到 DB 标签命名规则。
+     */
+    private void loadRegionOptions(Model model) {
+        JsonNode wecomTagResp = null;
+        boolean needApiCall = lastTagSyncTime == null
+            || java.time.Duration.between(lastTagSyncTime, java.time.LocalDateTime.now())
+                .toMinutes() >= TAG_CACHE_MINUTES;
+
+        if (needApiCall) {
+            try {
+                wecomTagResp = wecomApiClient.getCorpTagList();
+                tagService.syncTagsFromWecom(wecomTagResp);
+                var extracted = extractOptionsFromGroups(wecomTagResp);
+                cachedCityOptions = extracted.get("city");
+                cachedDistrictOptions = extracted.get("district");
+                cachedSchoolOptions = extracted.get("school");
+                lastTagSyncTime = java.time.LocalDateTime.now();
+            } catch (Exception e) {
+                log.warn("企微标签同步失败，使用缓存数据: {}", e.getMessage());
+            }
+        } else {
+            log.debug("标签缓存未过期，跳过企微接口调用 (上次同步: {})", lastTagSyncTime);
+        }
+
+        try {
+            List<String> cityOptions = cachedCityOptions != null
+                ? new ArrayList<>(cachedCityOptions) : new ArrayList<>();
+            List<String> districtOptions = cachedDistrictOptions != null
+                ? new ArrayList<>(cachedDistrictOptions) : new ArrayList<>();
+            List<String> schoolOptions = cachedSchoolOptions != null
+                ? new ArrayList<>(cachedSchoolOptions) : new ArrayList<>();
+
+            if (cityOptions.isEmpty() && districtOptions.isEmpty() && schoolOptions.isEmpty()) {
+                log.info("缓存为空，使用 DB 标签命名规则兜底");
+                List<Tag> allTags = tagRepo.findAll();
+                for (Tag t : allTags) {
+                    String name = t.getName();
+                    if (name.endsWith("市") || name.endsWith("州") || name.endsWith("盟")) {
+                        cityOptions.add(name);
+                    } else if (name.endsWith("区") || name.endsWith("县")
+                            || name.endsWith("旗") || name.endsWith("乡")) {
+                        districtOptions.add(name);
+                    } else if (isSchoolName(name)) {
+                        schoolOptions.add(name);
+                    }
+                }
+                Collections.sort(cityOptions);
+                Collections.sort(districtOptions);
+                Collections.sort(schoolOptions);
+            }
+
+            log.info("下拉选项统计: city={}, district={}, school={}",
+                cityOptions.size(), districtOptions.size(), schoolOptions.size());
+            model.addAttribute("cityOptions", cityOptions);
+            model.addAttribute("districtOptions", districtOptions);
+            model.addAttribute("schoolOptions", schoolOptions);
+        } catch (Exception e) {
+            log.warn("加载下拉选项数据失败: {}", e.getMessage());
+            model.addAttribute("cityOptions", List.of());
+            model.addAttribute("districtOptions", List.of());
+            model.addAttribute("schoolOptions", List.of());
+        }
     }
 
     /**
@@ -695,6 +715,62 @@ public class QrCodeController {
             if (isAjax) {
                 return ResponseEntity.badRequest()
                     .body(Map.of("success", false, "error", e.getMessage()));
+            }
+            redirect.addFlashAttribute("error", e.getMessage());
+            return "redirect:/qrcodes";
+        }
+    }
+
+    /**
+     * 提交创建县区码请求。
+     *
+     * <p>POST /qrcodes/create-county —— 接收 city/district/receptionistUserid 等参数，
+     * 生成 {@code county:城市:区县} 形式的 schoolId，委托 {@link QrCodeService#create} 建码。
+     * AJAX 请求返回 JSON，否则重定向到列表页。
+     */
+    @PostMapping("/create-county")
+    public Object createCounty(@RequestParam(required = false) String city,
+                               @RequestParam(required = false) String district,
+                               @RequestParam(required = false) String receptionistUserid,
+                               @RequestParam(required = false) Long formTemplateId,
+                               @RequestParam(required = false) Integer studentCount,
+                               @RequestParam(required = false) Scene scene,
+                               RedirectAttributes redirect,
+                               HttpServletRequest request) {
+        boolean isAjax = "XMLHttpRequest".equals(request.getHeader("X-Requested-With"));
+        try {
+            if (city == null || city.isBlank() || district == null || district.isBlank()
+                || receptionistUserid == null || receptionistUserid.isBlank()) {
+                throw new RuntimeException("市州、县区、县区接待员均不能为空");
+            }
+            String schoolId = "county:" + city.trim() + ":" + district.trim();
+            if (schoolId.length() > 30) {
+                throw new RuntimeException("市州+县区名称过长，无法生成县区码标识");
+            }
+            if (formTemplateId == null) {
+                formTemplateId = formTemplateService.ensureCountyTemplate().getId();
+            }
+            QrCodeCreateRequest req = new QrCodeCreateRequest();
+            req.setSchoolName(district.trim());
+            req.setSchoolId(schoolId);
+            req.setRegionCity(city.trim());
+            req.setRegionDistrict(district.trim());
+            req.setReceptionistUserid(receptionistUserid.trim());
+            req.setFormTemplateId(formTemplateId);
+            req.setStudentCount(studentCount);
+            req.setScene(scene != null ? scene : Scene.daily_push);
+            QrCode qr = qrCodeService.create(req);
+            operationLogService.log(getOperator(), "create", "qrcode",
+                qr.getId().toString(), "创建县区码：" + qr.getSchoolName());
+            if (isAjax) {
+                return ResponseEntity.ok(Map.of("success", true, "message", "县区码创建成功"));
+            }
+            redirect.addFlashAttribute("message", "县区码创建成功");
+            return "redirect:/qrcodes";
+        } catch (Exception e) {
+            log.error("创建县区码失败", e);
+            if (isAjax) {
+                return ResponseEntity.badRequest().body(Map.of("success", false, "error", e.getMessage()));
             }
             redirect.addFlashAttribute("error", e.getMessage());
             return "redirect:/qrcodes";

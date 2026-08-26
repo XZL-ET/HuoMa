@@ -2,11 +2,13 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.SceneConfigProperties;
 import com.bookstore.qrcode.entity.QrCode;
+import com.bookstore.qrcode.entity.FormTemplate;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
@@ -18,9 +20,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @DisplayName("QrCodeController 活码管理")
@@ -30,12 +34,14 @@ class QrCodeControllerTest {
     private QrCodeService qrCodeService;
     private QrImageService qrImageService;
     private QrCodeRepository qrCodeRepo;
+    private FormTemplateService formTemplateService;
 
     @BeforeEach
     void setUp() {
         qrCodeService = mock(QrCodeService.class);
         qrImageService = mock(QrImageService.class);
         qrCodeRepo = mock(QrCodeRepository.class);
+        formTemplateService = mock(FormTemplateService.class);
         QrCodeController controller = new QrCodeController(
                 qrCodeService,
                 mock(WecomApiClient.class),
@@ -58,7 +64,8 @@ class QrCodeControllerTest {
                 mock(StringRedisTemplate.class),
                 mock(OperationLogService.class),
                 mock(ObjectMapper.class),
-                mock(SceneConfigProperties.class));
+                mock(SceneConfigProperties.class),
+                formTemplateService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -103,5 +110,38 @@ class QrCodeControllerTest {
         mockMvc.perform(get("/qrcodes/1/download"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType("image/png"));
+    }
+
+    @Test
+    @DisplayName("POST /qrcodes/create-county — 成功并自动命名 schoolId")
+    void shouldCreateCountyCode() throws Exception {
+        FormTemplate tpl = FormTemplate.builder().id(10L).name("县区码默认模板").fields("[]").tagMapping("{}").build();
+        when(formTemplateService.ensureCountyTemplate()).thenReturn(tpl);
+        when(qrCodeService.create(any())).thenReturn(QrCode.builder().id(99L).schoolName("白银区").build());
+
+        mockMvc.perform(post("/qrcodes/create-county")
+                .param("city", "白银市")
+                .param("district", "白银区")
+                .param("receptionistUserid", "agent3")
+                .header("X-Requested-With", "XMLHttpRequest"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+
+        ArgumentCaptor<com.bookstore.qrcode.dto.QrCodeCreateRequest> captor =
+            ArgumentCaptor.forClass(com.bookstore.qrcode.dto.QrCodeCreateRequest.class);
+        verify(qrCodeService).create(captor.capture());
+        assertThat(captor.getValue().getSchoolId()).isEqualTo("county:白银市:白银区");
+        assertThat(captor.getValue().getSchoolName()).isEqualTo("白银区");
+        assertThat(captor.getValue().getFormTemplateId()).isEqualTo(10L);
+    }
+
+    @Test
+    @DisplayName("POST /qrcodes/create-county — 缺参数被拒")
+    void shouldRejectCountyCodeMissingParams() throws Exception {
+        mockMvc.perform(post("/qrcodes/create-county")
+                .param("city", "白银市")
+                .header("X-Requested-With", "XMLHttpRequest"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.success").value(false));
     }
 }
