@@ -1,4 +1,4 @@
--- V15: form_template.name 唯一约束 —— 同一模板名只能有一条记录（idempotent）
+-- V16: form_template.name 唯一约束 —— 同一模板名只能有一条记录（idempotent）
 -- 并发 ensureCountyTemplate 的 find-or-create 竞态会插入重复 name，
 -- 导致 findByName() 抛出 IncorrectResultSizeDataAccessException。
 -- 本迁移：按 name 去重 → 重分配 qr_code / qr_code_group / school_category 的
