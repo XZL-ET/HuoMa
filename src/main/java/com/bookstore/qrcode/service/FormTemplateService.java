@@ -7,6 +7,7 @@ import com.bookstore.qrcode.repository.QrCodeGroupRepository;
 import com.bookstore.qrcode.repository.SchoolCategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
@@ -20,6 +21,9 @@ public class FormTemplateService {
     private final QrCodeRepository qrCodeRepo;
     private final QrCodeGroupRepository groupRepo;
     private final SchoolCategoryRepository categoryRepo;
+
+    /** 县区码默认表单模板的固定名称，find-or-create 锚点 */
+    public static final String COUNTY_TEMPLATE_NAME = "县区码默认模板";
 
     public List<FormTemplate> listAll() {
         return templateRepo.findAllByOrderByName();
@@ -38,6 +42,25 @@ public class FormTemplateService {
             .name(name).description(description).subtitle(subtitle)
             .cardTitle(cardTitle).cardDesc(cardDesc).cardPicUrl(cardPicUrl)
             .fields(fields).tagMapping(tagMapping).remarkTemplate(remarkTemplate).build());
+    }
+
+    /**
+     * 幂等获取「县区码默认模板」：不存在则创建。
+     * 并发安全：唯一索引（V15）兜底，insert 冲突后重查。
+     */
+    @Transactional
+    public FormTemplate ensureCountyTemplate() {
+        return templateRepo.findByName(COUNTY_TEMPLATE_NAME)
+            .orElseGet(() -> {
+                try {
+                    return create(COUNTY_TEMPLATE_NAME, "县区码默认收集模板",
+                        null, null, null, null,
+                        "[]", "{\"grade\":\"tag\",\"class\":\"tag\"}", null);
+                } catch (DataIntegrityViolationException e) {
+                    return templateRepo.findByName(COUNTY_TEMPLATE_NAME)
+                        .orElseThrow(() -> new RuntimeException("县区码默认模板创建失败", e));
+                }
+            });
     }
 
     @Transactional
