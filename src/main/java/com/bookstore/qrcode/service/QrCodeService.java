@@ -295,7 +295,8 @@ public class QrCodeService {
         qr = qrCodeRepo.save(qr);
 
         // 2.5 同步学校记录：确保 school 表有记录，并关联分类
-        if (req.getSchoolId() != null) {
+        if (req.getSchoolId() != null
+            && !req.getSchoolId().startsWith(SchoolSelectionService.COUNTY_PREFIX)) {
             School school = schoolRepo.findBySchoolIdAndDeletedFalse(req.getSchoolId()).orElse(null);
             if (school == null) {
                 school = School.builder()

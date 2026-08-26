@@ -32,6 +32,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
     @Autowired private QrAgentRepository qrAgentRepo;
     @Autowired private AgentRepository agentRepo;
     @Autowired private GlobalAgentPoolRepository poolRepo;
+    @Autowired private SchoolRepository schoolRepo;
     @BeforeEach
     void setUp() {
         // 清理测试数据：deleteAll 自带 @Transactional，每条操作独立提交
@@ -39,6 +40,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         poolRepo.deleteAll();
         qrCodeRepo.deleteAll();
         agentRepo.deleteAll();
+        schoolRepo.deleteAll();
     }
 
     /**
@@ -217,5 +219,27 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         assertThat(created.getId()).isNotNull();
         // afterCommit 已由 Spring Test 框架在 @Transactional 测试方法结束时触发
         // 如果 mock 配置有误，会在日志中看到异常但不会影响断言
+    }
+
+    @Test
+    @DisplayName("建县区码：schoolId=county:市:区县，接待员绑定，跳过 school 同步")
+    void shouldCreateCountyQrCodeAndSkipSchoolSync() {
+        QrCodeCreateRequest req = new QrCodeCreateRequest();
+        req.setSchoolName("白银区");
+        req.setSchoolId("county:白银市:白银区");
+        req.setRegionCity("白银市");
+        req.setRegionDistrict("白银区");
+        req.setReceptionistUserid("agent3");
+        req.setInitialAgentUserids("agent3");
+        req.setScene(Scene.daily_push);
+
+        QrCode created = qrCodeService.create(req);
+
+        assertThat(created.getSchoolId()).isEqualTo("county:白银市:白银区");
+        assertThat(created.getSchoolName()).isEqualTo("白银区");
+        assertThat(qrAgentRepo.findByQrCodeId(created.getId()))
+            .extracting(QrAgent::getAgentUserid).contains("agent3");
+        // school 表无 county 记录（school 同步被跳过）
+        assertThat(schoolRepo.findBySchoolIdAndDeletedFalse("county:白银市:白银区")).isEmpty();
     }
 }
