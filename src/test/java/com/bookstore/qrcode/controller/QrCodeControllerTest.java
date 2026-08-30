@@ -136,6 +136,27 @@ class QrCodeControllerTest {
     }
 
     @Test
+    @DisplayName("POST /qrcodes/create-county — 藏族自治州长地名不被长度校验误拒")
+    void shouldAllowLongPrefectureCountyCode() throws Exception {
+        FormTemplate tpl = FormTemplate.builder().id(10L).name("县区码默认模板").fields("[]").tagMapping("{}").build();
+        when(formTemplateService.ensureCountyTemplate()).thenReturn(tpl);
+        when(qrCodeService.create(any())).thenReturn(QrCode.builder().id(100L).schoolName("碌曲县").build());
+
+        mockMvc.perform(post("/qrcodes/create-county")
+                .param("city", "甘南藏族自治州")
+                .param("district", "碌曲县")
+                .param("receptionistUserid", "agent3")
+                .header("X-Requested-With", "XMLHttpRequest"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(true));
+
+        ArgumentCaptor<com.bookstore.qrcode.dto.QrCodeCreateRequest> captor =
+            ArgumentCaptor.forClass(com.bookstore.qrcode.dto.QrCodeCreateRequest.class);
+        verify(qrCodeService).create(captor.capture());
+        assertThat(captor.getValue().getSchoolId()).isEqualTo("county:甘南藏族自治州:碌曲县");
+    }
+
+    @Test
     @DisplayName("POST /qrcodes/create-county — 缺参数被拒")
     void shouldRejectCountyCodeMissingParams() throws Exception {
         mockMvc.perform(post("/qrcodes/create-county")

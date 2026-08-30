@@ -746,7 +746,7 @@ public class QrCodeController {
                 throw new RuntimeException("市州、县区、县区接待员均不能为空");
             }
             String schoolId = SchoolSelectionService.COUNTY_PREFIX + city.trim() + ":" + district.trim();
-            if (schoolId.getBytes(StandardCharsets.UTF_8).length > 30) {
+            if (schoolId.length() > 30) {
                 throw new RuntimeException("市州+县区名称过长，无法生成县区码标识");
             }
             if (formTemplateId == null) {
