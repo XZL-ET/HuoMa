@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     status VARCHAR(20) NOT NULL DEFAULT 'active'
         CHECK (status IN ('active','full','removed','blocked')),
     replaced_by VARCHAR(100),
+    is_temporary BOOLEAN NOT NULL DEFAULT FALSE,
     last_reset_at TIMESTAMP,
     bind_target JSON,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -321,7 +322,7 @@ CREATE TABLE IF NOT EXISTS qr_rotate_log (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     qr_code_id BIGINT NOT NULL,
     from_userid VARCHAR(100),
-    to_userid VARCHAR(100) NOT NULL,
+    to_userid VARCHAR(100),
     reason VARCHAR(500),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (qr_code_id) REFERENCES qr_code(id)

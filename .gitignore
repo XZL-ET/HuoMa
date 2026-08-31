@@ -22,3 +22,7 @@ BOOT-INF/
 
 # superpowers 插件工作区（含本地运行时状态，勿提交）
 .superpowers/
+
+# 前端依赖与本地工作区（勿提交）
+node_modules/
+.claude/

@@ -306,7 +306,8 @@ public class AgentController {
         }
 
         // ── 接待员回池（熔断恢复时确保入池；仅重新上码时可能已在池中，ensureInPool 幂等）──
-        if (agent.getRole() == Agent.AgentRole.receptionist && (needsStatusReset || !restoredCodes.isEmpty())) {
+        // 角色漂移员工（在他码仍担任接待员）也应回池，故用 isPoolEligible 而非 agent.role
+        if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
             poolService.ensureInPool(userid, 150);
             log.info("接待员恢复后入池: userid={}", userid);
         }
@@ -348,7 +349,7 @@ public class AgentController {
             msg.append("；关联活码：");
             msg.append(String.join("、", otherCodes));
         }
-        if (agent.getRole() == Agent.AgentRole.receptionist && (needsStatusReset || !restoredCodes.isEmpty())) {
+        if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
             msg.append("；已自动加入全局池");
         }
         if (qrAgents.isEmpty()) {

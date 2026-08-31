@@ -114,8 +114,29 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
                 testQr.getId(), org.springframework.data.domain.Pageable.unpaged());
         assertThat(logs).isNotEmpty();
         QrRotateLog lastLog = logs.get(0);
+        assertThat(lastLog.getFromUserid()).isEqualTo("agent1"); // 下码员工
         assertThat(lastLog.getToUserid()).isNotNull();       // 接替者 userid
         assertThat(lastLog.getReason()).contains("扩容");
+    }
+
+    @Test
+    @DisplayName("expandQrCodeUsers — 临时顶替满员，接替者继承 temporary 标记")
+    void shouldInheritTemporaryOnExpand() {
+        // 将 agent1 标记为临时顶替
+        QrAgent agent1Qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(testQr.getId(), "agent1").orElseThrow();
+        agent1Qa.setTemporary(true);
+        qrAgentRepo.save(agent1Qa);
+
+        GlobalAgentPool agent1Pool = poolRepo.findByAgentUserid("agent1").orElseThrow();
+
+        // agent1 满员触发扩容，从池里补入接替者
+        rotationService.expandQrCodeUsers(testQr.getId(), "agent1", testQr, agent1Pool);
+
+        // 接替者应继承 temporary=true（次日一并释放）
+        QrAgent successor = qrAgentRepo.findByQrCodeIdAndStatus(testQr.getId(), QrAgent.AgentStatus.active)
+            .stream().filter(a -> a.getRole() == QrAgent.AgentRole.receptionist).findFirst().orElseThrow();
+        assertThat(successor.getAgentUserid()).isNotEqualTo("agent1");
+        assertThat(successor.getTemporary()).isTrue();
     }
 
     @Test
@@ -170,6 +191,143 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
 
         int agentsAfter = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
         assertThat(agentsAfter).isEqualTo(agentsBefore);
+    }
+
+    @Test
+    @DisplayName("checkAndRotate — 服务老师日限到达下码，不补人，继承照常")
+    void shouldDownCodeServiceTeacherWhenDailyLimitReached() {
+        // 服务老师 agent_svc 不应在全局池（bindAgents 里 ensureAgent 只建 Agent 不入池）
+        assertThat(poolRepo.findByAgentUserid("agent_svc")).isEmpty();
+
+        int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
+
+        // agent_svc 活码级 dailyMax=150，globalCount=200 超日限 → 服务老师下码（status=full）
+        rotationService.checkAndRotate(testQr.getId(), "agent_svc", 200);
+
+        // 服务老师 status 变为 full，且不补人（agent 数量不变）
+        QrAgent svcUpdated = qrAgentRepo.findByQrCodeIdAndAgentUserid(testQr.getId(), "agent_svc").orElseThrow();
+        assertThat(svcUpdated.getStatus()).isEqualTo(QrAgent.AgentStatus.full);
+
+        int agentsAfter = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
+        assertThat(agentsAfter).isEqualTo(agentsBefore);
+
+        // 下码应写轮换日志：fromUserid=服务老师，toUserid 为空（无接替）
+        QrRotateLog downLog = rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(
+                testQr.getId(), org.springframework.data.domain.Pageable.unpaged()).get(0);
+        assertThat(downLog.getFromUserid()).isEqualTo("agent_svc");
+        assertThat(downLog.getToUserid()).isNull();
+        assertThat(downLog.getReason()).contains("服务老师日限下码");
+    }
+
+    @Test
+    @DisplayName("checkAndRotate — 服务老师是活码唯一成员时日限下码，先补一名接待员再下码")
+    void shouldSupplementBeforeDownCodeWhenServiceTeacherIsOnlyActive() {
+        // 新建一个只有服务老师、无接待员的活码（create 不额外补接待员）
+        QrCodeCreateRequest req = new QrCodeCreateRequest();
+        req.setSchoolName("唯一服务老师学校");
+        req.setSchoolId("SCH-ONLY-SVC");
+        req.setRegionCity("深圳");
+        req.setRegionDistrict("南山区");
+        req.setStudentCount(300);
+        req.setServiceTeacherUserid("agent_svc");
+        req.setInitialAgentUserids("agent_svc");
+        QrCode onlySvcQr = qrCodeService.create(req);
+
+        int agentsBefore = qrAgentRepo.findByQrCodeId(onlySvcQr.getId()).size();
+        // 此时活码上只有服务老师 agent_svc 一个 active 成员
+        assertThat(qrAgentRepo.findByQrCodeIdAndStatus(onlySvcQr.getId(), QrAgent.AgentStatus.active))
+            .extracting(QrAgent::getAgentUserid).containsExactly("agent_svc");
+
+        // 服务老师日限到达 → 应先补员再下码
+        rotationService.checkAndRotate(onlySvcQr.getId(), "agent_svc", 200);
+
+        // 服务老师已下码
+        QrAgent svcUpdated = qrAgentRepo.findByQrCodeIdAndAgentUserid(onlySvcQr.getId(), "agent_svc").orElseThrow();
+        assertThat(svcUpdated.getStatus()).isEqualTo(QrAgent.AgentStatus.full);
+
+        // 已补一名接待员 → 总数 +1
+        int agentsAfter = qrAgentRepo.findByQrCodeId(onlySvcQr.getId()).size();
+        assertThat(agentsAfter).isEqualTo(agentsBefore + 1);
+
+        // 新成员是 active 接待员，保证 contact_way 不为空，且标记为临时顶替
+        QrAgent supplement = qrAgentRepo.findByQrCodeIdAndStatus(onlySvcQr.getId(), QrAgent.AgentStatus.active)
+            .stream().filter(a -> !"agent_svc".equals(a.getAgentUserid())).findFirst().orElseThrow();
+        assertThat(supplement.getRole()).isEqualTo(QrAgent.AgentRole.receptionist);
+        assertThat(supplement.getTemporary()).isTrue();
+
+        // 轮换日志包含补员记录 + 下码记录
+        List<QrRotateLog> logs = rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(
+                onlySvcQr.getId(), org.springframework.data.domain.Pageable.unpaged());
+        assertThat(logs).anyMatch(l -> "服务老师下码前同部门补员".equals(l.getReason()));
+        assertThat(logs).anyMatch(l -> l.getReason() != null && l.getReason().contains("服务老师日限下码"));
+    }
+
+    @Test
+    @DisplayName("checkAndRotate — 服务老师已下码，重复调用不重复写下码日志")
+    void shouldNotDuplicateDownCodeWhenServiceTeacherAlreadyFull() {
+        // 第一次：下码
+        rotationService.checkAndRotate(testQr.getId(), "agent_svc", 200);
+
+        // 第二次：服务老师已 full，应跳过（幂等），不重复写日志
+        rotationService.checkAndRotate(testQr.getId(), "agent_svc", 200);
+
+        long downCodeLogs = rotateLogRepo.findByQrCodeIdOrderByCreatedAtDesc(
+                testQr.getId(), org.springframework.data.domain.Pageable.unpaged()).stream()
+            .filter(l -> l.getReason() != null && l.getReason().contains("服务老师日限下码"))
+            .count();
+        assertThat(downCodeLogs).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("checkAndRotate — 服务老师唯一成员且全局池枯竭，补员失败则不下码")
+    void shouldKeepServiceTeacherActiveWhenPoolExhausted() {
+        // 新建只有服务老师、无接待员的活码
+        QrCodeCreateRequest req = new QrCodeCreateRequest();
+        req.setSchoolName("池枯竭学校");
+        req.setSchoolId("SCH-POOL-EMPTY");
+        req.setRegionCity("深圳");
+        req.setRegionDistrict("南山区");
+        req.setStudentCount(300);
+        req.setServiceTeacherUserid("agent_svc");
+        req.setInitialAgentUserids("agent_svc");
+        QrCode onlySvcQr = qrCodeService.create(req);
+
+        // 清空全局池，模拟池枯竭（takeStandby 返回 null）
+        poolRepo.deleteAll();
+
+        // 服务老师日限到达 → 补员失败 → 保持 active 不下码
+        rotationService.checkAndRotate(onlySvcQr.getId(), "agent_svc", 200);
+
+        QrAgent svc = qrAgentRepo.findByQrCodeIdAndAgentUserid(onlySvcQr.getId(), "agent_svc").orElseThrow();
+        assertThat(svc.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
+
+        // 未补入接待员，活码仍只有服务老师一人（避免 contact_way 变空）
+        assertThat(qrAgentRepo.findByQrCodeId(onlySvcQr.getId())).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("checkAndRotate — 接待员不在全局池，日限到达仍应触发扩容补人")
+    void shouldExpandWhenReceptionistNotInPool() {
+        // 构造角色漂移的接待员：全局 agent.role=service（不入池），但活码上是 receptionist
+        agentRepo.save(Agent.builder()
+            .userid("drifted_agent").name("漂移接待员")
+            .role(Agent.AgentRole.service)
+            .dailyTotalCap(500).build());
+        qrAgentRepo.save(QrAgent.builder()
+            .qrCodeId(testQr.getId()).agentUserid("drifted_agent")
+            .role(QrAgent.AgentRole.receptionist)
+            .dailyMax(100)
+            .sortOrder(10)
+            .status(QrAgent.AgentStatus.active).build());
+        assertThat(poolRepo.findByAgentUserid("drifted_agent")).isEmpty();
+
+        int agentsBefore = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
+
+        // drifted_agent 活码级 dailyMax=100，globalCount=150 超日限 → 应触发扩容补 1 人
+        rotationService.checkAndRotate(testQr.getId(), "drifted_agent", 150);
+
+        int agentsAfter = qrAgentRepo.findByQrCodeId(testQr.getId()).size();
+        assertThat(agentsAfter).isEqualTo(agentsBefore + 1);
     }
 
     // ================================================================

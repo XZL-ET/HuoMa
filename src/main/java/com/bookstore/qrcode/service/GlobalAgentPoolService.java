@@ -3,9 +3,11 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
+import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,11 +51,56 @@ public class GlobalAgentPoolService {
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
     private final EmployeeRepository employeeRepo;
+    private final QrAgentRepository qrAgentRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
 
     /** 部门树缓存：parentId → 所有子孙部门 ID。企微部门结构很少变动，实例级缓存即可。 */
     private final Map<Long, Collection<Long>> deptTreeCache = new ConcurrentHashMap<>();
+
+    /**
+     * 判断员工是否可入全局池（可被其他活码借走当接待员）。
+     *
+     * <p>判定依据 {@code qr_agent} 的活跃绑定，而非可能角色漂移的全局 {@code agent.role}：
+     * <ul>
+     *   <li>至少一条活跃 {@code receptionist}/{@code dual} 绑定 → 可入池
+     *       （即使同时在别的活码当服务老师）</li>
+     *   <li>全部活跃绑定都是 {@code service} → 不可入池（纯服务老师，不应被借走）</li>
+     *   <li>无任何活跃绑定 → 仅当全局角色不是 service/dual 才可入池
+     *       （排除「继承目标」这类从未上过活码的纯服务/双角色员工）</li>
+     * </ul>
+     */
+    public boolean isPoolEligible(String userid) {
+        List<QrAgent.AgentRole> activeRoles = qrAgentRepo.findActiveRolesByAgentUserid(userid);
+        if (!activeRoles.isEmpty()) {
+            return activeRoles.contains(QrAgent.AgentRole.receptionist)
+                || activeRoles.contains(QrAgent.AgentRole.dual);
+        }
+        Agent agent = agentRepo.findById(userid).orElse(null);
+        return agent == null
+            || (agent.getRole() != Agent.AgentRole.service && agent.getRole() != Agent.AgentRole.dual);
+    }
+
+    /**
+     * 批量判断可入全局池的 userid 集合（供 {@code syncToGlobalPool} 使用，避免 N+1）。
+     *
+     * @see #isPoolEligible(String)
+     */
+    public Set<String> filterPoolEligible(Collection<String> userids) {
+        if (userids == null || userids.isEmpty()) return Set.of();
+        Set<String> receptionRole = qrAgentRepo.findUseridsWithActiveReceptionRole(userids);
+        Set<String> bound = qrAgentRepo.findUseridsWithActiveBinding(userids);
+        Set<String> pureService = agentRepo.findUseridsWithServiceOrDualRole(userids);
+        Set<String> eligible = new LinkedHashSet<>();
+        for (String uid : userids) {
+            if (receptionRole.contains(uid)) {
+                eligible.add(uid);
+            } else if (!bound.contains(uid) && !pureService.contains(uid)) {
+                eligible.add(uid);
+            }
+        }
+        return eligible;
+    }
 
     /**
      * 从全局池取优先级最高（sortOrder 最小）的 standby 员工，排除指定 userid 集合。
@@ -112,13 +159,12 @@ public class GlobalAgentPoolService {
                 log.info("跳过并清理封号/熔断员工: userid={}", p.getAgentUserid());
                 continue;
             }
-            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
-            if (agent != null
-                && (agent.getRole() == Agent.AgentRole.service
-                 || agent.getRole() == Agent.AgentRole.dual)) {
+            // 过滤纯服务老师（无活跃接待员绑定）→ 懒清理出池，防止被其他活码借走。
+            // 角色漂移员工（在别的活码仍担任 receptionist）保留在池中。
+            if (agent != null && !isPoolEligible(p.getAgentUserid())) {
                 skippedBlocked++;
                 poolRepo.delete(p);
-                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
+                log.info("跳过并清理纯服务老师: userid={}, role={}", p.getAgentUserid(), agent.getRole());
                 continue;
             }
             // 取走后移至队尾，确保下次活码创建时补充到不同员工（公平轮转）
@@ -209,13 +255,12 @@ public class GlobalAgentPoolService {
                 poolRepo.delete(p);
                 continue;
             }
-            // 过滤服务老师/双角色 → 懒清理出池（不应在全局池中，防止被其他活码借走）
-            if (agent != null
-                && (agent.getRole() == Agent.AgentRole.service
-                 || agent.getRole() == Agent.AgentRole.dual)) {
+            // 过滤纯服务老师（无活跃接待员绑定）→ 懒清理出池，防止被其他活码借走。
+            // 角色漂移员工（在别的活码仍担任 receptionist）保留在池中。
+            if (agent != null && !isPoolEligible(p.getAgentUserid())) {
                 skippedBlocked++;
                 poolRepo.delete(p);
-                log.info("跳过并清理服务老师/双角色: userid={}, role={}", p.getAgentUserid(), agent.getRole());
+                log.info("跳过并清理纯服务老师: userid={}, role={}", p.getAgentUserid(), agent.getRole());
                 continue;
             }
             // 取走 → 推到队尾（公平轮转）
@@ -353,6 +398,19 @@ public class GlobalAgentPoolService {
             .departmentId(deptId)
             .status(GlobalAgentPool.PoolStatus.standby).build());
         log.info("全局池新增员工: userid={}, dailyMax={}, deptId={}", userid, dailyMax, deptId);
+    }
+
+    /**
+     * 解析指定员工的主部门 ID（取 {@link Employee#department} JSON 数组第一个元素）。
+     * <p>用于「同部门优先补员」等场景：补员时优先从被补员工所在部门取人。
+     * 员工无通讯录记录或部门为空时返回 {@code null}。</p>
+     *
+     * @param userid 企微员工 userid
+     * @return 主部门 ID，未知时返回 {@code null}
+     */
+    public Long resolvePrimaryDepartmentId(String userid) {
+        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
+        return emp != null ? extractPrimaryDeptId(emp.getDepartment()) : null;
     }
 
     /**

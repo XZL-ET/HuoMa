@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 活码（QrCode）数据访问层。
@@ -181,6 +182,18 @@ public interface QrCodeRepository extends JpaRepository<QrCode, Long> {
            "WHERE qa.qr_code_id = :qrCodeId AND qa.role IN ('service', 'dual') " +
            "AND qa.status = 'active' LIMIT 1", nativeQuery = true)
     String findFirstServiceAgentName(@Param("qrCodeId") Long qrCodeId);
+
+    /**
+     * 查找指定员工中是某活码「在职继承目标」的 userid 集合。
+     * <p>用于 agent.role 全量重算：无活跃绑定但被某活码 {@code transferTargetUserid}
+     * 预定的员工应保持 service（不入全局池），与已下码的自由员工区分。</p>
+     *
+     * @param userids 员工 userid 集合
+     * @return 其中作为继承目标的 userid 集合
+     */
+    @Query("SELECT DISTINCT q.transferTargetUserid FROM QrCode q "
+         + "WHERE q.transferTargetUserid IN :userids")
+    Set<String> findTransferTargetUseridsIn(@Param("userids") java.util.Collection<String> userids);
 
     /**
      * 分页搜索联盟活码 — id 在 QrCodeGroup 表中有记录。

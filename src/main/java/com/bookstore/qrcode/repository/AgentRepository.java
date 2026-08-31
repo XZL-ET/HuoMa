@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 员工 数据访问层。
@@ -102,4 +103,16 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
          + "a.updatedAt = CURRENT_TIMESTAMP "
          + "WHERE a.userid IN :userids AND a.overallStatus = 'normal'")
     int batchBlockByUserids(@Param("userids") Collection<String> userids);
+
+    /**
+     * 查找指定员工中全局角色为服务老师/双角色的 userid 集合。
+     * <p>用于全局池可入池判定：无任何活跃活码绑定、且全局角色仍为
+     * service/dual 的「继承目标」员工，不应被加入全局池。</p>
+     *
+     * @param userids 待判定的员工 userid 集合
+     * @return 其中全局角色为 service 或 dual 的 userid 集合
+     */
+    @Query("SELECT a.userid FROM Agent a "
+         + "WHERE a.userid IN :userids AND a.role IN ('service', 'dual')")
+    Set<String> findUseridsWithServiceOrDualRole(@Param("userids") Collection<String> userids);
 }

@@ -210,25 +210,32 @@ public class DailyResetWorker {
             if (agent != null
                 && agent.getOverallStatus() != Agent.OverallStatus.blocked
                 && agent.getOverallStatus() != Agent.OverallStatus.melted) {
-                // 服务老师/双角色不应出现 full 状态（应被 checkAndRotate 拦截），
-                // 若出现则告警（说明有漏洞），并正常恢复为 active
-                if (qa.getRole() == QrAgent.AgentRole.service
-                    || qa.getRole() == QrAgent.AgentRole.dual) {
-                    log.warn("服务老师/双角色异常出现在 full 状态: qrCodeId={}, userid={}, role={}",
-                        qa.getQrCodeId(), qa.getAgentUserid(), qa.getRole());
-                    alertService.createAlert(qa.getAgentUserid(), "service_teacher_full_recovered",
-                        AgentAlert.AlertSeverity.high,
-                        String.format("服务老师/双角色 %s 异常出现在 full 状态（活码=%d），已自动恢复",
-                            qa.getAgentUserid(), qa.getQrCodeId()),
-                        AgentAlert.AutoAction.none, qa.getQrCodeId());
-                }
                 qa.setStatus(QrAgent.AgentStatus.active);
                 qrAgentRepo.save(qa);
                 affectedQrIds.add(qa.getQrCodeId());
             }
         }
-        log.info("已归零 {} 个 QrAgent 日计数，恢复 {} 个 full 员工，涉及 {} 个活码",
-            allAgents.size(), fullAgents.size(), affectedQrIds.size());
+
+        // 3. 释放临时顶替接待员：服务老师已恢复 active（即活码上还有其他 active 成员）时移除；
+        //    非 active（full/blocked）的临时顶替已不在 contact_way，直接清理为 removed，避免数据残留。
+        var tempAgents = qrAgentRepo.findByTemporaryTrue();
+        for (var temp : tempAgents) {
+            if (temp.getStatus() == QrAgent.AgentStatus.removed) continue;
+            if (temp.getStatus() == QrAgent.AgentStatus.active) {
+                boolean hasOtherActive = qrAgentRepo
+                    .findByQrCodeIdAndStatus(temp.getQrCodeId(), QrAgent.AgentStatus.active).stream()
+                    .anyMatch(a -> !a.getId().equals(temp.getId()));
+                if (!hasOtherActive) continue; // 活码无其他 active（服务老师未恢复），保留临时顶替
+            }
+            var prevStatus = temp.getStatus();
+            temp.setStatus(QrAgent.AgentStatus.removed);
+            qrAgentRepo.save(temp);
+            affectedQrIds.add(temp.getQrCodeId());
+            log.info("释放临时顶替接待员: qr={}, userid={}, 原状态={}",
+                temp.getQrCodeId(), temp.getAgentUserid(), prevStatus);
+        }
+        log.info("已归零 {} 个 QrAgent 日计数，恢复 {} 个 full 员工，释放 {} 个临时顶替，涉及 {} 个活码",
+            allAgents.size(), fullAgents.size(), tempAgents.size(), affectedQrIds.size());
 
         // 事务提交后异步同步企微活码（避免长时间占用 DB 连接）
         if (!affectedQrIds.isEmpty()) {

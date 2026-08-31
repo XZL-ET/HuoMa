@@ -133,6 +133,18 @@ public class QrAgent {
     private LocalDateTime lastResetAt;
 
     /**
+     * 是否为临时顶替接待员。
+     * <p>
+     * 服务老师是活码唯一 active 成员时日限下码前，从同部门临时补入的接待员
+     * 会被标记为临时（{@code true}），次日服务老师恢复 active 后由每日重置释放。
+     * 正常上码的接待员此值为 {@code false}（默认）。
+     * </p>
+     */
+    @Column(name = "is_temporary")
+    @Builder.Default
+    private Boolean temporary = false;
+
+    /**
      * 绑定目标信息，JSON 格式。
      * <p>
      * 用于存储员工在此活码上的附加绑定配置，示例结构：

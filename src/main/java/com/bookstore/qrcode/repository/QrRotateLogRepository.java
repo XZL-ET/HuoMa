@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.QrRotateLog;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -29,4 +30,17 @@ public interface QrRotateLogRepository extends JpaRepository<QrRotateLog, Long> 
      * @return 符合条件的轮换日志列表，按 {@code createdAt} 降序排列
      */
     List<QrRotateLog> findByQrCodeIdOrderByCreatedAtDesc(Long qrCodeId, Pageable pageable);
+
+    /**
+     * 按创建时间范围查询轮换日志，按时间倒序（最新在前）。
+     * <p>用于全局轮换日志列表页，跨所有活码查看下码/上码记录，
+     * 支持分页截断避免一次加载过多。</p>
+     *
+     * @param start    起始时间（含）
+     * @param end      结束时间（含）
+     * @param pageable 分页参数（页码、每页条数）
+     * @return 时间范围内的轮换日志，按 {@code createdAt} 降序
+     */
+    List<QrRotateLog> findByCreatedAtBetweenOrderByCreatedAtDesc(
+        LocalDateTime start, LocalDateTime end, Pageable pageable);
 }

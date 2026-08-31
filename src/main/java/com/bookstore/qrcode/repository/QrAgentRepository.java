@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 活码接待员数据访问层。
@@ -164,4 +165,63 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
          + "AND qa.status = 'active' "
          + "AND (qa.role = 'service' OR qa.role = 'dual')")
     List<String> findServiceUseridsIn(@Param("agentUserids") Collection<String> agentUserids);
+
+    /**
+     * 查找指定员工当前所有活跃绑定的角色。
+     * <p>用于判断员工是否仍担任接待员（角色漂移判定），
+     * 依据 qr_agent 的活跃绑定，而非可能漂移的全局 agent.role。</p>
+     */
+    @Query("SELECT qa.role FROM QrAgent qa "
+         + "WHERE qa.agentUserid = :userid AND qa.status = 'active'")
+    List<QrAgent.AgentRole> findActiveRolesByAgentUserid(@Param("userid") String userid);
+
+    /**
+     * 批量查询指定员工的活跃绑定角色投影。
+     * <p>返回 {@code [agentUserid, role]} 行，仅含 {@code status='active'}，
+     * 供 agent.role 全量重算时一次性加载，避免 N+1。</p>
+     *
+     * @param userids 员工 userid 集合
+     * @return 每行 {@code Object[] = {String userid, QrAgent.AgentRole role}}
+     */
+    @Query("SELECT qa.agentUserid, qa.role FROM QrAgent qa "
+         + "WHERE qa.agentUserid IN :userids AND qa.status = 'active'")
+    List<Object[]> findActiveRolesByUserids(@Param("userids") Collection<String> userids);
+
+    /**
+     * 批量查询指定员工已下码（full）但仍保留服务老师/双角色身份的绑定投影。
+     * <p>服务老师到达日限后临时下码（status='full'）是正常现象，不应因此
+     * 丢失 service 身份而被降级为 receptionist 并入池。故全量重算时，
+     * full 状态的 service/dual 绑定仍需计入角色的权威信号。</p>
+     *
+     * @param userids 员工 userid 集合
+     * @return 每行 {@code Object[] = {String userid, QrAgent.AgentRole role}}
+     */
+    @Query("SELECT qa.agentUserid, qa.role FROM QrAgent qa "
+         + "WHERE qa.agentUserid IN :userids AND qa.status = 'full' "
+         + "AND qa.role IN ('service', 'dual')")
+    List<Object[]> findFullServiceRolesByUserids(@Param("userids") Collection<String> userids);
+
+    /**
+     * 查找指定员工中拥有活跃接待角色（receptionist/dual）绑定的 userid 集合。
+     */
+    @Query("SELECT DISTINCT qa.agentUserid FROM QrAgent qa "
+         + "WHERE qa.agentUserid IN :userids AND qa.status = 'active' "
+         + "AND qa.role IN ('receptionist', 'dual')")
+    Set<String> findUseridsWithActiveReceptionRole(@Param("userids") Collection<String> userids);
+
+    /**
+     * 查找指定员工中拥有任意活跃角色绑定的 userid 集合。
+     */
+    @Query("SELECT DISTINCT qa.agentUserid FROM QrAgent qa "
+         + "WHERE qa.agentUserid IN :userids AND qa.status = 'active'")
+    Set<String> findUseridsWithActiveBinding(@Param("userids") Collection<String> userids);
+
+    /**
+     * 查找所有临时顶替接待员（{@code temporary=true}）。
+     * <p>用于每日重置时释放临时顶替：服务老师恢复 active 后，
+     * 这些临时接待员应从活码中移除。</p>
+     *
+     * @return 临时顶替接待员列表
+     */
+    List<QrAgent> findByTemporaryTrue();
 }

@@ -37,8 +37,8 @@ public class QrRotateLog {
     @Column(name = "from_userid", length = 100)
     private String fromUserid;
 
-    /** 轮换后/新分配的老师 userid，不可空 */
-    @Column(name = "to_userid", nullable = false, length = 100)
+    /** 轮换后/新分配的老师 userid；纯下码（无接替者）场景为空 */
+    @Column(name = "to_userid", length = 100)
     private String toUserid;
 
     /** 轮换原因说明，如 "服务老师满员自动轮换"、"后备接待员承接客户"、"管理员手动轮换" 等 */

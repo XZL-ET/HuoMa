@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='轮换日志', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>📋 轮换日志</h5>
+        <span class="text-muted small" th:if="${logs.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
+    </div>
+
+    <!-- 时间范围筛选 + 关键字 -->
+    <form class="row g-2 align-items-end mb-3" method="get" th:action="@{/rotate-logs}">
+        <div class="col-auto">
+            <div class="btn-group" role="group" aria-label="时间预设">
+                <input type="radio" class="btn-check" name="range" id="r-today" value="today"
+                       th:checked="${range == 'today'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-today">今天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-7d" value="7d"
+                       th:checked="${range == '7d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-7d">近7天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-30d" value="30d"
+                       th:checked="${range == '30d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-30d">近30天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-custom" value="custom"
+                       th:checked="${range == 'custom'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-custom">自定义</label>
+            </div>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">起</label>
+            <input type="date" class="form-control form-control-sm" name="start" th:value="${start}">
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">止</label>
+            <input type="date" class="form-control form-control-sm" name="end" th:value="${end}">
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">关键字</label>
+            <input type="text" class="form-control form-control-sm" name="keyword"
+                   placeholder="学校名 / 员工 / 原因" th:value="${keyword}">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary btn-sm">查询</button>
+        </div>
+    </form>
+
+    <!-- 日志表 -->
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>时间</th>
+                    <th>活码</th>
+                    <th>下码员工</th>
+                    <th>激活员工</th>
+                    <th>原因</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr th:each="log : ${logs}">
+                    <td class="text-nowrap" th:text="${#temporals.format(log.createdAt, 'MM-dd HH:mm:ss')}"></td>
+                    <td th:text="${schoolNameMap.get(log.qrCodeId)}"></td>
+                    <td><code th:text="${log.fromUserid != null ? nameMap.get(log.fromUserid) : '—'}"></code></td>
+                    <td><code th:text="${log.toUserid != null ? nameMap.get(log.toUserid) : '—'}"></code></td>
+                    <td th:text="${log.reason}"></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(logs)}">
+                    <td colspan="5" class="text-center text-muted py-4">该时间段内暂无轮换记录</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</main>
+</html>

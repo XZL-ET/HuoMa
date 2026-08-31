@@ -6,6 +6,7 @@ import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +28,7 @@ class GlobalAgentPoolServiceTest {
     @Mock private GlobalAgentPoolRepository poolRepo;
     @Mock private AgentRepository agentRepo;
     @Mock private EmployeeRepository employeeRepo;
+    @Mock private QrAgentRepository qrAgentRepo;
     @Mock private WecomApiClient wecomApiClient;
     @Mock private ObjectMapper objectMapper;
 

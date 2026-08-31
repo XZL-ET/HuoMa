@@ -109,7 +109,7 @@ class AlertServiceTest {
         verify(alertRepo).save(captor.capture());
         AgentAlert alert = captor.getValue();
         assertThat(alert.getAlertType()).isEqualTo("empty_backup");
-        assertThat(alert.getAgentUserid()).isEmpty();
+        assertThat(alert.getAgentUserid()).isNull();
         assertThat(alert.getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
     }
 

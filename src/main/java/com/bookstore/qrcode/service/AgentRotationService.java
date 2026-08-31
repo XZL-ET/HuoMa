@@ -113,50 +113,175 @@ public class AgentRotationService {
      */
     @Transactional
     public void checkAndRotate(Long qrCodeId, String userId, int globalCount) {
-        GlobalAgentPool pool = poolRepo.findByAgentUserid(userId).orElse(null);
-        if (pool == null) return;
-
         QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
         if (qr == null) return;
 
-        // 服务老师/双角色不参与轮换，即使日限到达也不下码，
-        // 但仍触发扩容加接待员分担流量，防止服务老师成为单点瓶颈
         QrAgent qa = qrAgentRepo.findByQrCodeIdAndAgentUserid(qrCodeId, userId).orElse(null);
-        if (qa != null && (qa.getRole() == QrAgent.AgentRole.service
-                        || qa.getRole() == QrAgent.AgentRole.dual)) {
-            int dailyMax = pool.getDailyMax();
-            if (dailyMax > 0) {
-                int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
-                if (globalCount >= dailyMax) {
-                    log.warn("服务老师/双角色 {} 日限到达 {}/{}，触发扩容分担流量（不下码）: qr={}",
-                        userId, globalCount, dailyMax, qrCodeId);
-                    preActivateBackup(qrCodeId, qr);
-                } else if (urgentThreshold > 0 && globalCount >= urgentThreshold) {
-                    log.info("服务老师/双角色 {} 紧急阈值 {}/{}，提前激活后备: qr={}",
-                        userId, globalCount, dailyMax, qrCodeId);
-                    preActivateBackup(qrCodeId, qr);
-                }
-            }
+        if (qa == null) return;
+
+        boolean isService = qa.getRole() == QrAgent.AgentRole.service
+            || qa.getRole() == QrAgent.AgentRole.dual;
+
+        GlobalAgentPool pool = poolRepo.findByAgentUserid(userId).orElse(null);
+
+        // 日限判定：
+        // - 服务老师/双角色不入全局池，用活码级日限（serviceDailyMax 优先，其次 dailyMax）
+        // - 普通接待员在池用全局池日限（跨活码合计，匹配企微实际限制）
+        // - 普通接待员不在池（角色漂移被清池）用活码级日限兜底，避免因不在池而永不补人
+        int dailyMax;
+        if (isService) {
+            dailyMax = resolveServiceDailyMax(qa);
+        } else if (pool != null) {
+            dailyMax = pool.getDailyMax();
+        } else {
+            dailyMax = qa.getDailyMax() != null ? qa.getDailyMax() : 0;
+        }
+
+        if (dailyMax <= 0) {
+            log.warn("员工 {} dailyMax={} 异常，跳过阈值检查: qr={}", userId, dailyMax, qrCodeId);
             return;
         }
 
-        int dailyMax = pool.getDailyMax();
-        if (dailyMax <= 0) {
-            log.warn("员工 {} dailyMax={} 异常，跳过阈值检查", userId, dailyMax);
-            return;
-        }
         int warnThreshold = (dailyMax * qr.getWarnRatio()) / 100;
         int urgentThreshold = (dailyMax * qr.getUrgentRatio()) / 100;
 
         if (globalCount >= dailyMax) {
-            log.warn("员工 {} 全局日限到达 {}/{}，从活码 {} 下码", userId, globalCount, dailyMax, qrCodeId);
-            expandQrCodeUsers(qrCodeId, userId, qr, pool);
+            if (isService) {
+                log.warn("服务老师/双角色 {} 日限到达 {}/{}，下码停止扫码承接（继承照常）: qr={}",
+                    userId, globalCount, dailyMax, qrCodeId);
+                downCodeServiceTeacher(qrCodeId, userId, qr, qa);
+            } else {
+                log.warn("员工 {} 日限到达 {}/{}，从活码 {} 下码",
+                    userId, globalCount, dailyMax, qrCodeId);
+                expandQrCodeUsers(qrCodeId, userId, qr, pool);
+            }
         } else if (urgentThreshold > 0 && globalCount >= urgentThreshold) {
-            log.warn("员工 {} 全局紧急阈值 {}/{}，活码 {} 提前激活后备",
+            log.warn("员工 {} 紧急阈值 {}/{}，活码 {} 提前激活后备",
                 userId, globalCount, dailyMax, qrCodeId);
             preActivateBackup(qrCodeId, qr);
         } else if (warnThreshold > 0 && globalCount >= warnThreshold) {
-            log.info("员工 {} 全局预警阈值 {}/{}", userId, globalCount, dailyMax);
+            log.info("员工 {} 预警阈值 {}/{}", userId, globalCount, dailyMax);
+        }
+    }
+
+    /**
+     * 服务老师/双角色的活码级日限：优先 {@code serviceDailyMax}，其次 {@code dailyMax}。
+     * 服务老师不入全局池，无法用池的 {@code dailyMax} 判定，只能取活码级配置。
+     */
+    private int resolveServiceDailyMax(QrAgent qa) {
+        if (qa.getServiceDailyMax() != null && qa.getServiceDailyMax() > 0) {
+            return qa.getServiceDailyMax();
+        }
+        return qa.getDailyMax() != null ? qa.getDailyMax() : 0;
+    }
+
+    /**
+     * 服务老师/双角色下码前的兜底补员。
+     *
+     * <p>企微「联系我」二维码（contact_way，type=2 多成员模式）的 {@code user} 列表
+     * 不能为空（至少 1 人）。若该服务老师是活码上唯一的 active 成员，直接下码会让
+     * contact_way 变空。故先从同部门补一名接待员上码，再下码。</p>
+     *
+     * @return {@code true} 可安全下码（活码已有其他 active 成员，或补员成功）；
+     *         {@code false} 补员失败（全局池枯竭），调用方应保持服务老师 active 不下码
+     */
+    private boolean supplementBeforeServiceDownCode(Long qrCodeId, String userId, QrCode qr) {
+        List<QrAgent> activeOthers = qrAgentRepo
+            .findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active).stream()
+            .filter(a -> !a.getAgentUserid().equals(userId))
+            .toList();
+        if (!activeOthers.isEmpty()) {
+            return true;
+        }
+
+        Set<String> excludeUserids = new HashSet<>();
+        qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .map(QrAgent::getAgentUserid)
+            .forEach(excludeUserids::add);
+
+        // 同部门优先：取「服务老师本人」所在部门，而非活码部门；无则回退活码部门
+        Long deptId = poolService.resolvePrimaryDepartmentId(userId);
+        if (deptId == null) {
+            deptId = qr.getDepartmentId();
+        }
+        GlobalAgentPool backup = poolService.takeStandby(excludeUserids, deptId);
+        if (backup == null) {
+            log.error("服务老师 {} 下码前补员失败：全局池枯竭，活码 {} 保持 active 不下码",
+                userId, qrCodeId);
+            alertService.alertEmptyBackup(qrCodeId, qr.getSchoolName());
+            return false;
+        }
+
+        String backupUserid = backup.getAgentUserid();
+        QrAgent newAgent = QrAgent.builder()
+            .qrCodeId(qrCodeId).agentUserid(backupUserid)
+            .role(QrAgent.AgentRole.receptionist)
+            .dailyMax(backup.getDailyMax())
+            .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
+            .status(QrAgent.AgentStatus.active)
+            .temporary(true)
+            .build();
+        qrAgentRepo.save(newAgent);
+
+        rotateLogRepo.save(QrRotateLog.builder()
+            .qrCodeId(qrCodeId).toUserid(backupUserid)
+            .reason("服务老师下码前同部门补员").build());
+
+        log.info("服务老师 {} 下码前补员(临时): 活码{} 加入 {}", userId, qrCodeId, backupUserid);
+        return true;
+    }
+
+    /**
+     * 服务老师/双角色日限下码（继承照常），带分布式锁防并发重复下码。
+     *
+     * <p>与 {@link #expandQrCodeUsers} 对称地使用 {@code :rotate} 锁，避免并发回调
+     * 同时读到 {@code active} 状态、重复补员。下码前先调用
+     * {@link #supplementBeforeServiceDownCode} 兜底补员，补员失败（全局池枯竭）则
+     * 保持 active 不下码，避免 contact_way 变空。</p>
+     */
+    private void downCodeServiceTeacher(Long qrCodeId, String userId, QrCode qr, QrAgent qa) {
+        String lockKey = RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
+        String lockValue = UUID.randomUUID().toString();
+        Boolean locked = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, lockValue, Duration.ofSeconds(30));
+        if (Boolean.FALSE.equals(locked)) {
+            log.debug("轮换进行中（服务老师下码等待），跳过: qr={}", qrCodeId);
+            return;
+        }
+
+        try {
+            if (qa.getStatus() == QrAgent.AgentStatus.full) {
+                log.debug("服务老师 {} 已下码，跳过重复处理: qr={}", userId, qrCodeId);
+                return;
+            }
+            if (!supplementBeforeServiceDownCode(qrCodeId, userId, qr)) {
+                log.warn("服务老师 {} 下码前补员失败（全局池枯竭），保持 active 不下码: qr={}",
+                    userId, qrCodeId);
+                return;
+            }
+            qa.setStatus(QrAgent.AgentStatus.full);
+            qa.setUpdatedAt(LocalDateTime.now());
+            qrAgentRepo.save(qa);
+            rotateLogRepo.save(QrRotateLog.builder()
+                .qrCodeId(qrCodeId).fromUserid(userId)
+                .reason("服务老师日限下码").build());
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        syncQrCodeToWechatAsync(qrCodeId);
+                    }
+                });
+        } finally {
+            Long unlockResult = redisTemplate.execute(
+                RedisConfig.SAFE_UNLOCK_SCRIPT,
+                List.of(lockKey), lockValue);
+            if (unlockResult != null && unlockResult == 1) {
+                log.debug("分布式锁安全释放: {}", lockKey);
+            } else {
+                log.warn("分布式锁释放失败（已过期或被他人持有）: {}", lockKey);
+            }
         }
     }
 
@@ -218,7 +343,9 @@ public class AgentRotationService {
                 .role(fullAgent.getRole()) // 跟随被替换员工的角色
                 .dailyMax(backup.getDailyMax())
                 .sortOrder(qrAgentRepo.findByQrCodeIdOrderBySortOrder(qrCodeId).size())
-                .status(QrAgent.AgentStatus.active).build();
+                .status(QrAgent.AgentStatus.active)
+                .temporary(Boolean.TRUE.equals(fullAgent.getTemporary())) // 临时顶替满员，接替者继承临时性，次日一并释放
+                .build();
             qrAgentRepo.save(newAgent);
 
             fullAgent.setStatus(QrAgent.AgentStatus.full);
@@ -238,7 +365,7 @@ public class AgentRotationService {
                 });
 
             rotateLogRepo.save(QrRotateLog.builder()
-                .qrCodeId(qrCodeId).toUserid(backupUserid)
+                .qrCodeId(qrCodeId).fromUserid(fullUserId).toUserid(backupUserid)
                 .reason("全局日限到达 — 自动扩容").build());
 
             log.info("扩容完成: 活码{} 员工{}下码, {}上码", qrCodeId, fullUserId, backupUserid);

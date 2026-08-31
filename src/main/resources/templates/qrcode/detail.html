@@ -711,12 +711,13 @@
             <h6>📋 轮换日志</h6>
             <div class="table-responsive">
                 <table class="table table-sm mb-0">
-                    <thead><tr><th>时间</th><th>原因</th><th>激活员工</th></tr></thead>
+                    <thead><tr><th>时间</th><th>原因</th><th>下码员工</th><th>激活员工</th></tr></thead>
                     <tbody>
                         <tr th:each="log : ${rotateLogs}">
                             <td th:text="${#temporals.format(log.createdAt, 'MM-dd HH:mm:ss')}"></td>
                             <td th:text="${log.reason}"></td>
-                            <td><code th:text="${log.toUserid}"></code></td>
+                            <td><code th:text="${log.fromUserid} ?: '—'"></code></td>
+                            <td><code th:text="${log.toUserid} ?: '—'"></code></td>
                         </tr>
                     </tbody>
                 </table>

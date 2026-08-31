@@ -9,6 +9,7 @@ import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
+import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,6 +49,7 @@ public class EmployeeSyncService {
     private final GlobalAgentPoolService poolService;
     private final GlobalAgentPoolRepository poolRepo;
     private final AgentRepository agentRepo;
+    private final QrCodeRepository qrCodeRepo;
     private final QrAgentRepository qrAgentRepo;
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
@@ -242,7 +244,7 @@ public class EmployeeSyncService {
                 agent.setStatusReason(null);
                 agent.setMeltedCount24h(0);
                 agentRepo.save(agent);
-                if (agent.getRole() == Agent.AgentRole.receptionist) {
+                if (poolService.isPoolEligible(agent.getUserid())) {
                     poolService.ensureInPool(agent.getUserid(), 150);
                 }
                 unblocked++;
@@ -272,6 +274,9 @@ public class EmployeeSyncService {
      */
     @Transactional
     public int syncToGlobalPool() {
+        // 0. 校准角色漂移（agent.role 全量重算），确保后续过滤基于准确角色
+        recomputeAgentRoles();
+
         // 1. 清理已在池中的离职员工（企微通讯录已标记 inactive 但仍留在池中）
         //    使用轻量投影查询，避免加载完整 Employee 实体
         Set<String> inactiveUserIds = employeeRepo.findByActiveFalse().stream()
@@ -325,18 +330,16 @@ public class EmployeeSyncService {
                 log.info("全局池同步：排除 {} 个已封禁/熔断员工",
                     before - activeNotInPool.size());
             }
-            // 排除已在活码上担任服务老师/双角色的员工（避免被其他活码借走）
+            // 排除纯服务老师（无活跃接待员绑定）员工（避免被其他活码借走）
+            // 角色漂移员工（在别的活码仍担任接待员）仍可入池
             int beforeSvc = activeNotInPool.size();
+            Set<String> eligibleUserids = poolService.filterPoolEligible(
+                activeNotInPool.stream().map(Employee::getUserid).toList());
             activeNotInPool = activeNotInPool.stream()
-                .filter(e -> {
-                    Agent a = agentSnapshot.get(e.getUserid());
-                    return a == null
-                        || (a.getRole() != Agent.AgentRole.service
-                            && a.getRole() != Agent.AgentRole.dual);
-                })
+                .filter(e -> eligibleUserids.contains(e.getUserid()))
                 .toList();
             if (activeNotInPool.size() < beforeSvc) {
-                log.info("全局池同步：排除 {} 个服务老师/双角色员工",
+                log.info("全局池同步：排除 {} 个纯服务老师员工",
                     beforeSvc - activeNotInPool.size());
             }
         }
@@ -391,6 +394,78 @@ public class EmployeeSyncService {
         log.info("全局池同步完成：新增 {} 人入池，清理离职 {} 人，池总数 {} 人",
             batch.size(), cleaned, pooledUserIds.size() + batch.size());
         return batch.size();
+    }
+
+    /**
+     * 全量重算 {@link Agent#getRole()}，校准「只升级不降级」造成的角色漂移。
+     *
+     * <p>权威信号为 {@code qr_agent} 活跃绑定 + {@code QrCode.transferTargetUserid}，
+     * 其中已下码（full）的服务老师/双角色绑定仍计入（临时下码不丢身份）：
+     * <ul>
+     *   <li>含 dual 绑定 → dual</li>
+     *   <li>同时含 receptionist + service 绑定 → dual</li>
+     *   <li>仅 receptionist → receptionist</li>
+     *   <li>仅 service → service</li>
+     *   <li>无绑定且是某活码继承目标 → service（不入池）</li>
+     *   <li>无绑定且非继承目标 → receptionist（自由人，可入池）</li>
+     * </ul>
+     * 跳过 blocked 员工（已停用/离职，不参与接待）。</p>
+     *
+     * @return 本次校准（角色变化）的员工数
+     */
+    @Transactional
+    public int recomputeAgentRoles() {
+        List<Agent> agents = agentRepo.findAll().stream()
+            .filter(a -> a.getOverallStatus() != Agent.OverallStatus.blocked)
+            .toList();
+        if (agents.isEmpty()) return 0;
+
+        List<String> userids = agents.stream().map(Agent::getUserid).toList();
+
+        // 每个 userid 的活跃绑定角色集合
+        Map<String, Set<QrAgent.AgentRole>> rolesByUser = new HashMap<>();
+        for (Object[] row : qrAgentRepo.findActiveRolesByUserids(userids)) {
+            String uid = (String) row[0];
+            QrAgent.AgentRole role = (QrAgent.AgentRole) row[1];
+            rolesByUser.computeIfAbsent(uid, k -> new HashSet<>()).add(role);
+        }
+        // 已下码（full）的服务老师/双角色绑定仍应保留 service 身份，
+        // 避免日限下码后被降级为 receptionist 并误入全局池。
+        for (Object[] row : qrAgentRepo.findFullServiceRolesByUserids(userids)) {
+            String uid = (String) row[0];
+            QrAgent.AgentRole role = (QrAgent.AgentRole) row[1];
+            rolesByUser.computeIfAbsent(uid, k -> new HashSet<>()).add(role);
+        }
+
+        Set<String> transferTargets = qrCodeRepo.findTransferTargetUseridsIn(userids);
+
+        int updated = 0;
+        for (Agent a : agents) {
+            Set<QrAgent.AgentRole> roles = rolesByUser.getOrDefault(a.getUserid(), Set.of());
+            Agent.AgentRole target = deriveRole(roles, transferTargets.contains(a.getUserid()));
+            if (a.getRole() != target) {
+                a.setRole(target);
+                agentRepo.save(a);
+                updated++;
+            }
+        }
+        if (updated > 0) {
+            log.info("重算 agent.role 完成：校准 {} 人", updated);
+        }
+        return updated;
+    }
+
+    /**
+     * 由活跃绑定角色集合 + 是否继承目标，推导目标全局角色。
+     */
+    private Agent.AgentRole deriveRole(Set<QrAgent.AgentRole> roles, boolean isTransferTarget) {
+        if (roles.contains(QrAgent.AgentRole.dual)) return Agent.AgentRole.dual;
+        boolean hasReceptionist = roles.contains(QrAgent.AgentRole.receptionist);
+        boolean hasService = roles.contains(QrAgent.AgentRole.service);
+        if (hasReceptionist && hasService) return Agent.AgentRole.dual;
+        if (hasReceptionist) return Agent.AgentRole.receptionist;
+        if (hasService) return Agent.AgentRole.service;
+        return isTransferTarget ? Agent.AgentRole.service : Agent.AgentRole.receptionist;
     }
 
     /**

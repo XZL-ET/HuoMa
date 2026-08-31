@@ -263,7 +263,7 @@ public class AlertService {
      */
     @Transactional
     public void alertEmptyBackup(Long qrCodeId, String schoolName) {
-        createAlert("", "empty_backup", AgentAlert.AlertSeverity.high,
+        createAlert(null, "empty_backup", AgentAlert.AlertSeverity.high,
             Map.of("qr_code_id", qrCodeId, "school_name", schoolName),
             AgentAlert.AutoAction.none, qrCodeId);
     }
