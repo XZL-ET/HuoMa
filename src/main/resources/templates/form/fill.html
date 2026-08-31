@@ -97,7 +97,7 @@
 </div>
 <script th:inline="javascript">
     var fields = JSON.parse(/*[[${fieldsJson}]]*/ '[]');
-    var isCountyCode = /*[[${countyCode} ?: false}]]*/ false;
+    var isCountyCode = /*[[${countyCode ?: false}]]*/ false;
 
     // ===== 动态表单字段（既有逻辑） =====
     var container = document.getElementById('formFields');
