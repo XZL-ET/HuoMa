@@ -7,6 +7,7 @@ import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.TransferService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.stream.PendingMessagesSummary;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -58,6 +59,9 @@ public class TransferMonitorWorker {
 
     /** Stream 积压告警限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
     private static volatile long lastStreamBacklogAlertTime = 0L;
+
+    /** Transfer Stream PEL 积压告警阈值：未 ACK 消息数达到此值才告警，避免退避重试的少量 pending 造成误报 */
+    private static final long PENDING_BACKLOG_THRESHOLD = 200L;
 
     /**
      * 每 30 分钟执行一次，追踪在职继承的确认结果。
@@ -203,38 +207,39 @@ public class TransferMonitorWorker {
     }
 
     /**
-     * 每 15 分钟检查一次 Transfer Stream 积压情况。
+     * 每 15 分钟检查一次 Transfer Stream 消费积压情况。
      *
-     * <p>当 Stream 长度超过 MAXLEN 的 80% 时发出告警，提示消息可能即将被 trim 丢弃。
-     * 积压通常意味着 Worker 消费速度跟不上 {@link com.bookstore.qrcode.job.InheritanceJob}
-     * 的生产速度，需排查 Worker 线程数或下游 API 响应时间。
+     * <p>真正的「积压」指标是消费组 PEL 中未 ACK 的消息数（{@code XPENDING}），
+     * 而非 {@code XLEN}（Stream 总长度）。{@code XLEN} 包含已消费但尚未被
+     * {@code XTRIM MAXLEN} 裁剪的历史条目，会单调累积到 MAXLEN 才触发裁剪，
+     * 与 Worker 是否跟得上生产速度无关，据此告警会产生永久误报。</p>
+     *
+     * <p>当 PEL 未 ACK 消息数达到 {@link #PENDING_BACKLOG_THRESHOLD} 时发出告警，
+     * 说明 Worker 消费速度跟不上 {@link com.bookstore.qrcode.job.InheritanceJob}
+     * 的生产速度或已异常，需排查 Worker 线程数或下游 API 响应时间。
      * 告警限流：每小时最多发送一次，避免告警风暴。</p>
      */
     @Scheduled(cron = "0 */15 * * * *")
     public void checkStreamBacklog() {
         try {
-            Long len = redisTemplate.opsForStream().size(
-                com.bookstore.qrcode.config.RedisConfig.TRANSFER_STREAM_KEY);
-            if (len == null) return;
+            PendingMessagesSummary pendingSummary = redisTemplate.opsForStream()
+                .pending(RedisConfig.TRANSFER_STREAM_KEY, RedisConfig.TRANSFER_CONSUMER_GROUP);
+            if (pendingSummary == null) return;
+            long pending = pendingSummary.getTotalPendingMessages();
 
-            long maxlen = com.bookstore.qrcode.config.RedisConfig.TRANSFER_STREAM_MAXLEN;
-            double ratio = (double) len / (double) maxlen;
-
-            if (ratio >= 0.8) {
+            if (pending >= PENDING_BACKLOG_THRESHOLD) {
                 long now = System.currentTimeMillis();
                 if (now - lastStreamBacklogAlertTime > 3600_000L) {
                     lastStreamBacklogAlertTime = now;
-                    String level = ratio >= 0.95 ? "严重" : "警告";
                     alertService.createAlert(null, "transfer_stream_backlog",
-                        ratio >= 0.95 ? AgentAlert.AlertSeverity.high : AgentAlert.AlertSeverity.medium,
-                        String.format("%s: Transfer Stream 积压 %d/%d (%.0f%%)，"
-                            + "接近 MAXLEN 可能导致消息丢失，请检查 Worker 消费速度",
-                            level, len, maxlen, ratio * 100),
+                        AgentAlert.AlertSeverity.high,
+                        String.format("Transfer Stream 消费积压: %d 条消息未 ACK（PEL 堆积），"
+                            + "Worker 消费速度或异常，请检查 TransferWorker", pending),
                         AgentAlert.AutoAction.none, null);
                 }
-                log.warn("Transfer Stream 积压: {}/{} ({}%)", len, maxlen, Math.round(ratio * 100));
+                log.warn("Transfer Stream 消费积压: {} 条消息未 ACK", pending);
             } else {
-                log.debug("Transfer Stream 正常: {}/{} ({}%)", len, maxlen, Math.round(ratio * 100));
+                log.debug("Transfer Stream 消费正常: PEL pending={}", pending);
             }
         } catch (Exception e) {
             log.debug("Transfer Stream 积压检查跳过: {}", e.getMessage());
