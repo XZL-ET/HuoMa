@@ -323,6 +323,7 @@ public class OutboundMsgWorker {
                     externalUserId, formAttach != null);
             } catch (Exception e) {
                 // welcome_code expired (valid ~20s) or already used — fallback to sendMessage
+                // 不在此处检测添加失败：welcome_code 过期是常态，真正的失败由降级路径 sendMessage 判定
                 log.warn("send_welcome_msg 失败，降级到 sendMessage: external={}", externalUserId, e);
             }
         }
@@ -340,6 +341,7 @@ public class OutboundMsgWorker {
                         && ((WecomPermanentException) e).getErrcode() == 48002) {
                     alertNoPermission(userid);
                 }
+                detectAddFailure(userid, externalUserId, state, e);
             }
         }
 
@@ -395,6 +397,23 @@ public class OutboundMsgWorker {
     private String getField(JsonNode event, String field) {
         return event.has(field) && !event.get(field).isNull()
             ? event.get(field).asText() : null;
+    }
+
+    /**
+     * 检测「添加客户失败」相关错误码并触发累计告警。
+     *
+     * <p>发欢迎语等下游 API 返回 25002(拒绝)、84073(客户删除)、84061(关系不存在) 时，
+     * 说明客户关系已失效或添加未真正完成。通过 {@link AlertService#handleCustomerApiError}
+     * 累计计数，达到阈值后自动暂停员工。非目标错误码直接忽略。</p>
+     */
+    private void detectAddFailure(String userid, String externalUserid, String state, Exception e) {
+        if (!(e instanceof WecomApiException wae)) return;
+        int errcode = wae.getErrcode();
+        if (errcode == WecomErrorCodes.REJECTED
+                || errcode == WecomErrorCodes.DELETED_BY_USER
+                || errcode == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+            alertService.handleCustomerApiError(userid, externalUserid, errcode, wae.getErrmsg(), state);
+        }
     }
 
     /** 等价于 {@code s == null || s.isBlank()}，避免 NPE 并统一空值判断语义 */

@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.bookstore.qrcode.wecom.WecomRateLimitException;
 import com.bookstore.qrcode.wecom.WecomTokenExpiredException;
 import com.bookstore.qrcode.wecom.WecomTransientException;
@@ -47,6 +48,7 @@ public class TagService {
     private final FormSubmissionRepository formSubmissionRepo;
     private final WecomApiClient wecomApi;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final AlertService alertService;
 
     /**
      * 缓存的企微标签组 ID（按 group_name 索引）。
@@ -136,6 +138,7 @@ public class TagService {
                         batchTagNames, batchTagIds, e.getErrcode(), e);
                 } catch (Exception e) {
                     log.error("企微打标失败(永久): tags={}, wecomTagIds={}", batchTagNames, batchTagIds, e);
+                    detectAddFailure(userId, externalUserId, state, e);
                 }
             }
 
@@ -185,6 +188,7 @@ public class TagService {
                             customTagNames, customTagIds, e.getErrcode(), e);
                     } catch (Exception e) {
                         log.error("企微打标失败(永久): tags={}, wecomTagIds={}", customTagNames, customTagIds, e);
+                        detectAddFailure(userId, externalUserId, state, e);
                     }
                 }
             }
@@ -202,6 +206,23 @@ public class TagService {
             // 异常向外抛出让 TagWorker/MessageGuard 触发重试和死信机制
             log.error("自动打标异常: external={}, state={}", externalUserId, state, e);
             throw e;
+        }
+    }
+
+    /**
+     * 检测「添加客户失败」相关错误码并触发累计告警。
+     *
+     * <p>打标等下游 API 返回 25002(拒绝)、84073(客户删除)、84061(关系不存在) 时，
+     * 说明客户关系已失效或添加未真正完成。通过 {@link AlertService#handleCustomerApiError}
+     * 累计计数，达到阈值后自动暂停员工。非目标错误码直接忽略。</p>
+     */
+    private void detectAddFailure(String userid, String externalUserid, String state, Exception e) {
+        if (!(e instanceof WecomApiException wae)) return;
+        int errcode = wae.getErrcode();
+        if (errcode == WecomErrorCodes.REJECTED
+                || errcode == WecomErrorCodes.DELETED_BY_USER
+                || errcode == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+            alertService.handleCustomerApiError(userid, externalUserid, errcode, wae.getErrmsg(), state);
         }
     }
 

@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS customer_tag (
 CREATE TABLE IF NOT EXISTS agent_alert (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_userid VARCHAR(100) NULL COMMENT '员工ID（系统告警时为 NULL）',
-    alert_type VARCHAR(50) NOT NULL COMMENT 'blocked/greeting_fail/low_approval/high_delete/traffic_spike/melt/empty_backup',  -- 异常类型枚举
+    alert_type VARCHAR(50) NOT NULL COMMENT 'add_fail/transfer_fail/melt/empty_backup/wechat_unavailable/traffic_spike',  -- 异常类型枚举
     severity ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
     detail JSON COMMENT '异常详情',
     auto_action ENUM('none','paused','removed','melted') DEFAULT 'none',

@@ -109,7 +109,7 @@
                 <select name="type" class="form-select form-select-sm">
                     <option value="">全部类型</option>
                     <option value="add_fail" th:selected="${typeFilter == 'add_fail'}">添加失败</option>
-                    <option value="greeting_fail" th:selected="${typeFilter == 'greeting_fail'}">欢迎语失败</option>
+                    <option value="transfer_fail" th:selected="${typeFilter == 'transfer_fail'}">接替失败</option>
                     <option value="melt" th:selected="${typeFilter == 'melt'}">熔断</option>
                     <option value="empty_backup" th:selected="${typeFilter == 'empty_backup'}">后备池空</option>
                 </select>
@@ -158,8 +158,8 @@
                         <!-- 类型标签 -->
                         <td>
                             <span class="badge"
-                                  th:classappend="${alert.alertType == 'melt' ? 'bg-dark' : (alert.alertType == 'add_fail' ? 'bg-danger' : (alert.alertType == 'greeting_fail' ? 'bg-warning text-dark' : (alert.alertType == 'empty_backup' ? 'bg-info text-dark' : 'bg-secondary')))}"
-                                  th:text="${alert.alertType == 'melt' ? '熔断' : (alert.alertType == 'add_fail' ? '添加失败' : (alert.alertType == 'greeting_fail' ? '欢迎语失败' : (alert.alertType == 'empty_backup' ? '后备池空' : alert.alertType)))}">类型</span>
+                                  th:classappend="${alert.alertType == 'melt' ? 'bg-dark' : (alert.alertType == 'add_fail' ? 'bg-danger' : (alert.alertType == 'transfer_fail' ? 'bg-warning text-dark' : (alert.alertType == 'empty_backup' ? 'bg-info text-dark' : 'bg-secondary')))}"
+                                  th:text="${alert.alertType == 'melt' ? '熔断' : (alert.alertType == 'add_fail' ? '添加失败' : (alert.alertType == 'transfer_fail' ? '接替失败' : (alert.alertType == 'empty_backup' ? '后备池空' : alert.alertType)))}">类型</span>
                         </td>
                         <!-- 严重级别 -->
                         <td>

@@ -1,7 +1,9 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -9,28 +11,38 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * 异常监控与告警服务。
  *
- * <p>接收企微回调中的添加失败事件(add_fail) + 巡检发现的异常，按严重程度分级记录并触发自动处置动作。</p>
+ * <p>按严重程度分级记录并触发自动处置动作，覆盖两类真实失败信号：</p>
+ * <ul>
+ *   <li><b>客户添加失败</b> — 下游企微 API（发欢迎语、打标）返回 25002/84073/84061 等错误码时，
+ *       通过 {@link #handleCustomerApiError} 累计计数，达到阈值后告警并暂停员工。</li>
+ *   <li><b>客户接替失败</b> — 企微推送 {@code transfer_fail} 事件时，通过
+ *       {@link #handleTransferFail} 映射 {@code customer_refused} / {@code customer_limit_exceed} 告警。</li>
+ * </ul>
  *
  * <h3>企微错误码分级处理策略</h3>
  * <table>
  *   <tr><th>错误码</th><th>含义</th><th>处理方式</th></tr>
- *   <tr><td>84061</td><td>操作频率过高(RATE_LIMITED)</td><td>立即熔断({@link #meltAgent})，从所有活码移除，冷却 30 分钟</td></tr>
- *   <tr><td>25002</td><td>拒绝添加（客户主动拒绝/操作被拦截）</td><td>累计型异常，阈值 10 次/小时触发暂停</td></tr>
- *   <tr><td>84073</td><td>客户已删除员工或被删</td><td>累计型异常，阈值 5 次/小时触发暂停</td></tr>
- *   <tr><td>其他</td><td>其他失败原因</td><td>累计型异常，默认阈值 5 次/小时触发暂停</td></tr>
+ *   <tr><td>25002</td><td>拒绝添加（客户主动拒绝/操作被拦截）</td><td>累计型异常，阈值 10 个客户/小时触发暂停</td></tr>
+ *   <tr><td>84073</td><td>客户已删除员工或被删</td><td>累计型异常，阈值 5 个客户/小时触发暂停</td></tr>
+ *   <tr><td>84061</td><td>客户关系不存在(not external contact)</td><td>累计型异常，默认阈值 5 个客户/小时触发暂停</td></tr>
+ *   <tr><td>其他</td><td>其他失败原因</td><td>累计型异常，默认阈值 5 个客户/小时触发暂停</td></tr>
  * </table>
  *
  * <p>累计型异常采用 1 小时滑动窗口计数，达到阈值后自动暂停员工({@link #pauseAgent})，避免高频率失败影响用户体验。</p>
@@ -48,94 +60,120 @@ public class AlertService {
     private final QrCodeRepository qrCodeRepo;
     private final GlobalAgentPoolRepository poolRepo;
     private final ObjectMapper objectMapper;
+    private final StringRedisTemplate redisTemplate;
+
+    /** 累计型告警 1 小时滑动窗口计数 Lua 脚本：ZADD + ZREMRANGE + ZCARD + EXPIRE 原子执行 */
+    private static final String ALERT_COUNT_LUA =
+        "local key = KEYS[1]\n"
+        + "local now = tonumber(ARGV[1])\n"
+        + "local window = tonumber(ARGV[2])\n"
+        + "local member = ARGV[3]\n"
+        + "local ttl = tonumber(ARGV[4])\n"
+        + "redis.call('ZADD', key, now, member)\n"
+        + "redis.call('ZREMRANGEBYSCORE', key, 0, now - window)\n"
+        + "redis.call('EXPIRE', key, ttl)\n"
+        + "local count = redis.call('ZCARD', key)\n"
+        + "return count";
+
+    private static final DefaultRedisScript<Long> ALERT_COUNT_SCRIPT;
+
+    static {
+        ALERT_COUNT_SCRIPT = new DefaultRedisScript<>();
+        ALERT_COUNT_SCRIPT.setScriptText(ALERT_COUNT_LUA);
+        ALERT_COUNT_SCRIPT.setResultType(Long.class);
+    }
 
     /**
-     * 处理企微回调中的添加失败事件(add_fail)。
+     * 处理客户添加失败相关的企微 API 错误码。
      *
-     * <p>根据失败原因中的错误码分级处理：</p>
+     * <p>这些错误码并非来自回调事件，而是发欢迎语 / 打标等下游企微 API 调用返回：
      * <ul>
-     *   <li><b>84061（频率过高风控）：</b>立即熔断员工({@link #meltAgent})，无需累计</li>
-     *   <li><b>其他错误码：</b>按 1 小时滑动窗口累计次数，达到阈值后暂停员工({@link #pauseAgent})</li>
-     *   <li>达到阈值一半时记录中等告警(medium)作为提前预警</li>
+     *   <li><b>25002</b> — 客户拒绝添加好友请求</li>
+     *   <li><b>84073</b> — 客户已删除该服务人员</li>
+     *   <li><b>84061</b> — 客户关系不存在（not external contact）</li>
      * </ul>
+     * 采用 1 小时滑动窗口累计：按错误码分桶（各错误码独立计数），
+     * 且同一客户(external_userid)在窗口内只计一次，避免同一根因在发欢迎语/打标等多个
+     * 下游 API 点被重复放大。达到阈值后暂停员工({@link #pauseAgent})，
+     * 阈值一半时记录中等告警作为提前预警。</p>
      *
-     * @param event 企微回调事件 JSON 节点，包含 userid、external_userid、fail_reason、state 等字段
+     * @param userId         接待员工 userid
+     * @param externalUserId 客户 external_userid（可为 null）
+     * @param errcode        企微返回的错误码
+     * @param reason         失败原因描述（企微 errmsg 或本地文案）
+     * @param state          活码标识（用于反查 qrCodeId，可为 null）
      */
     @Transactional
-    public void handleAddFail(JsonNode event) {
-        String userId = getStr(event, "userid");
-        String externalUserId = getStr(event, "external_userid");
-        String failReason = getStr(event, "fail_reason");
-        String state = getStr(event, "state");
-
+    public void handleCustomerApiError(String userId, String externalUserId,
+                                       int errcode, String reason, String state) {
         if (userId == null) return;
 
         Long qrCodeId = findQrCodeId(state);
-        int errcode = extractErrorCode(failReason);
-
-        // 错误码 84061 = 企微风控 "操作频率过高"(RATE_LIMITED)
-        // 这是最严重的企微风控信号，表示员工操作频率触发了企微接口限制
-        // 需要立即熔断，将该员工从所有活码中移除并冷却 30 分钟，避免被企微封禁
-        if (errcode == 84061) {
-            meltAgent(userId, qrCodeId, "企微风控：操作频率过高(84061)");
-            return;
-        }
-
-        // 累计型异常：统计该员工过去 1 小时内 add_fail 事件的总次数
-        LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
-        long count = alertRepo.countByAgentUseridAndAlertTypeAndCreatedAtAfter(
-            userId, "add_fail", oneHourAgo);
-
-        // 不同错误码使用不同的阈值：
-        //   - 25002（客户拒绝/操作被拦截）：容忍度较高，10 次/小时才触发
-        //   - 84073（客户已删除员工）：已失去联系，5 次/小时触发暂停
-        //   - 默认（其他失败）：5 次/小时触发暂停
-        int threshold = 5; // 默认阈值
-        if (errcode == 25002) threshold = 10;  // 拒绝添加，容忍度高
-        if (errcode == 84073) threshold = 5;   // 被客户删除，容忍度低
+        // 计数维度：按错误码分桶（25002/84073/84061 各自独立累计），
+        // 且同一客户(external_userid)在窗口内只计一次，避免同一根因在多个下游 API 点被放大
+        String dimension = "add_fail:" + errcode;
+        long count = incrementAlertCount(dimension, userId, externalUserId);
+        int threshold = WecomErrorCodes.ACCUMULATE_THRESHOLD.getOrDefault(errcode, 5);
 
         if (count >= threshold) {
-            // 达到阈值 → 记录高级告警(high) 并自动暂停该员工
+            // 达到阈值 → 重置计数（防止后续每次失败重复告警）+ 高级告警 + 自动暂停
+            resetAlertCount(dimension, userId);
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("errcode", errcode);
+            detail.put("count", count);
+            detail.put("reason", reason);
+            detail.put("external_userid", externalUserId);
             createAlert(userId, "add_fail", AgentAlert.AlertSeverity.high,
-                Map.of("errcode", errcode, "count", count, "reason", failReason,
-                       "external_userid", externalUserId),
-                AgentAlert.AutoAction.paused, qrCodeId);
+                detail, AgentAlert.AutoAction.paused, qrCodeId);
             pauseAgent(userId);
-        } else if (count >= threshold / 2) {
-            // 达到阈值的一半 → 记录中级告警(medium) 作为提前预警，不自动处置
+        } else if (count == threshold / 2) {
+            // 恰好跨过阈值一半 → 中级告警作为提前预警（仅触发一次，不自动处置）
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("errcode", errcode);
+            detail.put("count", count);
+            detail.put("reason", reason);
             createAlert(userId, "add_fail", AgentAlert.AlertSeverity.medium,
-                Map.of("errcode", errcode, "count", count, "reason", failReason),
-                AgentAlert.AutoAction.none, qrCodeId);
+                detail, AgentAlert.AutoAction.none, qrCodeId);
         }
     }
 
     /**
-     * 处理欢迎语发送失败事件(greeting_fail)。
+     * 处理客户接替失败事件(transfer_fail)。
      *
-     * <p>欢迎语发送失败通常由企微接口临时异常或客户已删除员工导致。
-     * 采用固定阈值 5 次/小时，达到后自动暂停该员工并记录高级告警。</p>
+     * <p>企微在客户拒绝接替或接替成员客户数达上限时，推送 {@code change_external_contact}
+     * 且 {@code ChangeType=transfer_fail} 的事件，携带 {@code FailReason} 枚举：
+     * <ul>
+     *   <li>{@code customer_refused} — 客户拒绝接替</li>
+     *   <li>{@code customer_limit_exceed} — 接替成员客户数达上限</li>
+     * </ul>
+     * 与 {@code get_transfer_result} 轮询（已把 status 3/4 标为 rejected）互为补充，
+     * 这里是企微的实时推送告警。接替失败多为客户侧行为，不做自动暂停/熔断。</p>
      *
-     * <p>与 {@link #handleAddFail} 的区别：欢迎语失败不区分错误码，统一使用 5 次阈值，
-     * 且不关联特定活码(qrCodeId 为 null)。</p>
-     *
-     * @param event 企微回调事件 JSON 节点，包含 userid、external_userid 等字段
+     * @param event 企微回调事件 JSON 节点，包含 userid、external_userid、fail_reason 字段
      */
     @Transactional
-    public void handleGreetingFail(JsonNode event) {
+    public void handleTransferFail(JsonNode event) {
         String userId = getStr(event, "userid");
         String externalUserId = getStr(event, "external_userid");
-        if (userId == null) return;
+        String failReason = getStr(event, "fail_reason");
 
-        LocalDateTime oneHourAgo = LocalDateTime.now().minusHours(1);
-        long count = alertRepo.countByAgentUseridAndAlertTypeAndCreatedAtAfter(
-            userId, "greeting_fail", oneHourAgo);
-
-        if (count >= 5) {
-            createAlert(userId, "greeting_fail", AgentAlert.AlertSeverity.high,
-                Map.of("count", count, "external_userid", externalUserId),
-                AgentAlert.AutoAction.paused, null);
-            pauseAgent(userId);
+        String reason;
+        AgentAlert.AlertSeverity severity;
+        if ("customer_refused".equals(failReason)) {
+            reason = "客户拒绝接替";
+            severity = AgentAlert.AlertSeverity.high;
+        } else if ("customer_limit_exceed".equals(failReason)) {
+            reason = "接替成员客户数达上限";
+            severity = AgentAlert.AlertSeverity.high;
+        } else {
+            reason = failReason != null ? failReason : "未知接替失败原因";
+            severity = AgentAlert.AlertSeverity.medium;
         }
+
+        createAlert(userId, "transfer_fail", severity,
+            Map.of("fail_reason", failReason, "reason", reason,
+                   "external_userid", externalUserId),
+            AgentAlert.AutoAction.none, null);
     }
 
     /**
@@ -143,7 +181,6 @@ public class AlertService {
      *
      * <p>熔断是最高级别的自动处置动作，触发条件：</p>
      * <ul>
-     *   <li>企微风控错误码 84061（操作频率过高）</li>
      *   <li>{@link com.bookstore.qrcode.service.RateLimiterService} 检测到 1 分钟内添加超过 60 人</li>
      * </ul>
      *
@@ -206,7 +243,7 @@ public class AlertService {
      * <p>告警记录包含以下关键信息：</p>
      * <ul>
      *   <li>关联员工(agentUserid)和活码(qrCodeId)</li>
-     *   <li>告警类型(alertType)：add_fail / greeting_fail / melt / empty_backup</li>
+     *   <li>告警类型(alertType)：add_fail / transfer_fail / melt / empty_backup</li>
      *   <li>严重程度(severity)：low / medium / high</li>
      *   <li>详细内容(detail)：JSON 格式，包含错误码、次数等上下文</li>
      *   <li>自动处置动作(autoAction)：none / paused / melted</li>
@@ -214,7 +251,7 @@ public class AlertService {
      * </ul>
      *
      * @param agentUserid 关联的员工 userid
-     * @param alertType   告警类型（add_fail、greeting_fail、melt、empty_backup）
+     * @param alertType   告警类型（add_fail、transfer_fail、melt、empty_backup）
      * @param severity    严重等级
      * @param detail      详细内容（String 或 Map，自动序列化为 JSON）
      * @param autoAction  已执行的自动处置动作
@@ -285,6 +322,12 @@ public class AlertService {
     private void pauseAgent(String userId) {
         Agent agent = agentRepo.findByIdForUpdate(userId).orElse(null);
         if (agent != null) {
+            // 已熔断/封禁是更高处置级别，不降级为 warning（否则会绕过熔断）
+            if (agent.getOverallStatus() == Agent.OverallStatus.blocked
+                || agent.getOverallStatus() == Agent.OverallStatus.melted) {
+                log.debug("员工 {} 已熔断/封禁，跳过暂停降级", userId);
+                return;
+            }
             agent.setOverallStatus(Agent.OverallStatus.warning);
             Map<String, Object> reason = new HashMap<>();
             reason.put("auto_paused", true);
@@ -292,6 +335,38 @@ public class AlertService {
             agent.setStatusReason(objectMapper.valueToTree(reason).toString());
             agentRepo.save(agent);
         }
+    }
+
+    /**
+     * 累计型异常计数 +1，返回 1 小时滑动窗口内的累计次数（去重后）。
+     * <p>
+     * 使用 Redis Sorted Set 滑动窗口（与 {@link RateLimiterService} 同模式），
+     * 以 {@code dedupMember}(external_userid) 作为 member 写入，同一 member 在窗口内
+     * 只占一个槽位（ZADD 同 member 仅刷新 score），因此 {@code ZCARD} 返回的是
+     * 「窗口内不同客户数」而非「失败次数」，实现同一客户同一错误码只计一次的去重。
+     * 当 {@code dedupMember} 为 null 时退化为时间戳 member（每次唯一，去重失效但至少计数）。
+     * 计数与 {@link AgentAlert} 告警记录解耦，避免「告警记录数 = 失败次数」的死循环。
+     * </p>
+     *
+     * @param dimension  计数维度（如 add_fail:25002，含错误码分桶）
+     * @param userId     员工 userid
+     * @param dedupMember 去重成员（客户 external_userid，可为 null）
+     * @return 窗口内累计数（去重后的不同客户数，含本次）
+     */
+    private long incrementAlertCount(String dimension, String userId, String dedupMember) {
+        long now = Instant.now().getEpochSecond();
+        String member = (dedupMember != null && !dedupMember.isBlank())
+            ? dedupMember : (now + ":" + System.nanoTime());
+        String key = RedisConfig.ALERT_COUNT_KEY_PREFIX + dimension + ":" + userId;
+        Long count = redisTemplate.execute(ALERT_COUNT_SCRIPT, List.of(key),
+            String.valueOf(now), "3600", member, "7200");
+        return count == null ? 0L : count;
+    }
+
+    /** 重置累计型异常计数（达到阈值触发告警后调用，防止后续失败重复告警） */
+    private void resetAlertCount(String dimension, String userId) {
+        String key = RedisConfig.ALERT_COUNT_KEY_PREFIX + dimension + ":" + userId;
+        redisTemplate.delete(key);
     }
 
     /**
@@ -307,32 +382,6 @@ public class AlertService {
         if (state == null) return null;
         return qrCodeRepo.findBySchoolId(state)
             .map(QrCode::getId).orElse(null);
-    }
-
-    /**
-     * 从企微返回的失败原因字符串中提取错误码。
-     *
-     * <p>企微回调的 fail_reason 格式通常为 {@code "errcode:84061, errmsg:xxx"}，
-     * 本方法遍历所有冒号分隔的片段，取第一个纯数字串作为错误码。</p>
-     *
-     * <p>如果无法提取到错误码（格式异常或为空），返回 -1 表示未知错误。</p>
-     *
-     * @param failReason 企微返回的失败原因字符串
-     * @return 错误码整数，若无法解析则返回 -1
-     */
-    private int extractErrorCode(String failReason) {
-        if (failReason == null) return -1;
-        try {
-            // 尝试从 "errcode:xxx" 格式提取
-            String[] parts = failReason.split(":");
-            for (String part : parts) {
-                String trimmed = part.trim();
-                if (trimmed.matches("\\d+")) {
-                    return Integer.parseInt(trimmed);
-                }
-            }
-        } catch (Exception ignored) {}
-        return -1;
     }
 
     /**

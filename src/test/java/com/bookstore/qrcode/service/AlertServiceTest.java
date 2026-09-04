@@ -10,7 +10,6 @@ import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +18,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.Optional;
 
@@ -34,6 +35,7 @@ class AlertServiceTest {
     @Mock private AgentRepository agentRepo;
     @Mock private QrCodeRepository qrCodeRepo;
     @Mock private GlobalAgentPoolRepository poolRepo;
+    @Mock private StringRedisTemplate redisTemplate;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -114,24 +116,72 @@ class AlertServiceTest {
     }
 
     @Test
-    @Disabled("handleAddFail uses @Transactional + Spy ObjectMapper — needs @SpringBootTest for full integration")
-    @DisplayName("handleAddFail — errcode 84061 应立即熔断")
-    void shouldMeltAgentOn84061() throws Exception {}
-
-    @Test
-    @DisplayName("handleAddFail — 累计达到阈值一半应创建 medium 告警")
+    @DisplayName("handleCustomerApiError — 累计恰好达到阈值一半应创建 medium 告警")
     void shouldCreateMediumAlertAtHalfThreshold() throws Exception {
-        JsonNode event = objectMapper.readTree("""
-            {"userid":"user1","external_userid":"ext1","fail_reason":"errcode:84073,deleted","state":"BJ-001"}
-            """);
         QrCode qrCode = QrCode.builder().id(1L).schoolId("BJ-001").build();
         when(qrCodeRepo.findBySchoolId("BJ-001")).thenReturn(Optional.of(qrCode));
-        // 84073 阈值 5，半数 = 2
-        when(alertRepo.countByAgentUseridAndAlertTypeAndCreatedAtAfter(eq("user1"), eq("add_fail"), any()))
+        // 84073 阈值 5，半数 = 2：Redis 滑动窗口计数返回 2 → 触发 medium 预警
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
                 .thenReturn(2L);
 
-        alertService.handleAddFail(event);
+        alertService.handleCustomerApiError("user1", "ext1", 84073, "84073:deleted", "BJ-001");
 
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.medium);
+        assertThat(captor.getValue().getAlertType()).isEqualTo("add_fail");
+        // medium 预警不触发自动暂停
         verify(agentRepo, never()).findByIdForUpdate(anyString());
+    }
+
+    @Test
+    @DisplayName("handleCustomerApiError — 达到阈值应创建 high 告警并暂停员工")
+    void shouldCreateHighAlertAndPauseAtThreshold() {
+        QrCode qrCode = QrCode.builder().id(1L).schoolId("BJ-001").build();
+        when(qrCodeRepo.findBySchoolId("BJ-001")).thenReturn(Optional.of(qrCode));
+        // 25002 阈值 10：滑动窗口返回 10 → high 告警 + 暂停
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
+                .thenReturn(10L);
+        Agent agent = new Agent();
+        agent.setUserid("user1");
+        agent.setOverallStatus(Agent.OverallStatus.normal);
+        when(agentRepo.findByIdForUpdate("user1")).thenReturn(Optional.of(agent));
+
+        alertService.handleCustomerApiError("user1", "ext1", 25002, "拒绝添加", "BJ-001");
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
+        assertThat(agent.getOverallStatus()).isEqualTo(Agent.OverallStatus.warning);
+    }
+
+    @Test
+    @DisplayName("handleTransferFail — customer_refused 应创建 high 告警")
+    void shouldCreateAlertOnCustomerRefused() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+            {"userid":"user1","external_userid":"ext1","fail_reason":"customer_refused"}
+            """);
+
+        alertService.handleTransferFail(event);
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getAlertType()).isEqualTo("transfer_fail");
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
+        assertThat(captor.getValue().getDetail()).contains("客户拒绝接替");
+    }
+
+    @Test
+    @DisplayName("handleTransferFail — customer_limit_exceed 应创建 high 告警")
+    void shouldCreateAlertOnCustomerLimitExceed() throws Exception {
+        JsonNode event = objectMapper.readTree("""
+            {"userid":"user1","external_userid":"ext1","fail_reason":"customer_limit_exceed"}
+            """);
+
+        alertService.handleTransferFail(event);
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
     }
 }

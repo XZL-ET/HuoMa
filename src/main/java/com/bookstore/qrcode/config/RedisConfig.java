@@ -190,6 +190,16 @@ public class RedisConfig {
     public static final String SCHOOL_RATE_KEY_PREFIX = "school_rate:";
 
     /**
+     * 累计型异常告警计数 Key 前缀。
+     * <p>
+     * 完整 Key 格式：<code>alert:count:{alertType}:{userid}</code>
+     * <br>基于 Redis Sorted Set 实现 1 小时滑动窗口计数，用于 {@code add_fail}
+     * 等累计型异常达到阈值后的告警与自动暂停判定。
+     * </p>
+     */
+    public static final String ALERT_COUNT_KEY_PREFIX = "alert:count:";
+
+    /**
      * 配置并注入 StringRedisTemplate Bean。
      * <p>
      * 显式设置所有序列化器为 UTF-8 字符串序列化，确保：

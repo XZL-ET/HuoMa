@@ -39,9 +39,8 @@ import java.util.concurrent.Executor;
  *   <li>{@code add_external_contact} —— 客户添加成功，执行速率检测、客户入库、日计数 3 步；
  *       自动打标以事件形式发布到独立 Stream 供 {@link TagWorker} 异步消费；
  *       在职继承改为管理员手动触发；</li>
- *   <li>{@code add_fail} —— 添加失败告警；</li>
  *   <li>{@code del_external_contact} —— 客户删除员工；</li>
- *   <li>{@code greeting_fail} —— 欢迎语发送失败告警。</li>
+ *   <li>{@code transfer_fail} —— 客户接替失败告警。</li>
  * </ul>
  *
  * <p><b>ACK 机制：</b>每条消息处理完成后（无论成功或失败）都会立即调用
@@ -266,9 +265,7 @@ public class CallbackWorker {
      * <ul>
      *   <li>{@code change_external_contact} —— 进一步解析 XML 获取 ChangeType 并分发；</li>
      *   <li>{@code add_external_contact} —— 直接处理添加成功情况；</li>
-     *   <li>{@code add_fail} —— 客户添加失败告警；</li>
-     *   <li>{@code del_external_contact} —— 客户删除员工处理；</li>
-     *   <li>{@code greeting_fail} —— 欢迎语发送失败告警。</li>
+     *   <li>{@code del_external_contact} —— 客户删除员工处理。</li>
      * </ul>
      *
      * @param eventJson 回调事件的完整 JSON 字符串
@@ -288,17 +285,9 @@ public class CallbackWorker {
                 // 添加外部联系人成功（有些回调格式可能不同）
                 handleAddSuccess(event);
                 break;
-            case "add_fail":
-                // 添加失败
-                alertService.handleAddFail(event);
-                break;
             case "del_external_contact":
                 // 客户删除员工
                 customerService.handleDelete(event);
-                break;
-            case "greeting_fail":
-                // 欢迎语发送失败
-                alertService.handleGreetingFail(event);
                 break;
             default:
                 log.debug("未处理的事件类型: {}", eventType);
@@ -314,8 +303,7 @@ public class CallbackWorker {
      * <ul>
      *   <li>{@code add_external_contact} —— 客户添加员工；</li>
      *   <li>{@code del_external_contact} —— 客户删除员工；</li>
-     *   <li>{@code add_fail} —— 添加失败；</li>
-     *   <li>{@code greeting_fail} —— 欢迎语失败。</li>
+     *   <li>{@code transfer_fail} —— 客户接替失败。</li>
      * </ul>
      *
      * @param event 解析后的 JSON 节点，需包含 {@code raw_xml} 字段
@@ -330,10 +318,8 @@ public class CallbackWorker {
             handleAddSuccess(event);
         } else if ("del_external_contact".equals(changeType)) {
             customerService.handleDelete(event);
-        } else if ("add_fail".equals(changeType)) {
-            alertService.handleAddFail(event);
-        } else if ("greeting_fail".equals(changeType)) {
-            alertService.handleGreetingFail(event);
+        } else if ("transfer_fail".equals(changeType)) {
+            alertService.handleTransferFail(event);
         }
     }
 

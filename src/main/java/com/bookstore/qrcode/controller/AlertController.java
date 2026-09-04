@@ -53,7 +53,7 @@ public class AlertController {
      * <ul>
      *   <li>status — 告警状态：open / resolved / auto_resolved</li>
      *   <li>severity — 严重程度：low / medium / high</li>
-     *   <li>type — 告警类型：add_fail / greeting_fail / melt / empty_backup</li>
+     *   <li>type — 告警类型：add_fail / transfer_fail / melt / empty_backup</li>
      *   <li>agent — 员工账号模糊搜索</li>
      *   <li>startDate / endDate — 时间范围</li>
      * </ul>
