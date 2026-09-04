@@ -255,7 +255,7 @@ public class TransferService {
             } catch (WecomApiException e) {
                 // 可重试异常（token 过期/限流/网络错误）→ 往上抛给 TransferWorker，
                 // 由其 classifyWecomError 决定具体重试策略（刷新 token / 等待退避 / DLQ）
-                // 例外：45035（操作冲突）在转移上下文中为终端错误——表示客户已有进行中的转移
+                // 例外：45035（操作冲突）不重抛，落库 api_failed 由 retryFailedTransfers 周期重试
                 if (e.getErrcode() != WecomErrorCodes.TRANSFER_CONFLICT
                     && (e instanceof WecomTokenExpiredException
                         || e instanceof WecomRateLimitException
@@ -270,14 +270,13 @@ public class TransferService {
                 //   - 84097: 接替成员客户数已达上限
                 //   - 84100: 已有正在继承的员工（极端竞态）
                 //   - 84073: 客户已删除服务人员
-                //   - 45035: 操作冲突（客户已有进行中的转移）
-                // 注意：40205（票据过期）不再视为终端错误 —— ticket 间歇性恢复后重试即可成功
+                // 注意：40205（票据过期）/ 45035（操作冲突）不再视为终端错误，
+                // 两者落库 api_failed 由 retryFailedTransfers 周期重试恢复
                 boolean terminal = e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
-                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER
-                    || e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT;
+                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER;
                 CustomerTransfer.TransferStatus failStatus = terminal
                     ? CustomerTransfer.TransferStatus.retry_limit
                     : CustomerTransfer.TransferStatus.api_failed;
@@ -295,7 +294,7 @@ public class TransferService {
                 } else if (e.getErrcode() == WecomErrorCodes.DELETED_BY_USER) {
                     failReason = "客户已删除服务人员(errcode=84073)，无法发起继承";
                 } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
-                    failReason = "操作冲突(errcode=45035)，客户已有进行中的转移";
+                    failReason = "操作冲突(errcode=45035)，稍后自动重试";
                 } else {
                     failReason = "errcode=" + e.getErrcode() + " " + e.getErrmsg();
                 }
@@ -590,8 +589,8 @@ public class TransferService {
      * 退避已到期（{@code nextRetryAt} 为空或已过）的记录，重新调用企微
      * {@code transfer_customer} API。成功后状态变为 pending_confirm 并清空退避时间；
      * 失败则累加重试次数并推进退避时间（30min → 2h → 8h → 24h 封顶），
-     * 达到上限（≥5）标记为 retry_limit。终端错误码（84061/84096/84097/84100/84073/45035）
-     * 不参与退避，直接标记 retry_limit。
+     * 达到上限（≥5）标记为 retry_limit。终端错误码（84061/84096/84097/84100/84073）
+     * 不参与退避，直接标记 retry_limit；40205 / 45035 为可间歇恢复错误，走正常退避重试。
      * </p>
      * <p>
      * 注意：此方法不标注 @Transactional，每条失败记录独立事务提交，避免长事务超时。
@@ -622,15 +621,14 @@ public class TransferService {
                     transferRepo.save(t);
                     continue;
                 }
-                // 84061/84096/84097/84100/84073/45035 为永久性错误，重试无效，直接标记终端
-                // 40205 不在此列 —— ticket 可间歇恢复，允许重试
+                // 84061/84096/84097/84100/84073 为永久性错误，重试无效，直接标记终端
+                // 40205 / 45035 不在此列 —— 两者可间歇恢复，允许走正常重试流程
                 if (t.getFailReason() != null
                     && (t.getFailReason().contains("errcode=84061")
                         || t.getFailReason().contains("errcode=84096")
                         || t.getFailReason().contains("errcode=84097")
                         || t.getFailReason().contains("errcode=84100")
-                        || t.getFailReason().contains("errcode=84073")
-                        || t.getFailReason().contains("errcode=45035"))) {
+                        || t.getFailReason().contains("errcode=84073"))) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
                     if (t.getFailReason().contains("errcode=84061")) {
                         t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
@@ -640,10 +638,8 @@ public class TransferService {
                         t.setFailReason("接替成员客户数已达上限(errcode=84097)");
                     } else if (t.getFailReason().contains("errcode=84100")) {
                         t.setFailReason("已有正在继承的员工(errcode=84100)");
-                    } else if (t.getFailReason().contains("errcode=84073")) {
-                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
                     } else {
-                        t.setFailReason("操作冲突(errcode=45035)，客户已有进行中的转移");
+                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
                     }
                     transferRepo.save(t);
                     log.warn("api_failed 跳过重试: transferId={}, reason={}",
@@ -663,17 +659,17 @@ public class TransferService {
                 t.setStatus(CustomerTransfer.TransferStatus.pending_confirm);
                 t.setRetryCount(t.getRetryCount() + 1);
                 t.setNextRetryAt(null); // 转回 pending_confirm，清空退避时间
+                t.setFailReason(null); // 重试成功，清空失败原因，避免 confirmed 记录残留失败文案
                 transferRepo.save(t);
                 log.info("api_failed 重试成功: transferId={}", t.getId());
             } catch (WecomApiException e) {
-                // 84061/84096/84097/84100/84073/45035 为永久性错误，不累加重试次数，直接标记终端
-                // 40205 不在此列 —— ticket 可间歇恢复，累加重试次数走正常重试流程
+                // 84061/84096/84097/84100/84073 为永久性错误，不累加重试次数，直接标记终端
+                // 40205 / 45035 不在此列 —— 可间歇恢复，累加重试次数走正常重试流程
                 if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_NOT_AVAILABLE
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED
                     || e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS
-                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER
-                    || e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
+                    || e.getErrcode() == WecomErrorCodes.DELETED_BY_USER) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
                     if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
                         t.setFailReason("客户已不是好友(errcode=84061)，无法发起继承");
@@ -683,17 +679,22 @@ public class TransferService {
                         t.setFailReason("接替成员客户数已达上限(errcode=84097)");
                     } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_PENDING_EXISTS) {
                         t.setFailReason("已有正在继承的员工(errcode=84100)");
-                    } else if (e.getErrcode() == WecomErrorCodes.DELETED_BY_USER) {
-                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
                     } else {
-                        t.setFailReason("操作冲突(errcode=45035)，客户已有进行中的转移");
+                        t.setFailReason("客户已删除服务人员(errcode=84073)，无法发起继承");
                     }
                     transferRepo.save(t);
                     log.warn("api_failed 重试终止: {}, transferId={}",
                         resolveTerminalReason(e.getErrcode()), t.getId());
                 } else {
                     t.setRetryCount(t.getRetryCount() + 1);
-                    t.setFailReason("重试失败: errcode=" + e.getErrcode() + " " + e.getErrmsg());
+                    // 40205/45035 保留有意义的运维提示，而非覆盖为通用 errcode 文案
+                    if (e.getErrcode() == WecomErrorCodes.TICKET_EXPIRED) {
+                        t.setFailReason("接管员工企微票据过期(errcode=40205)，需重新登录企微并微信授权");
+                    } else if (e.getErrcode() == WecomErrorCodes.TRANSFER_CONFLICT) {
+                        t.setFailReason("操作冲突(errcode=45035)，重试未成功");
+                    } else {
+                        t.setFailReason("重试失败: errcode=" + e.getErrcode() + " " + e.getErrmsg());
+                    }
                     if (t.getRetryCount() >= MAX_RETRIES) {
                         t.setStatus(CustomerTransfer.TransferStatus.retry_limit);
                         t.setNextRetryAt(null);
@@ -793,7 +794,7 @@ public class TransferService {
             String alertType = "transfer_retry_exhausted_svc";
             String message = String.format(
                 "服务老师/双角色 %s 近 7 天有 %d 条继承转移已达重试上限。"
-                + "常见原因：企微票据过期需重新登录(40205)、客户数达上限(84097)、操作冲突(45035)。"
+                + "常见原因：企微票据过期需重新登录(40205)、客户数达上限(84097)。"
                 + "请检查该老师企微状态及客户配额。",
                 toUserid, count);
 
@@ -1210,7 +1211,6 @@ public class TransferService {
             case WecomErrorCodes.TRANSFER_LIMIT_EXCEEDED -> "接替成员达上限";
             case WecomErrorCodes.TRANSFER_PENDING_EXISTS -> "已有继承中的员工";
             case WecomErrorCodes.DELETED_BY_USER -> "客户已删除服务人员";
-            case WecomErrorCodes.TRANSFER_CONFLICT -> "操作冲突(已有进行中转移)";
             default -> "errcode=" + errcode;
         };
     }

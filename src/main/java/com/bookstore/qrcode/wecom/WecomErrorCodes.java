@@ -65,9 +65,11 @@ public class WecomErrorCodes {
      * <p>
      * 成因：接管员工（takeover_userid）长期未用微信授权方式登录企微、
      * 或使用手机号注册未绑定微信、或客户联系权限被取消。
-     * 此状态为<b>永久性</b>——API 重试无法修复，需要员工手动登录企微客户端
-     * 刷新票据。应直接将转移记录标记为终端失败（{@code retry_limit}），
-     * 由管理员确认员工恢复后手动重触发。
+     * API 重试本身无法刷新票据，但员工重新登录企微客户端后票据即恢复，
+     * 此时重试即可成功。因此落库 {@code api_failed} 由
+     * {@code retryFailedTransfers} 周期重试（30min→2h→8h→24h），
+     * 给员工重新登录留出窗口，而非直接标记 {@code retry_limit} 永久放弃；
+     * 重试耗尽后由管理员介入，引导员工重新登录后手动重触发。
      * </p>
      *
      * @since 2.x
@@ -75,12 +77,12 @@ public class WecomErrorCodes {
     public static final int TICKET_EXPIRED = 40205;
 
     /**
-     * 45035 — 操作冲突。
+     * 45035 — 操作冲突（operation conflict）。
      * <p>
-     * 在在职继承场景中表示客户已有进行中的转移流程，与本次请求冲突。
-     * 此状态为<b>永久性</b>——重试无法解决，应直接标记为终端失败（{@code retry_limit}）。
-     * 注意：此码在非转移场景（如标签操作）中可能是瞬态的，
-     * 仅在职继承上下文中视为终端错误。
+     * 在在职继承场景中表示对同一客户关系存在并发操作（客户刚添加、标签/备注仍在写入、
+     * 或与其他系统的转移请求撞车），是<b>临时性</b>冲突，重试即可恢复。
+     * 应落库 {@code api_failed} 由 {@code retryFailedTransfers} 周期重试，
+     * 而非标记 {@code retry_limit} 永久放弃。
      * </p>
      *
      * @since 2.x

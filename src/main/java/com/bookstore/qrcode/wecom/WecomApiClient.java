@@ -990,7 +990,7 @@ public class WecomApiClient {
      *   <li>42001（token 过期）、40014（access_token 不合法）→ {@link WecomTokenExpiredException}</li>
      *   <li>45009（频率限制）→ {@link WecomRateLimitException}</li>
      *   <li>45035（操作冲突）、41096（欢迎语分发中）、-1（网络/解析异常）、50000–59999（服务端错误）→ {@link WecomTransientException}</li>
-     *   <li>其他（如 40003/60011 等）→ {@link WecomPermanentException}</li>
+     *   <li>其他（如 40205 票据过期、40003、60011 等）→ {@link WecomPermanentException}</li>
      * </ul>
      *
      * @param errcode 企微 API 返回的错误码
@@ -1007,6 +1007,9 @@ public class WecomApiClient {
         if (errcode == 45035 || errcode == 41096 || errcode == -1 || (errcode >= 50000 && errcode < 60000)) {
             throw new WecomTransientException(errcode, errmsg, body);
         }
+        // 40205（票据过期）归 Permanent 而非 Transient 是有意的：
+        // 它虽可经员工重新登录恢复，但需落库 api_failed 由 retryFailedTransfers 周期重试，
+        // 归 Permanent 可避免被 initiate() 的 transient 重抛条件捕获而 rethrow 到 Stream。
         throw new WecomPermanentException(errcode, errmsg, body);
     }
 
