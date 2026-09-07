@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -61,6 +62,12 @@ public class TransferService {
 
     /** 超时阈值：发起转移后等待 24 小时 */
     private static final Duration TRANSFER_TIMEOUT = Duration.ofHours(24);
+
+    /** 欢迎语发送窗口：早 08:30 起 */
+    private static final LocalTime GREETING_WINDOW_START = LocalTime.of(8, 30);
+
+    /** 欢迎语发送窗口：晚 21:00 止（不含） */
+    private static final LocalTime GREETING_WINDOW_END = LocalTime.of(21, 0);
 
     /** 冷却期：最近 N 天内已有 timeout/rejected/retry_limit 的客户不再重转 */
     private static final Duration TRANSFER_COOLDOWN = Duration.ofDays(7);
@@ -591,6 +598,18 @@ public class TransferService {
             }
             transferRepo.save(t);
         }
+    }
+
+    /**
+     * 判断指定时刻是否处于欢迎语发送窗口（早 08:30 起，晚 21:00 止，不含 21:00）。
+     * <p>深夜/凌晨发送会打扰客户，故窗口外的新确认欢迎语不发送，
+     * 留待白天由 {@link #retryFailedGreetings()} 补发。</p>
+     *
+     * @param now 待判断的时刻
+     * @return true 表示可发送欢迎语
+     */
+    public static boolean isWithinGreetingWindow(LocalTime now) {
+        return !now.isBefore(GREETING_WINDOW_START) && now.isBefore(GREETING_WINDOW_END);
     }
 
     /**

@@ -13,6 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -89,7 +90,12 @@ public class TransferMonitorWorker {
             log.debug("继承结果追踪完成");
             // 在事务外发送欢迎语：避免企微 API 网络 I/O 长期持有 DB 连接
             if (!newlyConfirmed.isEmpty()) {
-                transferService.sendGreetingsForNewlyConfirmed(newlyConfirmed);
+                if (TransferService.isWithinGreetingWindow(LocalTime.now())) {
+                    transferService.sendGreetingsForNewlyConfirmed(newlyConfirmed);
+                } else {
+                    log.info("当前不在欢迎语发送窗口(08:30-21:00)，跳过 {} 条新确认欢迎语，留待白天补发",
+                        newlyConfirmed.size());
+                }
             }
         } catch (Exception e) {
             log.error("继承结果追踪异常", e);
@@ -146,9 +152,7 @@ public class TransferMonitorWorker {
     @Scheduled(cron = "0 */30 * * * *")
     public void retryGreetings() {
         // 时间窗口检查：仅 08:30–21:00 补发，避免深夜打扰
-        int hour = java.time.LocalTime.now().getHour();
-        int minute = java.time.LocalTime.now().getMinute();
-        if (hour < 8 || (hour == 8 && minute < 30) || hour >= 21) {
+        if (!TransferService.isWithinGreetingWindow(LocalTime.now())) {
             return;
         }
         String lockValue = UUID.randomUUID().toString();
