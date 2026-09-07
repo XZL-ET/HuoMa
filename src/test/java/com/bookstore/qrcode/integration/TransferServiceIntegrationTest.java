@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.TransferService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
 import com.bookstore.qrcode.wecom.WecomTransientException;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.*;
@@ -38,6 +39,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     @Autowired private QrAgentRepository qrAgentRepo;
     @Autowired private AgentRepository agentRepo;
     @Autowired private EmployeeRepository employeeRepo;
+    @Autowired private GlobalAgentPoolRepository globalAgentPoolRepo;
     @Autowired private StringRedisTemplate redisTemplate;
     @Autowired private WecomApiClient wecomApi; // Mockito mock from WecomApiMockConfig
     @Autowired private EntityManager em;
@@ -64,6 +66,8 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
         customerRepo.deleteAll();
         qrAgentRepo.deleteAll();
         qrCodeRepo.deleteAll();
+        // 先清全局池，再删 agent，避免 global_agent_pool 外键引用 test_rec 导致 deleteAll 失败
+        globalAgentPoolRepo.deleteAll();
         agentRepo.deleteAll();
         employeeRepo.deleteAll();
 
@@ -264,7 +268,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
         var resultResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
             "{\"errcode\":0,\"errmsg\":\"ok\"," +
             "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":1}]}");
-        when(wecomApi.getTransferResult(anyString(), anyString(), anyString()))
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
             .thenReturn(resultResp);
 
         // when
@@ -277,6 +281,58 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
 
         // 确认被加入 newlyConfirmed 列表（供事务外发送欢迎语）
         assertThat(newlyConfirmed).contains(pending.getId());
+    }
+
+    @Test
+    @DisplayName("trackResults：status=1 确认后 customer.current_agent 更新为服务老师(toUserid)")
+    void shouldUpdateCustomerCurrentAgentOnConfirm() throws Exception {
+        // given: 一条 pending_confirm 记录，客户 currentAgent 初始为接待员
+        CustomerTransfer pending = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(0).build());
+
+        var resultResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":1}]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(resultResp);
+
+        // when
+        transferService.trackResults();
+
+        // then: 转移确认后，客户当前归属员工应从接待员切到服务老师
+        Customer updatedCustomer = customerRepo.findById(testCustomer.getId()).orElseThrow();
+        assertThat(updatedCustomer.getCurrentAgent()).isEqualTo(SERVICE_TEACHER);
+    }
+
+    @Test
+    @DisplayName("trackResults：status=2 超 24h 自动完成后 customer.current_agent 更新为服务老师")
+    void shouldUpdateCustomerCurrentAgentOnTimeoutAutoConfirm() throws Exception {
+        // given: 25 小时前发起，仍在等待确认
+        CustomerTransfer old = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now().minusHours(25))
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(10).build());
+
+        var waitingResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":2}]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(waitingResp);
+
+        // when
+        transferService.trackResults();
+
+        // then: 企微静默自动完成转移，客户当前归属员工切到服务老师
+        Customer updatedCustomer = customerRepo.findById(testCustomer.getId()).orElseThrow();
+        assertThat(updatedCustomer.getCurrentAgent()).isEqualTo(SERVICE_TEACHER);
     }
 
     @Test
@@ -294,7 +350,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
         var refusedResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
             "{\"errcode\":0,\"errmsg\":\"ok\"," +
             "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":3}]}");
-        when(wecomApi.getTransferResult(anyString(), anyString(), anyString()))
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
             .thenReturn(refusedResp);
 
         List<Long> newlyConfirmed = transferService.trackResults();
@@ -305,7 +361,168 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("trackResults 安全网：pollCount >= 48 的 pending → retry_limit")
+    @DisplayName("trackResults：第一页未找到目标客户时按 next_cursor 翻页查找")
+    void shouldPaginateToFindTargetCustomer() throws Exception {
+        // given: 一条 pending_confirm 记录
+        CustomerTransfer pending = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(0).build());
+
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        // 第一页：目标客户不在此页，返回 next_cursor 指向第二页
+        var page1 = om.readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"wm-other-001\",\"status\":1}]," +
+            "\"next_cursor\":\"page2\"}");
+        // 第二页：目标客户在此页，status=1（接替完毕）
+        var page2 = om.readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":1}]}");
+
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(page1);
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("page2")))
+            .thenReturn(page2);
+
+        // when
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        // then: 翻页后找到目标客户并确认
+        CustomerTransfer updated = transferRepo.findById(pending.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.confirmed);
+        assertThat(newlyConfirmed).contains(pending.getId());
+        // 确实以第二页 cursor 调用了 4 参版本（验证翻页发生）
+        verify(wecomApi, times(1))
+            .getTransferResult(eq(RECEPTIONIST), eq(SERVICE_TEACHER), eq("page2"));
+    }
+
+    @Test
+    @DisplayName("trackResults：next_cursor 为 null 时不应将其当作游标翻页")
+    void shouldNotPaginateWhenNextCursorIsNull() throws Exception {
+        // given: 一条 pending_confirm 记录
+        CustomerTransfer pending = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(0).build());
+
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        // 第一页不含目标客户，且 next_cursor 为 null（字段存在但值为 null）
+        var page1 = om.readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"wm-other\",\"status\":1}]," +
+            "\"next_cursor\":null}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(page1);
+
+        // when
+        transferService.trackResults();
+
+        // then: 未超时 → 保持 pending（目标客户未找到），且不应把 null 当游标触发翻页
+        CustomerTransfer updated = transferRepo.findById(pending.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.pending_confirm);
+        verify(wecomApi, never())
+            .getTransferResult(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("trackResults：目标客户在第 7 页时仍能翻到并确认")
+    void shouldFindCustomerBeyondFivePages() throws Exception {
+        // given: 一条 pending_confirm 记录
+        CustomerTransfer pending = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now())
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(0).build());
+
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        String other = "{\"external_userid\":\"wm-other\",\"status\":1}";
+        String target = "{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":1}";
+
+        // 前 6 页均不含目标客户，第 7 页才出现目标客户 status=1（超过旧的 5 次翻页上限）
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(om.readTree(transferPage(other, "p2")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p2")))
+            .thenReturn(om.readTree(transferPage(other, "p3")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p3")))
+            .thenReturn(om.readTree(transferPage(other, "p4")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p4")))
+            .thenReturn(om.readTree(transferPage(other, "p5")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p5")))
+            .thenReturn(om.readTree(transferPage(other, "p6")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p6")))
+            .thenReturn(om.readTree(transferPage(other, "p7")));
+        when(wecomApi.getTransferResult(anyString(), anyString(), eq("p7")))
+            .thenReturn(om.readTree(transferPage(target, null)));
+
+        // when
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        // then: 翻到第 7 页找到目标客户并确认
+        CustomerTransfer updated = transferRepo.findById(pending.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.confirmed);
+        assertThat(newlyConfirmed).contains(pending.getId());
+        verify(wecomApi, times(1))
+            .getTransferResult(eq(RECEPTIONIST), eq(SERVICE_TEACHER), eq("p7"));
+    }
+
+    @Test
+    @DisplayName("trackResults 分组：同一交接对的多条 pending 只调一次 transfer_result")
+    void shouldFetchTransferResultOncePerPair() throws Exception {
+        // given: 同一交接对 (RECEPTIONIST → SERVICE_TEACHER) 下 3 条 pending 记录（3 个不同客户）
+        for (int i = 1; i <= 3; i++) {
+            Customer c = new Customer();
+            c.setExternalUserid("wm-grp-" + i);
+            c.setName("分组客户" + i);
+            c.setAddedAgent(RECEPTIONIST);
+            c.setCurrentAgent(RECEPTIONIST);
+            c.setSchoolId(SCHOOL_ID);
+            c.setSourceQrId(testQr.getId());
+            c.setAddTime(LocalDateTime.now());
+            c.setStatus(Customer.CustomerStatus.active);
+            Long cid = customerRepo.save(c).getId();
+            transferRepo.save(CustomerTransfer.builder()
+                .customerId(cid)
+                .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+                .qrCodeId(testQr.getId())
+                .transferTime(LocalDateTime.now())
+                .status(CustomerTransfer.TransferStatus.pending_confirm)
+                .retryCount(0).pollCount(0).build());
+        }
+
+        // mock getTransferResult 一次返回全部 3 个客户的状态（status=1 接替完毕）
+        var om = new com.fasterxml.jackson.databind.ObjectMapper();
+        var resp = om.readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\",\"customer\":[" +
+            "{\"external_userid\":\"wm-grp-1\",\"status\":1}," +
+            "{\"external_userid\":\"wm-grp-2\",\"status\":1}," +
+            "{\"external_userid\":\"wm-grp-3\",\"status\":1}]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(resp);
+
+        // when
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        // then: 3 条记录全部确认，且 transfer_result 只被调用一次（按交接对分组，非逐条 N 次）
+        assertThat(newlyConfirmed).hasSize(3);
+        List<CustomerTransfer> all = transferRepo.findAll();
+        assertThat(all).hasSize(3);
+        assertThat(all).allMatch(t ->
+            t.getStatus() == CustomerTransfer.TransferStatus.confirmed);
+        verify(wecomApi, times(1))
+            .getTransferResult(eq(RECEPTIONIST), eq(SERVICE_TEACHER), isNull());
+    }
+
+    @Test
+    @DisplayName("trackResults 安全网：pollCount >= 48 且超 24h → timeout")
     void shouldMarkRetryLimitViaSafetyNet() throws Exception {
         // given: pending_confirm 且 pollCount = 48（主循环会跳过 because pollCount >= 48）
         CustomerTransfer exhausted = transferRepo.save(CustomerTransfer.builder()
@@ -317,13 +534,13 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
             .pollCount(48).retryCount(0).build());
 
         // getTransferResult 主循环过滤 pollCount >= 48 的记录，落入安全网
-        // 安全网检测到已超 24h → 标记 confirmed（企微静默自动完成）
+        // 安全网检测到已超 24h → 标记 timeout（转移作废，不再误报 confirmed）
         List<Long> newlyConfirmed = transferService.trackResults();
 
         CustomerTransfer updated = transferRepo.findById(exhausted.getId()).orElseThrow();
-        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.confirmed);
-        assertThat(updated.getFailReason()).contains("24h");
-        assertThat(newlyConfirmed).hasSize(1);
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.timeout);
+        assertThat(updated.getFailReason()).contains("超时作废");
+        assertThat(newlyConfirmed).isEmpty();
     }
 
     // ================================================================
@@ -563,7 +780,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     // ================================================================
 
     @Test
-    @DisplayName("trackResults：transferTime 超 24 小时 + status=2 → timeout")
+    @DisplayName("trackResults：transferTime 超 24 小时 + status=2 → confirmed(企微静默自动完成)")
     void shouldMarkTimeoutWhenExceeded24Hours() throws Exception {
         // given: 25 小时前发起，仍在等待确认
         CustomerTransfer old = transferRepo.save(CustomerTransfer.builder()
@@ -578,15 +795,98 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
         var waitingResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
             "{\"errcode\":0,\"errmsg\":\"ok\"," +
             "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":2}]}");
-        when(wecomApi.getTransferResult(anyString(), anyString(), anyString()))
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
             .thenReturn(waitingResp);
 
         List<Long> newlyConfirmed = transferService.trackResults();
 
         CustomerTransfer updated = transferRepo.findById(old.getId()).orElseThrow();
-        // 超过 24h → 企微静默自动完成 → 标记 confirmed 而非 timeout
+        // status=2 超 24h：企微静默自动完成转移 → confirmed，记录 failReason 便于溯源
         assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.confirmed);
-        assertThat(updated.getFailReason()).isNull();
+        assertThat(updated.getFailReason()).contains("自动完成");
         assertThat(newlyConfirmed).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("trackResults：status=5(无接替记录) + 超 24h → timeout")
+    void shouldMarkTimeoutOnStatus5() throws Exception {
+        CustomerTransfer old = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now().minusHours(25))
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(10).build());
+
+        var resp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":5}]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), nullable(String.class)))
+            .thenReturn(resp);
+
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        CustomerTransfer updated = transferRepo.findById(old.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.timeout);
+        assertThat(updated.getFailReason()).contains("无接替记录");
+        assertThat(newlyConfirmed).isEmpty();
+    }
+
+    @Test
+    @DisplayName("trackResults：status=-1(未找到目标客户) + 超 24h → timeout")
+    void shouldMarkTimeoutWhenNotFound() throws Exception {
+        CustomerTransfer old = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now().minusHours(25))
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(10).build());
+
+        // transfer_result 返回空 customer 数组（不包含目标客户）→ apiStatus 落到 -1
+        var resp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\",\"customer\":[]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), nullable(String.class)))
+            .thenReturn(resp);
+
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        CustomerTransfer updated = transferRepo.findById(old.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.timeout);
+        assertThat(updated.getFailReason()).contains("未找到目标客户");
+        assertThat(newlyConfirmed).isEmpty();
+    }
+
+    @Test
+    @DisplayName("trackResults：API 异常 + 超 24h → timeout")
+    void shouldMarkTimeoutOnApiFailure() throws Exception {
+        CustomerTransfer old = transferRepo.save(CustomerTransfer.builder()
+            .customerId(testCustomer.getId())
+            .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
+            .qrCodeId(testQr.getId())
+            .transferTime(LocalDateTime.now().minusHours(25))
+            .status(CustomerTransfer.TransferStatus.pending_confirm)
+            .retryCount(0).pollCount(10).build());
+
+        doThrow(new WecomApiException(60020, "接口调用失败", null))
+            .when(wecomApi).getTransferResult(anyString(), anyString(), nullable(String.class));
+
+        List<Long> newlyConfirmed = transferService.trackResults();
+
+        CustomerTransfer updated = transferRepo.findById(old.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.timeout);
+        assertThat(updated.getFailReason()).contains("API异常");
+        assertThat(newlyConfirmed).isEmpty();
+    }
+
+    // ================================================================
+    //  辅助方法
+    // ================================================================
+
+    /** 构造 transfer_result 分页响应 JSON，nextCursor 为 null 时省略 next_cursor 字段 */
+    private static String transferPage(String customerJson, String nextCursor) {
+        return "{\"errcode\":0,\"errmsg\":\"ok\",\"customer\":[" + customerJson + "]"
+            + (nextCursor != null ? ",\"next_cursor\":\"" + nextCursor + "\"" : "")
+            + "}";
     }
 }

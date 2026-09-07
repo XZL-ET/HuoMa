@@ -515,9 +515,9 @@ public class WecomApiClient {
     }
 
     /**
-     * 查询客户转移结果。
+     * 查询客户转移结果（第一页）。
      * <p>
-     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/get_transfer_result}
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/transfer_result}
      * <br>
      * 在调用 {@link #transferCustomer} 后，通过此接口查询转移状态。
      * 企微转移是异步的，需要轮询此接口确认是否成功。
@@ -525,8 +525,7 @@ public class WecomApiClient {
      * 请求:
      *   {
      *     "handover_userid": "zhangsan",
-     *     "takeover_userid": "lisi",
-     *     "external_userid": "wmxxxxxx"
+     *     "takeover_userid": "lisi"
      *   }
      * 响应:
      *   {
@@ -535,52 +534,40 @@ public class WecomApiClient {
      *     "customer": [
      *       {"external_userid": "wmxxx", "status": 1}
      *       // status: 1=接替完毕 2=等待接替 3=客户拒绝 4=接替成员客户达上限 5=无接替记录
-     *     ]
+     *     ],
+     *     "next_cursor": "NEXT_CURSOR"
      *   }
-     * @apiNote 此接口 (get_transfer_result) 已于 2023/11/30 标记废弃，企微推荐使用
-     *          transfer_result 接口（cursor 分页）；当前仍可用但未来可能移除
      * </pre>
+     * <p>该接口按 handover/takeover 维度返回 {@code customer} 数组，不按 external_userid
+     * 精确定位；调用方需在响应中按 external_userid 过滤目标客户。
      *
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
-     * @param externalUserid 要查询的客户 external_userid
-     * @return JsonNode 包含 {@code customer} 数组，每个元素含 {@code external_userid} 和 {@code status}
+     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
      * @throws WecomApiException API 调用失败时抛出
      */
-    /**
-     * 查询在职继承结果（无 cursor，返回第一页）。
-     *
-     * @param handoverUserid 原添加人（转出方）的 userid
-     * @param takeoverUserid 接替人（转入方）的 userid
-     * @param externalUserid 目标客户 external_userid（传给企微 API 用于精确定位）
-     * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
-     */
-    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
-                                       String externalUserid) {
-        return getTransferResult(handoverUserid, takeoverUserid, externalUserid, null);
+    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid) {
+        return getTransferResult(handoverUserid, takeoverUserid, null);
     }
 
     /**
      * 查询在职继承结果（带 cursor 分页）。
      * <p>
-     * 企微 API 接受 {@code handover_userid}、{@code takeover_userid}、{@code external_userid}
-     * 和可选 {@code cursor} 四个参数。{@code external_userid} 用于精确定位目标客户。
+     * 企微 API 接受 {@code handover_userid}、{@code takeover_userid} 和可选 {@code cursor}
+     * 三个参数，按 handover/takeover 维度分页返回客户数组。
      * </p>
      *
      * @param handoverUserid 原添加人（转出方）的 userid
      * @param takeoverUserid 接替人（转入方）的 userid
-     * @param externalUserid 目标客户 external_userid
      * @param cursor         分页游标，{@code null} 或空字符串表示第一页
      * @return JsonNode 包含 {@code customer} 数组和可选的 {@code next_cursor}
      */
-    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid,
-                                       String externalUserid, String cursor) {
-        String url = BASE_URL + "/externalcontact/get_transfer_result?access_token=" + getAccessToken();
+    public JsonNode getTransferResult(String handoverUserid, String takeoverUserid, String cursor) {
+        String url = BASE_URL + "/externalcontact/transfer_result?access_token=" + getAccessToken();
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("handover_userid", handoverUserid);
             bodyMap.put("takeover_userid", takeoverUserid);
-            bodyMap.put("external_userid", externalUserid);
             if (cursor != null && !cursor.isEmpty()) {
                 bodyMap.put("cursor", cursor);
             }
