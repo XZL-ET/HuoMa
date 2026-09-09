@@ -48,7 +48,10 @@
                 <th>学校名</th>
                 <th class="text-end">新增客户数</th>
                 <th class="text-end">转接成功</th>
-                <th class="text-end">转接失败</th>
+                <th class="text-end">已拒绝</th>
+                <th class="text-end">超时</th>
+                <th class="text-end">API失败</th>
+                <th class="text-end">重试耗尽</th>
                 <th class="text-end">进行中</th>
                 <th></th>
             </tr>
@@ -61,7 +64,16 @@
                     <span class="badge bg-success" th:text="${item.successCount}"></span>
                 </td>
                 <td class="text-end">
-                    <span class="badge bg-danger" th:text="${item.failCount}"></span>
+                    <span class="badge bg-danger" th:text="${item.rejectedCount}"></span>
+                </td>
+                <td class="text-end">
+                    <span class="badge bg-warning" th:text="${item.timeoutCount}"></span>
+                </td>
+                <td class="text-end">
+                    <span class="badge bg-secondary" th:text="${item.apiFailedCount}"></span>
+                </td>
+                <td class="text-end">
+                    <span class="badge bg-dark" th:text="${item.retryLimitCount}"></span>
                 </td>
                 <td class="text-end">
                     <span class="badge bg-info" th:text="${item.pendingCount}"></span>
@@ -74,7 +86,7 @@
                 </td>
             </tr>
             <tr th:if="${#lists.isEmpty(items)}">
-                <td colspan="6" class="text-center text-muted py-4">该时间段内暂无新增客户</td>
+                <td colspan="9" class="text-center text-muted py-4">该时间段内暂无新增客户</td>
             </tr>
         </tbody>
     </table>

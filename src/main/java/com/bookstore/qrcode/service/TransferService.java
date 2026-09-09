@@ -523,6 +523,8 @@ public class TransferService {
                 t.setConfirmTime(LocalDateTime.now());
                 if (apiStatus == 4) {
                     t.setFailReason("接替成员客户数已达上限");
+                } else {
+                    t.setFailReason("客户拒绝接替");
                 }
                 break;
             default:

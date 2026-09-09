@@ -259,22 +259,27 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      * <p>
      * 以 {@link com.bookstore.qrcode.entity.Customer#addTime} 驱动时间筛选：
      * 找出该时间段内通过活码新增的客户，并按其转移记录状态统计。
-     * 口径：成功 = confirmed；失败 = rejected/timeout/api_failed/retry_limit 之和；
+     * 口径：成功 = confirmed；失败细分为 rejected / timeout / api_failed / retry_limit 四列；
      * 进行中 = pending_confirm。
      * </p>
      *
      * @param start 加人时间下限（含）
      * @param end   加人时间上限（含）
-     * @return 每行格式 [qrCodeId, schoolName, newCustomerCount, confirmedCount, failedCount, pendingCount]
+     * @return 每行格式 [qrCodeId, schoolName, newCustomerCount, confirmedCount,
+     *         rejectedCount, timeoutCount, apiFailedCount, retryLimitCount, pendingCount]
      */
     @Query("SELECT q.id, q.schoolName, "
         + "COUNT(DISTINCT c.id), "
         + "COALESCE(SUM(CASE WHEN t.status = 'confirmed' THEN 1 ELSE 0 END), 0), "
-        + "COALESCE(SUM(CASE WHEN t.status IN ('rejected','timeout','api_failed','retry_limit') THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'timeout' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'api_failed' THEN 1 ELSE 0 END), 0), "
+        + "COALESCE(SUM(CASE WHEN t.status = 'retry_limit' THEN 1 ELSE 0 END), 0), "
         + "COALESCE(SUM(CASE WHEN t.status = 'pending_confirm' THEN 1 ELSE 0 END), 0) "
         + "FROM QrCode q "
         + "JOIN Customer c ON c.sourceQrId = q.id "
         + "LEFT JOIN CustomerTransfer t ON t.customerId = c.id "
+        + "AND t.id = (SELECT MAX(t2.id) FROM CustomerTransfer t2 WHERE t2.customerId = c.id) "
         + "WHERE c.addTime >= :start AND c.addTime <= :end "
         + "GROUP BY q.id, q.schoolName "
         + "ORDER BY COUNT(DISTINCT c.id) DESC")
@@ -282,26 +287,111 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
                                               @Param("end") LocalDateTime end);
 
     /**
-     * 查询指定活码下、加人时间落在指定区间内的客户的转移记录（转接记录详情页）。
+     * 查询指定活码下、加人时间落在区间内的客户的转移记录状态与失败原因投影（转接记录详情页）。
      * <p>
      * 与 {@link #summarizeTransfersByQrCode} 口径一致：时间筛选基于
      * {@code Customer.addTime}，通过 customer 与 transfer 的显式 JOIN 关联。
+     * 仅投影 status 与 failReason 两列，供详情页统计徽章计数与失败原因分布，
+     * 避免加载完整实体。
      * </p>
      *
      * @param qrCodeId 活码 ID
      * @param start    加人时间下限（含）
      * @param end      加人时间上限（含）
-     * @return 转移记录列表，按转移时间倒序
+     * @return 每行格式 [status, failReason]，failReason 可能为 null
      */
-    @Query("SELECT t FROM CustomerTransfer t "
+    @Query("SELECT t.status, t.failReason FROM CustomerTransfer t "
         + "JOIN Customer c ON c.id = t.customerId "
+        + "AND t.id = (SELECT MAX(t2.id) FROM CustomerTransfer t2 WHERE t2.customerId = c.id) "
         + "WHERE c.sourceQrId = :qrCodeId "
-        + "AND c.addTime >= :start AND c.addTime <= :end "
-        + "ORDER BY t.transferTime DESC")
-    List<CustomerTransfer> findByQrCodeAndCustomerAddTimeBetween(
+        + "AND c.addTime >= :start AND c.addTime <= :end")
+    List<Object[]> findStatusAndFailReasonByQrCodeAndAddTime(
         @Param("qrCodeId") Long qrCodeId,
         @Param("start") LocalDateTime start,
         @Param("end") LocalDateTime end);
+
+    /**
+     * 分页查询指定活码下、加人时间落在区间内的客户转移记录（转接明细页）。
+     * <p>
+     * 支持按失败原因关键词过滤（{@code pattern} 为 SQL LIKE 模式，如 {@code %errcode=40205%}），
+     * 传 null 表示不过滤。时间筛选与 {@link #findStatusAndFailReasonByQrCodeAndAddTime} 一致，
+     * 基于 {@code Customer.addTime}，按转移时间倒序。
+     * </p>
+     *
+     * @param qrCodeId 活码 ID
+     * @param start    加人时间下限（含）
+     * @param end      加人时间上限（含）
+     * @param pattern  失败原因 LIKE 模式，null 表示不过滤
+     * @param pageable 分页参数
+     * @return 转移记录分页结果
+     */
+    @Query(value = "SELECT t FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "WHERE c.sourceQrId = :qrCodeId "
+        + "AND c.addTime >= :start AND c.addTime <= :end "
+        + "AND (:pattern IS NULL OR t.failReason LIKE :pattern) "
+        + "ORDER BY t.transferTime DESC",
+        countQuery = "SELECT COUNT(t) FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "WHERE c.sourceQrId = :qrCodeId "
+        + "AND c.addTime >= :start AND c.addTime <= :end "
+        + "AND (:pattern IS NULL OR t.failReason LIKE :pattern)")
+    Page<CustomerTransfer> findPageByQrCodeAndAddTime(
+        @Param("qrCodeId") Long qrCodeId,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end,
+        @Param("pattern") String pattern,
+        Pageable pageable);
+
+    /**
+     * 分页查询指定活码下、加人时间落在区间内、失败原因归入「其他」类的转移记录。
+     * <p>
+     * 「其他」是补集类别（无法用单一 LIKE 表达），故用排除式 WHERE：
+     * failReason 非空且不含任何已知类别关键词。
+     * 排除条件需与 {@link com.bookstore.qrcode.service.TransferFailType}
+     * 中所有非 OTHER 类别的 keyword 保持同步。
+     * </p>
+     *
+     * @param qrCodeId 活码 ID
+     * @param start    加人时间下限（含）
+     * @param end      加人时间上限（含）
+     * @param pageable 分页参数
+     * @return 转移记录分页结果（仅「其他」类失败原因）
+     */
+    @Query(value = "SELECT t FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "WHERE c.sourceQrId = :qrCodeId "
+        + "AND c.addTime >= :start AND c.addTime <= :end "
+        + "AND t.failReason IS NOT NULL AND t.failReason <> '' "
+        + "AND t.failReason NOT LIKE '%errcode=40205%' "
+        + "AND t.failReason NOT LIKE '%errcode=84061%' "
+        + "AND t.failReason NOT LIKE '%errcode=84073%' "
+        + "AND t.failReason NOT LIKE '%errcode=84096%' "
+        + "AND t.failReason NOT LIKE '%客户数已达上限%' "
+        + "AND t.failReason NOT LIKE '%errcode=84100%' "
+        + "AND t.failReason NOT LIKE '%errcode=45035%' "
+        + "AND t.failReason NOT LIKE '%超时%' "
+        + "AND t.failReason NOT LIKE '%客户拒绝接替%' "
+        + "ORDER BY t.transferTime DESC",
+        countQuery = "SELECT COUNT(t) FROM CustomerTransfer t "
+        + "JOIN Customer c ON c.id = t.customerId "
+        + "WHERE c.sourceQrId = :qrCodeId "
+        + "AND c.addTime >= :start AND c.addTime <= :end "
+        + "AND t.failReason IS NOT NULL AND t.failReason <> '' "
+        + "AND t.failReason NOT LIKE '%errcode=40205%' "
+        + "AND t.failReason NOT LIKE '%errcode=84061%' "
+        + "AND t.failReason NOT LIKE '%errcode=84073%' "
+        + "AND t.failReason NOT LIKE '%errcode=84096%' "
+        + "AND t.failReason NOT LIKE '%客户数已达上限%' "
+        + "AND t.failReason NOT LIKE '%errcode=84100%' "
+        + "AND t.failReason NOT LIKE '%errcode=45035%' "
+        + "AND t.failReason NOT LIKE '%超时%' "
+        + "AND t.failReason NOT LIKE '%客户拒绝接替%'")
+    Page<CustomerTransfer> findPageByQrCodeAndAddTimeOther(
+        @Param("qrCodeId") Long qrCodeId,
+        @Param("start") LocalDateTime start,
+        @Param("end") LocalDateTime end,
+        Pageable pageable);
 
     /**
      * 按区县负责人汇总指定转移时间范围内的转接结果（每日转接对账推送）。

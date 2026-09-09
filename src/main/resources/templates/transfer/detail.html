@@ -16,6 +16,24 @@
         <span class="badge bg-info fs-6" th:text="'进行中 ' + ${pendingCount}"></span>
     </div>
 
+    <!-- 失败原因分布（点击下钻） -->
+    <div class="mb-3" th:if="${!failDist.isEmpty()}">
+        <small class="text-muted d-block mb-1">失败原因分布（点击筛选明细）</small>
+        <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm"
+               th:classappend="${failType == null} ? 'btn-primary' : 'btn-outline-secondary'"
+               th:href="@{/transfers/{id}(id=${qr.id}, range=${range}, start=${start}, end=${end})}">
+                全部 <span class="badge bg-light text-dark ms-1" th:text="${failCount}"></span>
+            </a>
+            <a class="btn btn-sm" th:each="d : ${failDist}"
+               th:classappend="${failType == d.key} ? 'btn-primary' : 'btn-outline-secondary'"
+               th:href="@{/transfers/{id}(id=${qr.id}, range=${range}, start=${start}, end=${end}, failType=${d.key})}">
+                <span th:text="${d.label}"></span>
+                <span class="badge bg-light text-dark ms-1" th:text="${d.count}"></span>
+            </a>
+        </div>
+    </div>
+
     <!-- 转移明细表 -->
     <table class="table table-sm table-hover align-middle">
         <thead class="table-light">
@@ -23,7 +41,11 @@
                 <th>客户姓名</th>
                 <th>转出方 → 转入方</th>
                 <th>状态</th>
-                <th>时间</th>
+                <th>发起时间</th>
+                <th>确认时间</th>
+                <th class="text-end">重试</th>
+                <th>欢迎语</th>
+                <th>已填表</th>
                 <th>失败原因</th>
             </tr>
         </thead>
@@ -53,15 +75,64 @@
                               : t.status.name()}"></span>
                 </td>
                 <td th:text="${t.transferTime}"></td>
+                <td th:text="${t.confirmTime != null ? t.confirmTime : '-'}"></td>
+                <td class="text-end" th:text="${t.retryCount != null && t.retryCount > 0 ? t.retryCount : '-'}"></td>
+                <td>
+                    <span th:if="${t.greetingSent}" class="small">
+                        <span th:if="${t.greetingPermanentFail}" class="text-danger">永久失败</span>
+                        <span th:unless="${t.greetingPermanentFail}" class="text-success">已发</span>
+                        <span th:if="${t.greetingType != null}"
+                              th:text="${t.greetingType.name() == 'filled' ? '(已填表)' : '(未填表)'}"></span>
+                    </span>
+                    <span th:unless="${t.greetingSent}" class="text-muted">未发</span>
+                </td>
+                <td th:text="${t.formFilledAtTransfer != null ? (t.formFilledAtTransfer ? '是' : '否') : '-'}"></td>
                 <td>
                     <small class="text-muted" th:text="${t.failReason}"></small>
                 </td>
             </tr>
             <tr th:if="${#lists.isEmpty(transfers)}">
-                <td colspan="5" class="text-center text-muted py-4">该时间段内暂无转移记录</td>
+                <td colspan="9" class="text-center text-muted py-4">该时间段内暂无转移记录</td>
             </tr>
         </tbody>
     </table>
+
+    <!-- 分页导航 -->
+    <div class="d-flex justify-content-between align-items-center mt-3" th:if="${transferPage.totalPages > 1}">
+        <small class="text-muted">
+            共 <strong th:text="${transferPage.totalElements}">0</strong> 条，
+            第 <span th:text="${transferPage.number + 1}">1</span>/<span th:text="${transferPage.totalPages}">1</span> 页
+        </small>
+        <nav>
+            <ul class="pagination pagination-sm mb-0">
+                <li class="page-item" th:classappend="${transferPage.first} ? 'disabled'">
+                    <th:block th:if="${!transferPage.first}">
+                        <a class="page-link"
+                           th:href="@{/transfers/{id}(id=${qr.id}, range=${range}, start=${start}, end=${end}, failType=${failType}, page=${transferPage.number - 1})}">上一页</a>
+                    </th:block>
+                    <th:block th:if="${transferPage.first}">
+                        <span class="page-link">上一页</span>
+                    </th:block>
+                </li>
+                <th:block th:each="i : ${#numbers.sequence(pageStart, pageEnd)}">
+                    <li class="page-item" th:classappend="${i == transferPage.number} ? 'active'">
+                        <a class="page-link"
+                           th:href="@{/transfers/{id}(id=${qr.id}, range=${range}, start=${start}, end=${end}, failType=${failType}, page=${i})}"
+                           th:text="${i + 1}">1</a>
+                    </li>
+                </th:block>
+                <li class="page-item" th:classappend="${transferPage.last} ? 'disabled'">
+                    <th:block th:if="${!transferPage.last}">
+                        <a class="page-link"
+                           th:href="@{/transfers/{id}(id=${qr.id}, range=${range}, start=${start}, end=${end}, failType=${failType}, page=${transferPage.number + 1})}">下一页</a>
+                    </th:block>
+                    <th:block th:if="${transferPage.last}">
+                        <span class="page-link">下一页</span>
+                    </th:block>
+                </li>
+            </ul>
+        </nav>
+    </div>
 </div>
 </main>
 </html>

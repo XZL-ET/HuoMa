@@ -357,6 +357,7 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
 
         CustomerTransfer updated = transferRepo.findById(pending.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.rejected);
+        assertThat(updated.getFailReason()).isEqualTo("客户拒绝接替");
         assertThat(newlyConfirmed).doesNotContain(pending.getId());
     }
 

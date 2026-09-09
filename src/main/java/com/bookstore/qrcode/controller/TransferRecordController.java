@@ -8,7 +8,10 @@ import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.service.TransferFailType;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -20,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -46,6 +50,8 @@ import java.util.Set;
 @RequestMapping("/transfers")
 @RequiredArgsConstructor
 public class TransferRecordController {
+
+    private static final int PAGE_SIZE = 50;
 
     private final CustomerTransferRepository transferRepo;
     private final CustomerRepository customerRepo;
@@ -74,8 +80,11 @@ public class TransferRecordController {
             m.put("schoolName", r[1]);
             m.put("newCount", ((Number) r[2]).longValue());
             m.put("successCount", ((Number) r[3]).longValue());
-            m.put("failCount", ((Number) r[4]).longValue());
-            m.put("pendingCount", ((Number) r[5]).longValue());
+            m.put("rejectedCount", ((Number) r[4]).longValue());
+            m.put("timeoutCount", ((Number) r[5]).longValue());
+            m.put("apiFailedCount", ((Number) r[6]).longValue());
+            m.put("retryLimitCount", ((Number) r[7]).longValue());
+            m.put("pendingCount", ((Number) r[8]).longValue());
             return m;
         }).toList();
 
@@ -94,13 +103,60 @@ public class TransferRecordController {
                          @RequestParam(defaultValue = "today") String range,
                          @RequestParam(required = false) String start,
                          @RequestParam(required = false) String end,
+                         @RequestParam(required = false) String failType,
+                         @RequestParam(defaultValue = "0") int page,
                          Model model) {
         QrCode qr = qrCodeRepo.findById(qrCodeId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "活码不存在"));
         Window window = resolveWindow(range, start, end);
 
-        List<CustomerTransfer> transfers = transferRepo
-            .findByQrCodeAndCustomerAddTimeBetween(qrCodeId, window.start(), window.end());
+        // 状态与失败原因投影：计算徽章计数与失败原因分布（不受分页影响，避免加载完整实体）
+        List<Object[]> statusRows = transferRepo
+            .findStatusAndFailReasonByQrCodeAndAddTime(qrCodeId, window.start(), window.end());
+
+        long successCount = 0;
+        long failCount = 0;
+        long pendingCount = 0;
+        Map<TransferFailType, Long> dist = new LinkedHashMap<>();
+        for (TransferFailType ft : TransferFailType.values()) {
+            dist.put(ft, 0L);
+        }
+        for (Object[] row : statusRows) {
+            CustomerTransfer.TransferStatus status = (CustomerTransfer.TransferStatus) row[0];
+            String failReason = (String) row[1];
+            switch (status) {
+                case confirmed -> successCount++;
+                case rejected, timeout, api_failed, retry_limit -> {
+                    failCount++;
+                    TransferFailType ft = TransferFailType.classify(failReason);
+                    if (ft != null) {
+                        dist.merge(ft, 1L, Long::sum);
+                    }
+                }
+                case pending_confirm -> pendingCount++;
+            }
+        }
+
+        // 失败原因分布（仅保留有计数的类别）
+        List<Map<String, Object>> failDist = new ArrayList<>();
+        for (TransferFailType ft : TransferFailType.values()) {
+            long count = dist.getOrDefault(ft, 0L);
+            if (count > 0) {
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("key", ft.getKey());
+                d.put("label", ft.getLabel());
+                d.put("count", count);
+                failDist.add(d);
+            }
+        }
+
+        // 当前页明细（分页 + 失败原因过滤；「其他」为补集，走排除式查询；越界回退末页）
+        Page<CustomerTransfer> transferPage = queryPage(qrCodeId, window, failType, Math.max(page, 0));
+        if (transferPage.getTotalPages() > 0
+            && Math.max(page, 0) >= transferPage.getTotalPages()) {
+            transferPage = queryPage(qrCodeId, window, failType, transferPage.getTotalPages() - 1);
+        }
+        List<CustomerTransfer> transfers = transferPage.getContent();
 
         // 客户姓名映射（customerId → name）
         Set<Long> customerIds = new HashSet<>();
@@ -131,28 +187,40 @@ public class TransferRecordController {
             nameMap.putIfAbsent(t.getToUserid(), t.getToUserid());
         }
 
-        long successCount = 0;
-        long failCount = 0;
-        long pendingCount = 0;
-        for (CustomerTransfer t : transfers) {
-            switch (t.getStatus()) {
-                case confirmed -> successCount++;
-                case rejected, timeout, api_failed, retry_limit -> failCount++;
-                case pending_confirm -> pendingCount++;
-            }
-        }
+        // 分页页码范围（最多展示 5 个）
+        int totalPages = transferPage.getTotalPages();
+        int current = transferPage.getNumber();
+        int pageStart = Math.max(0, current - 2);
+        int pageEnd = Math.min(totalPages - 1, current + 2);
 
         model.addAttribute("qr", qr);
+        model.addAttribute("transferPage", transferPage);
         model.addAttribute("transfers", transfers);
         model.addAttribute("customerNameMap", customerNameMap);
         model.addAttribute("nameMap", nameMap);
         model.addAttribute("successCount", successCount);
         model.addAttribute("failCount", failCount);
         model.addAttribute("pendingCount", pendingCount);
+        model.addAttribute("failDist", failDist);
+        model.addAttribute("failType", failType);
+        model.addAttribute("page", page);
+        model.addAttribute("pageStart", pageStart);
+        model.addAttribute("pageEnd", pageEnd);
         model.addAttribute("range", range);
         model.addAttribute("start", window.start().toLocalDate().toString());
         model.addAttribute("end", window.end().toLocalDate().toString());
         return "transfer/detail";
+    }
+
+    /** 按失败原因过滤的分页查询；「其他」为补集类别，走排除式查询 */
+    private Page<CustomerTransfer> queryPage(Long qrCodeId, Window window, String failType, int page) {
+        PageRequest pageRequest = PageRequest.of(page, PAGE_SIZE);
+        return TransferFailType.isOther(failType)
+            ? transferRepo.findPageByQrCodeAndAddTimeOther(
+                qrCodeId, window.start(), window.end(), pageRequest)
+            : transferRepo.findPageByQrCodeAndAddTime(
+                qrCodeId, window.start(), window.end(),
+                TransferFailType.patternFor(failType), pageRequest);
     }
 
     /** 时间窗口解析：today / 7d / 30d / custom */

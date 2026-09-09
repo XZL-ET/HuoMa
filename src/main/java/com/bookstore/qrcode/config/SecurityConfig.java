@@ -62,6 +62,8 @@ public class SecurityConfig {
                         .requestMatchers("/download/**").permitAll()
                         // 用户管理：仅 admin 可访问
                         .requestMatchers("/users/**").hasRole("ADMIN")
+                        // 转接记录查看：仅 admin 可访问
+                        .requestMatchers("/transfers/**").hasRole("ADMIN")
                         // 区县负责人配置：仅 admin 可访问
                         .requestMatchers("/admin/district-managers/**").hasRole("ADMIN")
                         // 学校自助查询：公开页面（由 SchoolRateLimitFilter 提供频控）
