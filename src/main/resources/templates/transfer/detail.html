@@ -44,7 +44,13 @@
                               : t.status.name() == 'api_failed' ? 'bg-secondary'
                               : t.status.name() == 'retry_limit' ? 'bg-dark'
                               : 'bg-secondary'}"
-                          th:text="${t.status.name()}"></span>
+                          th:text="${t.status.name() == 'confirmed' ? '已确认'
+                              : t.status.name() == 'rejected' ? '已拒绝'
+                              : t.status.name() == 'timeout' ? '超时'
+                              : t.status.name() == 'pending_confirm' ? '待确认'
+                              : t.status.name() == 'api_failed' ? 'API失败'
+                              : t.status.name() == 'retry_limit' ? '重试耗尽'
+                              : t.status.name()}"></span>
                 </td>
                 <td th:text="${t.transferTime}"></td>
                 <td>
