@@ -102,6 +102,30 @@ class OutboundMsgSendingTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("卡片图片 picurl 拼接公网域名（相对路径 → 绝对 URL）")
+    void shouldPrefixCardPicUrlWithBaseUrl() throws Exception {
+        FormTemplate tpl = formTemplateRepo.save(FormTemplate.builder()
+            .name("带卡片图片的表单").fields("[{\"name\":\"grade\"}]")
+            .tagMapping("{}").cardPicUrl("/uploads/card-pics/abc123.png").build());
+
+        QrCode qr = createQrCode("测试学校", "SCH-008", null, tpl.getId());
+        String event = buildEventJson("wm-ext-008", "agent1", qr.getId(), "107",
+            "welcome_code_pic");
+
+        processEventMethod.invoke(outboundWorker, event);
+
+        verify(wecomApi, times(1)).sendWelcomeMsg(
+            eq("welcome_code_pic"),
+            contains("家长您好"),
+            argThat(attachments -> {
+                Map<?, ?> link = (Map<?, ?>) attachments.get(0).get("link");
+                String picurl = (String) link.get("picurl");
+                return picurl.startsWith("http") && picurl.endsWith("/uploads/card-pics/abc123.png");
+            })
+        );
+    }
+
+    @Test
     @DisplayName("无 welcome_code → sendMessage 降级")
     void shouldFallbackToSendMessageWhenNoCode() throws Exception {
         QrCode qr = createQrCode("测试学校", "SCH-002", null, null);

@@ -297,7 +297,8 @@ public class OutboundMsgWorker {
             linkMap.put("desc", cardDesc);
             linkMap.put("url", formUrl);
             if (cardPicUrl != null) {
-                linkMap.put("picurl", cardPicUrl);
+                linkMap.put("picurl", cardPicUrl.startsWith("http")
+                    ? cardPicUrl : baseUrl + cardPicUrl);
             }
             formAttach = Map.of(
                 "msgtype", "link",

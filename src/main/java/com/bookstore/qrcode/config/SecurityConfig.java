@@ -84,8 +84,8 @@ public class SecurityConfig {
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问
                         .requestMatchers("/admin/school-entry/**").hasRole("ADMIN")
-                        // 登录页面及静态资源
-                        .requestMatchers("/login", "/css/**", "/js/**").permitAll()
+                        // 登录页面及静态资源（含上传的卡片图片，企微服务器需匿名抓取）
+                        .requestMatchers("/login", "/css/**", "/js/**", "/uploads/**").permitAll()
                         // 运维端点：仅 admin（health 详情含 Stream/PEL 深度，dlq 重放为破坏性操作）
                         .requestMatchers("/api/health/**").hasRole("ADMIN")
                         // 自动在职继承全局开关：仅 admin（破坏性，影响全局继承行为）
