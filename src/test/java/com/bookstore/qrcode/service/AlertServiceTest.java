@@ -156,19 +156,15 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("handleTransferFail — customer_refused 应创建 high 告警")
-    void shouldCreateAlertOnCustomerRefused() throws Exception {
+    @DisplayName("handleTransferFail — customer_refused 不应创建告警（客户拒绝是既定事实，仅由轮询落库 rejected）")
+    void shouldNotCreateAlertOnCustomerRefused() throws Exception {
         JsonNode event = objectMapper.readTree("""
             {"userid":"user1","external_userid":"ext1","fail_reason":"customer_refused"}
             """);
 
         alertService.handleTransferFail(event);
 
-        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
-        verify(alertRepo).save(captor.capture());
-        assertThat(captor.getValue().getAlertType()).isEqualTo("transfer_fail");
-        assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
-        assertThat(captor.getValue().getDetail()).contains("客户拒绝接替");
+        verify(alertRepo, never()).save(any(AgentAlert.class));
     }
 
     @Test

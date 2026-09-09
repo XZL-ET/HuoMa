@@ -33,7 +33,8 @@ import java.util.Map;
  *   <li><b>客户添加失败</b> — 下游企微 API（发欢迎语、打标）返回 25002/84073/84061 等错误码时，
  *       通过 {@link #handleCustomerApiError} 累计计数，达到阈值后告警并暂停员工。</li>
  *   <li><b>客户接替失败</b> — 企微推送 {@code transfer_fail} 事件时，通过
- *       {@link #handleTransferFail} 映射 {@code customer_refused} / {@code customer_limit_exceed} 告警。</li>
+ *       {@link #handleTransferFail} 对 {@code customer_limit_exceed} 告警；
+ *       {@code customer_refused} 仅记日志（客户拒绝由轮询落库 rejected）。</li>
  * </ul>
  *
  * <h3>企微错误码分级处理策略</h3>
@@ -143,11 +144,12 @@ public class AlertService {
      * <p>企微在客户拒绝接替或接替成员客户数达上限时，推送 {@code change_external_contact}
      * 且 {@code ChangeType=transfer_fail} 的事件，携带 {@code FailReason} 枚举：
      * <ul>
-     *   <li>{@code customer_refused} — 客户拒绝接替</li>
-     *   <li>{@code customer_limit_exceed} — 接替成员客户数达上限</li>
+     *   <li>{@code customer_refused} — 客户拒绝接替，仅记日志不告警，拒绝结果由
+     *       {@code get_transfer_result} 轮询落库为 rejected；</li>
+     *   <li>{@code customer_limit_exceed} — 接替成员客户数达上限，告警(high)；</li>
+     *   <li>其他 — 未知失败原因，告警(medium)。</li>
      * </ul>
-     * 与 {@code get_transfer_result} 轮询（已把 status 3/4 标为 rejected）互为补充，
-     * 这里是企微的实时推送告警。接替失败多为客户侧行为，不做自动暂停/熔断。</p>
+     * 接替失败多为客户侧行为，不做自动暂停/熔断。</p>
      *
      * @param event 企微回调事件 JSON 节点，包含 userid、external_userid、fail_reason 字段
      */
@@ -157,12 +159,17 @@ public class AlertService {
         String externalUserId = getStr(event, "external_userid");
         String failReason = getStr(event, "fail_reason");
 
+        if ("customer_refused".equals(failReason)) {
+            // 客户拒绝接替是客户侧既定事实，告警无法改变；拒绝结果由
+            // get_transfer_result 轮询落库为 CustomerTransfer.rejected，此处仅记日志不告警。
+            log.info("客户拒绝接替(不告警): userid={}, external_userid={}",
+                userId, externalUserId);
+            return;
+        }
+
         String reason;
         AgentAlert.AlertSeverity severity;
-        if ("customer_refused".equals(failReason)) {
-            reason = "客户拒绝接替";
-            severity = AgentAlert.AlertSeverity.high;
-        } else if ("customer_limit_exceed".equals(failReason)) {
+        if ("customer_limit_exceed".equals(failReason)) {
             reason = "接替成员客户数达上限";
             severity = AgentAlert.AlertSeverity.high;
         } else {
