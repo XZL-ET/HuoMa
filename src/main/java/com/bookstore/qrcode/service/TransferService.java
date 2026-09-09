@@ -34,7 +34,7 @@ import java.util.Map;
  * 核心流程：{@link #initiate} 发起 → {@link #trackResults} 轮询企微结果 → {@link #sendTransferGreeting} 发送交接欢迎语。
  * 欢迎语按 {@link CustomerTransfer#formFilledAtTransfer} 走 A/B 分支：已填写则写备注+交接语，未填写则提醒填写。
  * 企微 API 返回 {@code TRANSFER_SUCCEED / FAIL / REFUSED / WAIT} 四种状态构成结果状态机。
- * 超过 24 小时（48 次轮询）仍未确认则标记为 {@link CustomerTransfer.TransferStatus#timeout}。
+ * 超过 24 小时仍未确认则标记为 {@link CustomerTransfer.TransferStatus#timeout}（等待接替的则按企微 24h 静默完成标记 confirmed）。
  * </p>
  *
  * @author Bookstore Dev
@@ -369,14 +369,14 @@ public class TransferService {
     /**
      * 追踪在职继承结果（由定时任务周期性调用）。
      * <p>
-     * 查询所有状态为 {@link CustomerTransfer.TransferStatus#pending_confirm} 且重试次数 &lt; 48 的记录，
+     * 查询所有状态为 {@link CustomerTransfer.TransferStatus#pending_confirm} 的记录，
      * 逐一调用企微 API {@code get_transfer_result} 获取最新状态，按企微返回的状态码处理：
      * <ul>
      *   <li><b>1 接替完毕</b> → {@link CustomerTransfer.TransferStatus#confirmed}，
      *       并触发 {@link #sendTransferGreeting} 发送交接欢迎语</li>
-     *   <li><b>2 等待接替</b>（客户未确认）→ 累加重试次数继续轮询，超 24h 标记 timeout</li>
+     *   <li><b>2 等待接替</b>（客户未确认）→ 累加轮询次数继续轮询，超 24h 按企微静默自动完成标记 confirmed</li>
      *   <li><b>3 客户拒绝</b> / <b>4 接替成员达上限</b> → {@link CustomerTransfer.TransferStatus#rejected}</li>
-     *   <li><b>5 无接替记录</b> / 未知码 → 累加重试次数，超时/耗尽则终止</li>
+     *   <li><b>5 无接替记录</b> / 未知码 → 累加轮询次数，超 24h 无终态则标记 timeout</li>
      * </ul>
      * API 参考: https://developer.work.weixin.qq.com/document/path/96327
      * </p>
@@ -388,8 +388,12 @@ public class TransferService {
      */
     public List<Long> trackResults() {
         List<Long> newlyConfirmed = new ArrayList<>();
+        // 不设 pollCount 上限：pending_confirm 记录的终态由 processStatus 里的
+        // 24h 超时判定（TRANSFER_TIMEOUT）决定，而非轮询次数。此前用 pollCount < 48
+        // 做边界，但首次轮询晚于发起时间最多 30 分钟，导致 pollCount 在 ~23.5h 就耗尽、
+        // 记录提前掉出主循环，被兜底逻辑误标 timeout，而企微实际在 24h 时已静默完成接替。
         List<CustomerTransfer> pendings = transferRepo
-            .findByStatusAndPollCountLessThan(CustomerTransfer.TransferStatus.pending_confirm, 48);
+            .findByStatus(CustomerTransfer.TransferStatus.pending_confirm);
 
         // 按交接对 (from,to) 分组：transfer_result 按交接对返回整批客户，
         // 每组只拉取一次完整结果，避免组内每条记录重复调 API
@@ -425,29 +429,6 @@ public class TransferService {
             }
         }
 
-        // 安全网：历史遗留 pollCount ≥48 的 pending_confirm 记录
-        // 修复前这些会被标记 confirmed（误报转移成功），修复后按超时逻辑作废
-        List<CustomerTransfer> exhausted = transferRepo
-            .findByStatusAndPollCountGreaterThanEqual(
-                CustomerTransfer.TransferStatus.pending_confirm, 48);
-        for (CustomerTransfer t : exhausted) {
-            LocalDateTime refTime = t.getTransferTime() != null
-                ? t.getTransferTime()
-                : (t.getCreatedAt() != null ? t.getCreatedAt() : LocalDateTime.now());
-            if (refTime.plus(TRANSFER_TIMEOUT).isBefore(LocalDateTime.now())) {
-                // 已超 24h 仍无终态 → 转移作废（无接替记录可追溯，不能再误报 confirmed）
-                t.setStatus(CustomerTransfer.TransferStatus.timeout);
-                t.setFailReason("轮询耗尽，超时作废");
-                log.info("历史转移超时作废: id={}, customerId={}", t.getId(), t.getCustomerId());
-            }
-            // 未超 24h 但 pollCount ≥48 的情况极罕见，保留 retry_limit 作为安全阀
-            transferRepo.save(t);
-        }
-        if (!exhausted.isEmpty()) {
-            log.info("历史安全网处理: {} 条记录, timeout={}",
-                exhausted.size(),
-                exhausted.stream().filter(t -> t.getStatus() == CustomerTransfer.TransferStatus.timeout).count());
-        }
         return newlyConfirmed;
     }
 
@@ -814,21 +795,20 @@ public class TransferService {
             log.info("api_failed 安全网处理: {} 条 → retry_limit", exhaustedRetries.size());
         }
 
-        // 无条件检查 retry_limit 累积（覆盖所有路径：initiate 终端错误 + 重试耗尽 + 轮询耗尽）
+        // 无条件检查 retry_limit 累积（覆盖所有路径：initiate 终端错误 + 重试耗尽）
         checkRetryLimitAccumulation();
     }
 
     /**
      * 检查服务老师/双角色的 retry_limit 累积情况，达到阈值时告警。
      * <p>
-     * retry_limit 的三大来源（按常见程度排序）：
+     * retry_limit 的两大来源（按常见程度排序）：
      * <ol>
      *   <li>{@code initiate()} 终端错误 — errcode=40205 企微票据过期 / 84097 客户数上限</li>
      *   <li>{@code retryFailedTransfers()} 重试耗尽 — API 调用经 5 次退避重试仍失败</li>
-     *   <li>{@code trackResults()} 轮询耗尽 — 仅未满 24h 但 pollCount 已 ≥48 的极端情况</li>
      * </ol>
-     * 注意：24h 超时的 pending_confirm 记录在 trackResults 中已直接标记 confirmed，
-     * 不再落入 retry_limit，因此告警主要针对真实的 API 层问题。
+     * 注意：pending_confirm 记录的 24h 终态由 trackResults 决定（等待接替 → confirmed、
+     * 无接替记录 → timeout），不落入 retry_limit，因此告警主要针对真实的 API 层问题。
      * </p>
      *
      * <p><b>三层防护：</b>

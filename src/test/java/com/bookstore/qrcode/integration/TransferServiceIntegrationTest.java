@@ -522,9 +522,9 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("trackResults 安全网：pollCount >= 48 且超 24h → timeout")
-    void shouldMarkRetryLimitViaSafetyNet() throws Exception {
-        // given: pending_confirm 且 pollCount = 48（主循环会跳过 because pollCount >= 48）
+    @DisplayName("trackResults：pollCount >= 48 且超 24h + status=2 → confirmed（修复：不再被兜底误标 timeout）")
+    void shouldConfirmExpiredHighPollCountRecord() throws Exception {
+        // given: pending_confirm 且 pollCount = 48、已超 24h（此前会掉出主循环被兜底误标 timeout）
         CustomerTransfer exhausted = transferRepo.save(CustomerTransfer.builder()
             .customerId(testCustomer.getId())
             .fromUserid(RECEPTIONIST).toUserid(SERVICE_TEACHER)
@@ -533,14 +533,21 @@ class TransferServiceIntegrationTest extends BaseIntegrationTest {
             .status(CustomerTransfer.TransferStatus.pending_confirm)
             .pollCount(48).retryCount(0).build());
 
-        // getTransferResult 主循环过滤 pollCount >= 48 的记录，落入安全网
-        // 安全网检测到已超 24h → 标记 timeout（转移作废，不再误报 confirmed）
+        // 企微侧实际仍为等待接替（status=2），24h 已过 → 应静默自动完成标记 confirmed
+        var waitingResp = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"errcode\":0,\"errmsg\":\"ok\"," +
+            "\"customer\":[{\"external_userid\":\"" + EXTERNAL_ID + "\",\"status\":2}]}");
+        when(wecomApi.getTransferResult(anyString(), anyString(), isNull()))
+            .thenReturn(waitingResp);
+
+        // when
         List<Long> newlyConfirmed = transferService.trackResults();
 
+        // then: 不再误标 timeout，而是按企微 24h 自动完成标记 confirmed
         CustomerTransfer updated = transferRepo.findById(exhausted.getId()).orElseThrow();
-        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.timeout);
-        assertThat(updated.getFailReason()).contains("超时作废");
-        assertThat(newlyConfirmed).isEmpty();
+        assertThat(updated.getStatus()).isEqualTo(CustomerTransfer.TransferStatus.confirmed);
+        assertThat(updated.getFailReason()).contains("自动完成");
+        assertThat(newlyConfirmed).contains(exhausted.getId());
     }
 
     // ================================================================

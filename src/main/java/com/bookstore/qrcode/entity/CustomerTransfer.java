@@ -97,8 +97,9 @@ public class CustomerTransfer {
     /**
      * 转移结果轮询次数（仅用于 pending_confirm 状态的追踪）。
      * <p>
-     * 调用 get_transfer_result 的次数，上限 48 次（对应 24h），
-     * 达到上限或超过 24 小时后标记为 timeout / retry_limit。
+     * 调用 get_transfer_result 的次数，仅作统计观测，不再是终态判定的边界：
+     * pending_confirm 的终态由 {@code transferTime + 24h} 是否超时决定，
+     * 等待接替的到 24h 标记 confirmed，无接替记录的到 24h 标记 timeout。
      * 与 {@link #retryCount} 分离，互不干扰。
      * </p>
      */

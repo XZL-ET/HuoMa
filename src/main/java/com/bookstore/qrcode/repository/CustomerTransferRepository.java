@@ -81,19 +81,6 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
             @Param("now") LocalDateTime now);
 
     /**
-     * 查询指定状态下轮询次数未超过上限的转移记录。
-     * <p>
-     * 用于 trackResults：扫描 pending_confirm 状态、pollCount &lt; 48 的记录。
-     * </p>
-     *
-     * @param status     转移状态
-     * @param maxPolls   最大允许轮询次数
-     * @return 可继续轮询的转移记录列表
-     */
-    List<CustomerTransfer> findByStatusAndPollCountLessThan(
-            CustomerTransfer.TransferStatus status, int maxPolls);
-
-    /**
      * 统计指定时间范围内的客户转移总次数。
      * <p>
      * 用于日报/报表中计算某段时间内的转移总量。
@@ -214,7 +201,6 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
      * 查询指定状态下 API 重试次数已达上限的转移记录。
      * <p>
      * 用于将 retryCount 耗尽但仍处于 api_failed 的记录标记为 retry_limit。
-     * 注意：trackResults 的轮询耗尽使用 {@link #findByStatusAndPollCountGreaterThanEqual}。
      * </p>
      */
     List<CustomerTransfer> findByStatusAndRetryCountGreaterThanEqual(
@@ -228,16 +214,6 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
         + "WHERE ct.status = 'confirmed' AND ct.greetingSent = true "
         + "AND ct.noteSent = true")
     List<CustomerTransfer> findConfirmedWithFormSubmission();
-
-    /**
-     * 查询指定状态下轮询次数已达上限的转移记录。
-     * <p>
-     * 用于 trackResults 安全网：将 pollCount ≥ 48 但仍处于 pending_confirm
-     * 的记录标记为 retry_limit。
-     * </p>
-     */
-    List<CustomerTransfer> findByStatusAndPollCountGreaterThanEqual(
-            CustomerTransfer.TransferStatus status, int minPolls);
 
     /**
      * 查询已确认但欢迎语未发送的转移记录，限定确认时间窗口以防止无限重试。
