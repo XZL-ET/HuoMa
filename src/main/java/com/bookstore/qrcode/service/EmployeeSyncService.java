@@ -149,6 +149,12 @@ public class EmployeeSyncService {
             }
         }
 
+        // 对账僵尸记录：上一轮因 30% 安全网跳过级联清理而遗留的离职员工
+        // （employee.active=false 但 agent 仍 normal / qr_agent 仍 active）。
+        // 必须在 deactivateNotIn 之前执行：此时 findByActiveFalse() 只含上轮已标记离职、
+        // 本轮仍未在企微通讯录出现的稳定离职者，天然排除本轮因 API 异常新标记的员工。
+        reconcileZombieAgents();
+
         // 标记已不在企微通讯录中的员工为离职
         int deactivated = 0;
         if (!activeUserIds.isEmpty()) {
@@ -174,39 +180,9 @@ public class EmployeeSyncService {
                         (int)(ratio * 100),
                         toDeactivate.size() <= 20 ? toDeactivate : toDeactivate.subList(0, 20) + "…");
                 } else {
-                    // 先找出服务老师（在下码之前查），后续单独发告警
-                    List<String> serviceUserIds = qrAgentRepo.findServiceUseridsIn(toDeactivate);
-
-                    // 所有离职员工统一封禁 agent + 下码（防止 60111）
-                    int blocked = agentRepo.batchBlockByUserids(toDeactivate);
-                    int removed = qrAgentRepo.batchRemoveByAgentUserids(toDeactivate);
-
-                    // 服务老师/双角色额外创建告警，提醒管理员做在职继承
-                    int alerted = 0;
-                    if (!serviceUserIds.isEmpty()) {
-                        for (String uid : serviceUserIds) {
-                            try {
-                                // 下码后查询该老师所有受影响活码（此时 status 已变为 removed）
-                                List<String> qrNames = qrAgentRepo.findByAgentUserid(uid).stream()
-                                    .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.removed
-                                        && toDeactivate.contains(qa.getAgentUserid()))
-                                    .map(qa -> "活码" + qa.getQrCodeId())
-                                    .distinct()
-                                    .toList();
-                                alertService.createAlert(uid, "employee_departed_service",
-                                    AgentAlert.AlertSeverity.high,
-                                    String.format("服务老师 %s 已从企微离职，已自动下码，请手动处理在职继承。关联活码: %s",
-                                        uid, String.join(", ", qrNames)),
-                                    AgentAlert.AutoAction.none, null);
-                                alerted++;
-                            } catch (Exception e) {
-                                log.error("服务老师离职告警失败: userid={}", uid, e);
-                            }
-                        }
-                    }
-
+                    CascadeResult r = cascadeCleanup(toDeactivate);
                     log.info("员工离职级联清理: 标记离职{}人, agent封禁{}人, qr_agent移除{}人, 服务老师告警{}人, userids={}",
-                        deactivated, blocked, removed, alerted,
+                        deactivated, r.blocked, r.removed, r.alerted,
                         toDeactivate.size() <= 10 ? toDeactivate : toDeactivate.subList(0, 10) + "…共" + toDeactivate.size() + "人");
                 }
             }
@@ -219,6 +195,101 @@ public class EmployeeSyncService {
             inserted, updated, deactivated, activeUserIds.size());
 
         return activeUserIds.size();
+    }
+
+    /**
+     * 对账僵尸记录：员工已离职（employee.active=false）但 agent 仍 normal / qr_agent 仍 active。
+     * <p>来源：历史上 30% 安全网跳过级联清理，导致 employee.active=false 已落库，
+     * 但 agent / qr_agent 未级联封禁/下码。由于级联清理的 toDeactivate 只查询 active=true，
+     * 这些员工在后续同步中不再被检测，成为永久僵尸（继续推送离职 userid 到企微导致 60111）。</p>
+     * <p>幂等：agent 仅封禁 normal，qr_agent 仅移除 active，已处理的不重复。</p>
+     * <p>安全网：僵尸数占比超 30% 时跳过，防止跨轮 API 异常造成的批量误伤。</p>
+     */
+    void reconcileZombieAgents() {
+        List<Employee> inactiveEmps = employeeRepo.findByActiveFalse();
+        if (inactiveEmps.isEmpty()) {
+            return;
+        }
+        List<String> inactiveUserids = inactiveEmps.stream()
+            .map(Employee::getUserid)
+            .toList();
+
+        // 只处理真正的僵尸：employee 已离职但 agent 仍 normal 或 qr_agent 仍 active
+        Set<String> zombieUserids = new HashSet<>(agentRepo.findNormalUseridsIn(inactiveUserids));
+        zombieUserids.addAll(qrAgentRepo.findUseridsWithActiveBinding(inactiveUserids));
+        if (zombieUserids.isEmpty()) {
+            return;
+        }
+
+        // 安全网：僵尸数占比异常时跳过，防止跨轮 API 异常导致批量误伤
+        int activeCount = (int) employeeRepo.countByActiveTrue();
+        double ratio = (double) zombieUserids.size() / Math.max(activeCount + zombieUserids.size(), 1);
+        if (ratio > 0.30) {
+            log.error("僵尸对账比例异常({}/{}={}%)，跳过防止误伤。userids={}",
+                zombieUserids.size(), activeCount + zombieUserids.size(),
+                (int)(ratio * 100),
+                zombieUserids.size() <= 20 ? zombieUserids : zombieUserids.stream().limit(20).toList() + "…");
+            return;
+        }
+
+        List<String> zombieList = new ArrayList<>(zombieUserids);
+        CascadeResult r = cascadeCleanup(zombieList);
+        if (r.blocked > 0 || r.removed > 0) {
+            log.info("僵尸对账完成: agent封禁{}人, qr_agent移除{}人, 服务老师告警{}人, userids={}",
+                r.blocked, r.removed, r.alerted,
+                zombieList.size() <= 10 ? zombieList : zombieList.subList(0, 10) + "…共" + zombieList.size() + "人");
+        }
+    }
+
+    /**
+     * 级联清理离职员工的 agent / qr_agent 记录，防止离职 userid 继续推送到企微 API 导致 60111。
+     * <p>幂等：agent 仅封禁 normal，qr_agent 仅移除 active，已处理的不重复。</p>
+     * <p>对服务老师/双角色额外创建告警，提醒管理员做在职继承。</p>
+     *
+     * @param userids 待清理的离职员工 userid 列表
+     * @return 本次实际清理/告警的数量
+     */
+    private CascadeResult cascadeCleanup(List<String> userids) {
+        if (userids.isEmpty()) {
+            return CascadeResult.EMPTY;
+        }
+
+        // 先找出服务老师（在下码之前查），后续单独发告警
+        List<String> serviceUserIds = qrAgentRepo.findServiceUseridsIn(userids);
+
+        // 所有离职员工统一封禁 agent + 下码（防止 60111）
+        int blocked = agentRepo.batchBlockByUserids(userids);
+        int removed = qrAgentRepo.batchRemoveByAgentUserids(userids);
+
+        // 服务老师/双角色额外创建告警，提醒管理员做在职继承
+        int alerted = 0;
+        if (!serviceUserIds.isEmpty()) {
+            for (String uid : serviceUserIds) {
+                try {
+                    // 下码后查询该老师所有受影响活码（此时 status 已变为 removed）
+                    List<String> qrNames = qrAgentRepo.findByAgentUserid(uid).stream()
+                        .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.removed)
+                        .map(qa -> "活码" + qa.getQrCodeId())
+                        .distinct()
+                        .toList();
+                    alertService.createAlert(uid, "employee_departed_service",
+                        AgentAlert.AlertSeverity.high,
+                        String.format("服务老师 %s 已从企微离职，已自动下码，请手动处理在职继承。关联活码: %s",
+                            uid, String.join(", ", qrNames)),
+                        AgentAlert.AutoAction.none, null);
+                    alerted++;
+                } catch (Exception e) {
+                    log.error("服务老师离职告警失败: userid={}", uid, e);
+                }
+            }
+        }
+
+        return new CascadeResult(blocked, removed, alerted);
+    }
+
+    /** 级联清理结果统计。 */
+    private record CascadeResult(int blocked, int removed, int alerted) {
+        static final CascadeResult EMPTY = new CascadeResult(0, 0, 0);
     }
 
     /**

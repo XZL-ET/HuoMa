@@ -29,6 +29,9 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     /** 查找全部离职员工（active=false），仅返回 userid 用于清理 */
     List<Employee> findByActiveFalse();
 
+    /** 统计在职员工数（active=true），用于离职/僵尸对账的安全网比率判定 */
+    long countByActiveTrue();
+
     /** 按姓名模糊搜索 */
     List<Employee> findByNameContaining(String keyword);
 
