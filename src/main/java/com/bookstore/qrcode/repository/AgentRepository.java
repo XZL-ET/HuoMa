@@ -115,4 +115,15 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
     @Query("SELECT a.userid FROM Agent a "
          + "WHERE a.userid IN :userids AND a.role IN ('service', 'dual')")
     Set<String> findUseridsWithServiceOrDualRole(@Param("userids") Collection<String> userids);
+
+    /**
+     * 查找指定员工中仍为 normal 状态的 userid 集合。
+     * <p>用于离职僵尸对账：定位 employee.active=false 但 agent 尚未封禁的僵尸记录。</p>
+     *
+     * @param userids 待判定的员工 userid 集合
+     * @return 其中 overallStatus 仍为 normal 的 userid 集合
+     */
+    @Query("SELECT a.userid FROM Agent a "
+         + "WHERE a.userid IN :userids AND a.overallStatus = 'normal'")
+    Set<String> findNormalUseridsIn(@Param("userids") Collection<String> userids);
 }
