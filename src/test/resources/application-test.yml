@@ -68,7 +68,7 @@ app:
     read-timeout: 10
   agent:
     daily-max-default: 150
-    batch-import-daily-max: 200
+    batch-import-daily-max: 300
     rotation-lock-ttl-seconds: 60
   transfer:
     form-url: http://localhost:8080/form

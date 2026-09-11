@@ -144,18 +144,18 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
 
         QrCode created = qrCodeService.create(req);
 
-        // bindAgents 使用 serviceDailyMax 作为默认日限（null→150）
+        // bindAgents 使用 resolveDefault() 作为服务老师默认日限（无配置→兜底 300）
         List<QrAgent> agents = qrAgentRepo.findByQrCodeId(created.getId());
         assertThat(agents).hasSizeGreaterThanOrEqualTo(2);
 
         // 服务老师应被标记为 service 角色，dailyMax 使用全局默认值
         QrAgent a1 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent1").orElseThrow();
         assertThat(a1.getRole()).isEqualTo(QrAgent.AgentRole.service);
-        assertThat(a1.getDailyMax()).isEqualTo(150); // serviceDailyMax 未设置→默认150
+        assertThat(a1.getDailyMax()).isEqualTo(300); // serviceDailyMax 未设置→默认 300
 
         QrAgent a2 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent2").orElseThrow();
         assertThat(a2.getRole()).isEqualTo(QrAgent.AgentRole.service);
-        assertThat(a2.getDailyMax()).isEqualTo(150);
+        assertThat(a2.getDailyMax()).isEqualTo(300);
     }
 
     @Test

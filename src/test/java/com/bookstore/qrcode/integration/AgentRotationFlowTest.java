@@ -64,6 +64,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
         req.setStudentCount(500);
         req.setServiceTeacherUserid("agent_svc");
         req.setInitialAgentUserids("agent_svc");
+        req.setServiceDailyMax(150);
         testQr = qrCodeService.create(req);
 
         // 手动将 agent1 添加为活码上的接待员（供轮换测试使用）
@@ -231,6 +232,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
         req.setStudentCount(300);
         req.setServiceTeacherUserid("agent_svc");
         req.setInitialAgentUserids("agent_svc");
+        req.setServiceDailyMax(150);
         QrCode onlySvcQr = qrCodeService.create(req);
 
         int agentsBefore = qrAgentRepo.findByQrCodeId(onlySvcQr.getId()).size();
@@ -290,6 +292,7 @@ class AgentRotationFlowTest extends BaseIntegrationTest {
         req.setStudentCount(300);
         req.setServiceTeacherUserid("agent_svc");
         req.setInitialAgentUserids("agent_svc");
+        req.setServiceDailyMax(150);
         QrCode onlySvcQr = qrCodeService.create(req);
 
         // 清空全局池，模拟池枯竭（takeStandby 返回 null）

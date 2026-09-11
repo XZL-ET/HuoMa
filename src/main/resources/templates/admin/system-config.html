@@ -10,6 +10,11 @@
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show" role="alert">
+        ⚠️ <span th:text="${error}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
     <div class="card border-0 shadow-sm">
         <div class="table-responsive">
             <table class="table table-hover mb-0 align-middle">
@@ -51,6 +56,35 @@
                     </tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+
+    <!-- 服务老师日限 -->
+    <div class="card border-0 shadow-sm mt-4">
+        <div class="card-header bg-white border-bottom-0">
+            <h5 class="mb-0">服务老师日限</h5>
+        </div>
+        <div class="card-body">
+            <form th:action="@{/admin/system-config/service-teacher-daily-max}" method="post"
+                  class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small text-muted mb-1" for="serviceDailyMaxInput">每日可加人数</label>
+                    <input id="serviceDailyMaxInput" type="number" name="value" class="form-control form-control-sm"
+                           min="1" max="800" required th:value="${serviceTeacherDailyMax}" style="width:140px">
+                </div>
+                <div class="col-auto">
+                    <button type="submit" name="apply" value="false" class="btn btn-outline-primary btn-sm">
+                        保存默认值
+                    </button>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" name="apply" value="true" class="btn btn-primary btn-sm"
+                            onclick="return confirm('将把「所有服务老师」的日限统一改为该值并刷新存量，执行前会自动备份。确认执行？')">
+                        保存并应用到全部服务老师
+                    </button>
+                </div>
+            </form>
+            <small class="text-muted d-block mt-2">「保存默认值」只影响以后新建的服务老师；「应用到全部」会同时刷新存量服务老师的日限（执行前自动建备份表，可回滚）。</small>
         </div>
     </div>
 

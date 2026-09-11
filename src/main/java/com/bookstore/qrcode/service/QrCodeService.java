@@ -93,6 +93,7 @@ public class QrCodeService {
     private final SystemConfigRepository systemConfigRepo;
     private final WechatSyncHealingService healingService;
     private final SceneConfigProperties sceneConfig;
+    private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
 
     @Qualifier("taskExecutor")
     private final Executor taskExecutor;
@@ -108,10 +109,6 @@ public class QrCodeService {
     /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
-
-    /** 批量导入时日接待上限，可通过 app.agent.batch-import-daily-max 配置 */
-    @Value("${app.agent.batch-import-daily-max:200}")
-    private int batchImportDailyMax;
 
     // ==================== 查询 ====================
 
@@ -507,8 +504,8 @@ public class QrCodeService {
                             log.warn("批量导入 [{}]: 第 {} 行服务老师日上限无法解析: {}", taskId, i + 1, dailyMaxStr);
                         }
                     } else {
-                        // 使用批量导入专用默认日上限（区分于手动创建的 dailyMaxDefault）
-                        req.setServiceDailyMax(batchImportDailyMax);
+                        // 使用服务老师日限默认值（system_config，可前端调整）
+                        req.setServiceDailyMax(serviceTeacherDailyMaxService.resolveDefault());
                     }
                     req.setWelcomeText(item.get("welcomeText"));
 
@@ -1539,7 +1536,7 @@ public class QrCodeService {
 
             // 确保指定员工在全局池中，并写入 QrAgent
             int defaultDailyMax = req.getServiceDailyMax() != null
-                ? req.getServiceDailyMax() : 150;
+                ? req.getServiceDailyMax() : serviceTeacherDailyMaxService.resolveDefault();
             // 手动指定的初始员工作为「服务老师」，其余从全局池补的作为「接待员」
             for (String uid : initialUserids) {
                 ensureAgent(uid, "service"); // 服务老师不入全局池，避免被其他活码借走
