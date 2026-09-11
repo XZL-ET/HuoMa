@@ -131,7 +131,7 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("serviceTeacherJson 创建多个服务老师 → bindAgents 使用 serviceDailyMax 默认值 30")
+    @DisplayName("serviceTeacherJson 创建多个服务老师 → serviceDailyMax 与 dailyMax 都设为默认值")
     void shouldCreateServiceTeachersFromJson() {
         QrCodeCreateRequest req = baseRequest();
         req.setInitialAgentUserids(null);    // 不用简化模式
@@ -148,14 +148,16 @@ class QrCodeCreationFlowTest extends BaseIntegrationTest {
         List<QrAgent> agents = qrAgentRepo.findByQrCodeId(created.getId());
         assertThat(agents).hasSizeGreaterThanOrEqualTo(2);
 
-        // 服务老师应被标记为 service 角色，dailyMax 使用全局默认值
+        // 服务老师应被标记为 service 角色，dailyMax 与 serviceDailyMax 都使用全局默认值
         QrAgent a1 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent1").orElseThrow();
         assertThat(a1.getRole()).isEqualTo(QrAgent.AgentRole.service);
-        assertThat(a1.getDailyMax()).isEqualTo(300); // serviceDailyMax 未设置→默认 300
+        assertThat(a1.getDailyMax()).isEqualTo(300);
+        assertThat(a1.getServiceDailyMax()).isEqualTo(300);
 
         QrAgent a2 = qrAgentRepo.findByQrCodeIdAndAgentUserid(created.getId(), "agent2").orElseThrow();
         assertThat(a2.getRole()).isEqualTo(QrAgent.AgentRole.service);
         assertThat(a2.getDailyMax()).isEqualTo(300);
+        assertThat(a2.getServiceDailyMax()).isEqualTo(300);
     }
 
     @Test

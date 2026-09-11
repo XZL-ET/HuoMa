@@ -1544,6 +1544,7 @@ public class QrCodeService {
                     .qrCodeId(qrCodeId).agentUserid(uid)
                     .role(QrAgent.AgentRole.service)
                     .dailyMax(defaultDailyMax)
+                    .serviceDailyMax(defaultDailyMax)
                     .sortOrder(sortOrder++)
                     .status(QrAgent.AgentStatus.active).build());
                 needCount--;
