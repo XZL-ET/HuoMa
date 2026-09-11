@@ -923,6 +923,11 @@ public class QrCodeService {
                     }
                 }
                 agent.setRole(newRole);
+                // 降级为接待员时清空服务日限：serviceDailyMax 仅对 service/dual 生效，
+                // 残留旧值会在后续轮换/对账中造成脏数据
+                if (newRole == QrAgent.AgentRole.receptionist) {
+                    agent.setServiceDailyMax(null);
+                }
                 // 同步 Agent 表角色（仅升级：receptionist → service/dual），
                 // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
                 if (newRole == QrAgent.AgentRole.service

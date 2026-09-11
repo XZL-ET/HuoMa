@@ -112,6 +112,31 @@ class QrCodeServiceTest {
     }
 
     @Test
+    @DisplayName("updateAgent — 服务老师降级为接待员时清空 serviceDailyMax")
+    void shouldClearServiceDailyMaxOnDowngradeToReceptionist() {
+        QrAgent agent = QrAgent.builder()
+                .id(10L).qrCodeId(1L).agentUserid("svc1")
+                .role(QrAgent.AgentRole.service)
+                .dailyMax(300)
+                .serviceDailyMax(300)
+                .status(QrAgent.AgentStatus.active)
+                .build();
+        QrAgent otherSvc = QrAgent.builder()
+                .id(11L).qrCodeId(1L).agentUserid("svc2")
+                .role(QrAgent.AgentRole.service)
+                .status(QrAgent.AgentStatus.active)
+                .build();
+        when(qrAgentRepo.findById(10L)).thenReturn(Optional.of(agent));
+        when(qrAgentRepo.findByQrCodeId(1L)).thenReturn(List.of(agent, otherSvc));
+
+        qrCodeService.updateAgent(1L, 10L, null, "receptionist", null);
+
+        assertThat(agent.getRole()).isEqualTo(QrAgent.AgentRole.receptionist);
+        assertThat(agent.getServiceDailyMax()).isNull();
+        verify(qrAgentRepo).save(agent);
+    }
+
+    @Test
     @DisplayName("batchUpdateRotateMode — 批量 JPQL 更新，repo 直接返回行数")
     void shouldBatchUpdateRotateModeWithPartialFailure() {
         when(qrCodeRepo.batchUpdateRotateMode(eq(QrCode.RotateMode.manual), anyList()))
