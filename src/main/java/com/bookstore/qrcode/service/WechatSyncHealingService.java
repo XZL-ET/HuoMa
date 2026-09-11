@@ -162,8 +162,8 @@ public class WechatSyncHealingService {
                 attempt++;
             } catch (WecomApiException e) {
                 int errcode = e.getErrcode();
-                // 可自愈错误（40098=成员未实名, 41054=成员不可用）→ 二分排查后重试
-                if ((errcode == 40098 || errcode == 41054) && !current.isEmpty()) {
+                // 可自愈错误（40098=成员未实名, 41054=成员不可用, 60111=userid 不存在）→ 二分排查后重试
+                if (isUnavailableErrcode(errcode) && !current.isEmpty()) {
                     log.warn("自愈: 初始同步失败 errcode={}，二分排查 {} 个成员", errcode, current.size());
                     String failing = findFailingUser(configId, current);
                     if (failing != null) {
@@ -263,7 +263,7 @@ public class WechatSyncHealingService {
                 // 左半正常，问题在右半
                 left = mid;
             } catch (WecomApiException e) {
-                if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
+                if (isUnavailableErrcode(e.getErrcode())) {
                     right = mid; // 不可用用户在左半
                 } else {
                     log.warn("二分查找遇到非可自愈错误 errcode={}，退化为线性扫描", e.getErrcode());
@@ -292,7 +292,7 @@ public class WechatSyncHealingService {
             wecomApi.updateContactWay(configId, List.of(userId));
             return true;
         } catch (WecomApiException e) {
-            if (e.getErrcode() == 40098 || e.getErrcode() == 41054) {
+            if (isUnavailableErrcode(e.getErrcode())) {
                 return false;
             }
             // 非可自愈错误也当作不可用（保守）
@@ -300,6 +300,14 @@ public class WechatSyncHealingService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * 企微侧成员不可用错误码，可被自愈移除：
+     * 40098=未实名、41054=未激活/不可用、60111=userid 不存在（离职/改名/录入错误）。
+     */
+    private static boolean isUnavailableErrcode(int errcode) {
+        return errcode == 40098 || errcode == 41054 || errcode == 60111;
     }
 
     /**
