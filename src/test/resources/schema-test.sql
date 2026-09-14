@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
         CHECK (status IN ('active','full','removed','blocked')),
     replaced_by VARCHAR(100),
     is_temporary BOOLEAN NOT NULL DEFAULT FALSE,
+    is_fallback BOOLEAN NOT NULL DEFAULT FALSE,
     last_reset_at TIMESTAMP,
     bind_target JSON,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

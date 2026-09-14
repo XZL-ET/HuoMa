@@ -22,9 +22,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,7 +40,6 @@ class WechatSyncHealingServiceTest {
     @Mock private EmployeeRepository employeeRepo;
     @Mock private GlobalAgentPoolService poolService;
     @Mock private AlertService alertService;
-    @Mock private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
 
     @InjectMocks
     private WechatSyncHealingService service;
@@ -91,53 +90,41 @@ class WechatSyncHealingServiceTest {
     }
 
     @Test
-    @DisplayName("提拔替补 dual 时标记 fallback 并设置服务日限默认值")
-    void shouldMarkFallbackAndSetServiceDailyMaxOnPromote() {
-        QrAgent senior = QrAgent.builder().id(1L).qrCodeId(1L).agentUserid("senior1")
-                .role(QrAgent.AgentRole.receptionist).dailyMax(150)
-                .status(QrAgent.AgentStatus.active).build();
-        when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
-        when(agentRepo.findById("senior1")).thenReturn(Optional.empty());
+    @DisplayName("服务老师失联时只告警一次，不提拔任何接待员")
+    void shouldNotPromoteWhenServiceUnavailable() throws Exception {
+        QrCode qr = new QrCode();
+        qr.setId(1L);
+        qr.setQrConfigId("cfg1");
+        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr));
 
-        service.persistServiceFallback(senior, 1L, "svc1");
+        // 初始全量同步抛 60111
+        when(wecomApi.updateContactWay("cfg1", List.of("rep1", "svc1")))
+                .thenThrow(new WecomApiException(60111, "userid not found", "{}"));
+        // 二分定位：rep1 可用，svc1 不可用
+        when(wecomApi.updateContactWay("cfg1", List.of("rep1")))
+                .thenReturn(objectMapper.readTree("{\"errcode\":0}"));
+        when(wecomApi.updateContactWay("cfg1", List.of("svc1")))
+                .thenThrow(new WecomApiException(60111, "userid not found", "{}"));
 
-        assertEquals(QrAgent.AgentRole.dual, senior.getRole());
-        assertTrue(Boolean.TRUE.equals(senior.getFallback()));
-        assertEquals(300, senior.getServiceDailyMax());
-        verify(qrAgentRepo).save(senior);
-    }
-
-    @Test
-    @DisplayName("服务老师恢复后，冗余的失联替补 dual 降回 receptionist")
-    void shouldDemoteRecoveredFallbackDual() {
-        QrAgent fallback = QrAgent.builder().id(1L).qrCodeId(1L).agentUserid("senior1")
-                .role(QrAgent.AgentRole.dual).fallback(true).serviceDailyMax(300)
-                .status(QrAgent.AgentStatus.active).build();
-        QrAgent realSvc = QrAgent.builder().id(2L).qrCodeId(1L).agentUserid("svc1")
+        // 失联成员是服务老师
+        QrAgent failing = QrAgent.builder().id(10L).qrCodeId(1L).agentUserid("svc1")
                 .role(QrAgent.AgentRole.service).status(QrAgent.AgentStatus.active).build();
-        when(qrAgentRepo.findByQrCodeId(1L)).thenReturn(List.of(fallback, realSvc));
+        when(qrAgentRepo.findByQrCodeIdAndAgentUserid(1L, "svc1")).thenReturn(Optional.of(failing));
 
-        service.demoteRecoveredFallbacks(1L, List.of("svc1"));
+        // 移除后重同步 rep1 成功
+        when(wecomApi.getContactWay("cfg1"))
+                .thenReturn(objectMapper.readTree("{\"contact_way\":{\"user\":[\"rep1\"]}}"));
 
-        assertEquals(QrAgent.AgentRole.receptionist, fallback.getRole());
-        assertFalse(Boolean.TRUE.equals(fallback.getFallback()));
-        assertNull(fallback.getServiceDailyMax());
-        verify(qrAgentRepo).save(fallback);
-    }
+        WechatSyncHealingService.SyncResult result =
+                service.syncWithHealing(1L, List.of("rep1", "svc1"), "qr-service");
 
-    @Test
-    @DisplayName("服务老师未恢复时，替补 dual 保持不动")
-    void shouldNotDemoteWhenServiceStillUnavailable() {
-        QrAgent fallback = QrAgent.builder().id(1L).qrCodeId(1L).agentUserid("senior1")
-                .role(QrAgent.AgentRole.dual).fallback(true).serviceDailyMax(300)
-                .status(QrAgent.AgentStatus.active).build();
-        // 活码上只有替补 dual，没有真实 service/dual 可用
-        when(qrAgentRepo.findByQrCodeId(1L)).thenReturn(List.of(fallback));
-
-        service.demoteRecoveredFallbacks(1L, List.of("senior1"));
-
-        assertEquals(QrAgent.AgentRole.dual, fallback.getRole());
-        assertTrue(Boolean.TRUE.equals(fallback.getFallback()));
-        verify(qrAgentRepo, never()).save(fallback);
+        assertTrue(result.success);
+        // 只发一次告警：wechat_unavailable_service，不发「已被移除」
+        verify(alertService).createAlert(eq("svc1"), eq("wechat_unavailable_service"), any(), any(), any(), eq(1L));
+        verify(alertService, never()).createAlert(eq("svc1"), eq("wechat_unavailable"), any(), any(), any(), eq(1L));
+        // 不提拔：不查找接待员，不改任何 QrAgent 角色
+        verify(qrAgentRepo, never()).findByQrCodeId(any());
+        // 服务老师不下码
+        assertEquals(QrAgent.AgentStatus.active, failing.getStatus());
     }
 }

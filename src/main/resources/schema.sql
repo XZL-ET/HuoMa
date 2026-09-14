@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS qr_agent (
     status ENUM('active','full','removed','blocked') NOT NULL DEFAULT 'active',
     replaced_by VARCHAR(100) COMMENT '被谁替换',
     is_temporary TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否临时顶替接待员（服务老师唯一成员下码前补入，次日释放）',
+    is_fallback TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否失联替补提拔的 dual',
     last_reset_at DATETIME COMMENT '上次清零时间',
     bind_target JSON COMMENT '服务老师继承目标配置',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
