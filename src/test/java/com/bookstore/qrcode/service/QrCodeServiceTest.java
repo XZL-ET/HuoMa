@@ -112,6 +112,26 @@ class QrCodeServiceTest {
     }
 
     @Test
+    @DisplayName("updateAgent — 接待员升级为服务老师时填充 serviceDailyMax")
+    void shouldFillServiceDailyMaxOnUpgradeToService() {
+        QrAgent agent = QrAgent.builder()
+                .id(10L).qrCodeId(1L).agentUserid("svc1")
+                .role(QrAgent.AgentRole.receptionist)
+                .dailyMax(150)
+                .serviceDailyMax(null)
+                .status(QrAgent.AgentStatus.active)
+                .build();
+        when(qrAgentRepo.findById(10L)).thenReturn(Optional.of(agent));
+        when(agentRepo.findById("svc1")).thenReturn(Optional.empty());
+
+        qrCodeService.updateAgent(1L, 10L, null, "service", null);
+
+        assertThat(agent.getRole()).isEqualTo(QrAgent.AgentRole.service);
+        assertThat(agent.getServiceDailyMax()).isEqualTo(150);
+        verify(qrAgentRepo).save(agent);
+    }
+
+    @Test
     @DisplayName("updateAgent — 服务老师降级为接待员时清空 serviceDailyMax")
     void shouldClearServiceDailyMaxOnDowngradeToReceptionist() {
         QrAgent agent = QrAgent.builder()

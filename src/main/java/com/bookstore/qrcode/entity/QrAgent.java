@@ -145,6 +145,18 @@ public class QrAgent {
     private Boolean temporary = false;
 
     /**
+     * 是否为失联替补提拔的 dual。
+     * <p>
+     * 服务老师企微失联时，自愈逻辑提拔最资深接待员为 dual 作替补转接目标，
+     * 标记为 {@code true}。原服务老师恢复后由同步逻辑降回 receptionist 并清除此标记。
+     * 正常上码或人工设置的 dual 此值为 {@code false}（默认）。
+     * </p>
+     */
+    @Column(name = "is_fallback")
+    @Builder.Default
+    private Boolean fallback = false;
+
+    /**
      * 绑定目标信息，JSON 格式。
      * <p>
      * 用于存储员工在此活码上的附加绑定配置，示例结构：

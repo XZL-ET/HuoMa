@@ -928,10 +928,14 @@ public class QrCodeService {
                 if (newRole == QrAgent.AgentRole.receptionist) {
                     agent.setServiceDailyMax(null);
                 }
-                // 同步 Agent 表角色（仅升级：receptionist → service/dual），
-                // 确保 syncToGlobalPool / takeStandby 的过滤能正确识别
+                // 升级为服务老师/双角色时，若服务日限为空则填为日接上限。
+                // serviceDailyMax 的消费方（AgentRotationService.resolveServiceDailyMax）
+                // 在 NULL 时本就回退到 dailyMax，显式填值避免残留 NULL 脏数据。
                 if (newRole == QrAgent.AgentRole.service
                     || newRole == QrAgent.AgentRole.dual) {
+                    if (agent.getServiceDailyMax() == null) {
+                        agent.setServiceDailyMax(agent.getDailyMax());
+                    }
                     Agent agentRecord = agentRepo.findById(agent.getAgentUserid()).orElse(null);
                     if (agentRecord != null
                         && agentRecord.getRole() == Agent.AgentRole.receptionist) {

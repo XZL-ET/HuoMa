@@ -44,6 +44,7 @@ public class WechatSyncHealingService {
     private final EmployeeRepository employeeRepo;
     private final GlobalAgentPoolService poolService;
     private final AlertService alertService;
+    private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
     private static final int MAX_HEAL_ATTEMPTS = 5;
 
     /** Self-injection to enable {@code REQUIRES_NEW} transaction in {@code afterCommit} context.
@@ -95,6 +96,7 @@ public class WechatSyncHealingService {
                     result.finalUsers = current;
                     log.info("企微同步成功: qrCodeId={}, source={}, users={}",
                         qrCodeId, source, current.size());
+                    self.demoteRecoveredFallbacks(qrCodeId, current);
                     return result;
                 }
 
@@ -475,9 +477,11 @@ public class WechatSyncHealingService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void persistServiceFallback(QrAgent senior, Long qrCodeId, String failingUserId) {
         senior.setRole(QrAgent.AgentRole.dual);
+        senior.setFallback(true);
+        senior.setServiceDailyMax(serviceTeacherDailyMaxService.resolveDefault());
         qrAgentRepo.save(senior);
-        log.info("服务老师替补已提拔: qrCodeId={}, userid={}, receptionist → dual",
-            qrCodeId, senior.getAgentUserid());
+        log.info("服务老师替补已提拔: qrCodeId={}, userid={}, receptionist → dual (fallback, serviceDailyMax={})",
+            qrCodeId, senior.getAgentUserid(), senior.getServiceDailyMax());
 
         agentRepo.findById(senior.getAgentUserid()).ifPresent(a -> {
             if (a.getRole() == Agent.AgentRole.receptionist) {
@@ -491,6 +495,50 @@ public class WechatSyncHealingService {
             String.format("活码 %d 服务老师 %s 企微不可用，已将 %s 自动提拔为 dual 作为替补转接目标",
                 qrCodeId, failingUserId, senior.getAgentUserid()),
             AgentAlert.AutoAction.none, qrCodeId);
+    }
+
+    /**
+     * 服务老师恢复后，将冗余的失联替补 dual 降回 receptionist。
+     *
+     * <p>仅当活码上存在真实（非替补）且当前企微侧可用的 service/dual 时才降级，
+     * 避免服务老师尚未恢复时误降替补、中断在职继承。</p>
+     *
+     * @param qrCodeId         活码 ID
+     * @param availableUserids 本次同步成功后企微侧实际生效的 userid 列表
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void demoteRecoveredFallbacks(Long qrCodeId, List<String> availableUserids) {
+        List<QrAgent> fallbacks = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getRole() == QrAgent.AgentRole.dual)
+            .filter(a -> Boolean.TRUE.equals(a.getFallback()))
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .toList();
+        if (fallbacks.isEmpty()) {
+            return;
+        }
+
+        // 存在真实 service/dual 且当前可用，替补才算冗余
+        boolean hasRealService = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+            .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                      || a.getRole() == QrAgent.AgentRole.dual)
+            .filter(a -> !Boolean.TRUE.equals(a.getFallback()))
+            .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
+            .anyMatch(a -> availableUserids.contains(a.getAgentUserid()));
+        if (!hasRealService) {
+            return;
+        }
+
+        // 只降 QrAgent，不动 Agent 表全局角色：该员工可能在其它活码仍是 genuine
+        // dual/service，直接降级会误伤；由 recomputeAgentRoles 在下次员工同步时按
+        // QrAgent 记录重算，避免窗口期内被错误降为 receptionist 而失去服务能力。
+        for (QrAgent fallback : fallbacks) {
+            fallback.setRole(QrAgent.AgentRole.receptionist);
+            fallback.setFallback(false);
+            fallback.setServiceDailyMax(null);
+            qrAgentRepo.save(fallback);
+            log.info("服务老师已恢复，替补 dual 降回 receptionist: qrCodeId={}, userid={}",
+                qrCodeId, fallback.getAgentUserid());
+        }
     }
 
     /** 同步结果 */
