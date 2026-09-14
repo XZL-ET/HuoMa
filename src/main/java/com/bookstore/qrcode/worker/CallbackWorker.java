@@ -71,6 +71,7 @@ public class CallbackWorker {
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
     private final WecomApiClient wecomApi;
     private final QrCodeRepository qrCodeRepo;
+    private final CustomerDeletionService deletionService;
 
     private volatile boolean running = true;
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
@@ -302,7 +303,8 @@ public class CallbackWorker {
      * 标签，然后按变更类型分发：</p>
      * <ul>
      *   <li>{@code add_external_contact} —— 客户添加员工；</li>
-     *   <li>{@code del_external_contact} —— 客户删除员工；</li>
+     *   <li>{@code del_external_contact} —— 员工删除客户（记录事件）；</li>
+     *   <li>{@code del_follow_user} —— 客户删除员工（记录事件）；</li>
      *   <li>{@code transfer_fail} —— 客户接替失败。</li>
      * </ul>
      *
@@ -318,6 +320,9 @@ public class CallbackWorker {
             handleAddSuccess(event);
         } else if ("del_external_contact".equals(changeType)) {
             customerService.handleDelete(event);
+            deletionService.recordAgentDeletedCustomer(event);
+        } else if ("del_follow_user".equals(changeType)) {
+            deletionService.recordCustomerDeletedAgent(event);
         } else if ("transfer_fail".equals(changeType)) {
             alertService.handleTransferFail(event);
         }

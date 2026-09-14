@@ -447,3 +447,15 @@ CREATE TABLE IF NOT EXISTS school_category (
 
 -- 默认分类
 MERGE INTO school_category (name, sort_order) KEY(name) VALUES ('未分类', 0);
+
+-- customer_deletion_event：客户删除关系事件表
+CREATE TABLE IF NOT EXISTS customer_deletion_event (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    external_userid VARCHAR(100) NOT NULL,
+    userid          VARCHAR(100) NOT NULL,
+    direction       VARCHAR(30)  NOT NULL,
+    source          VARCHAR(50),
+    deleted_at      TIMESTAMP    NOT NULL,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_deletion_direction_time ON customer_deletion_event (direction, deleted_at);

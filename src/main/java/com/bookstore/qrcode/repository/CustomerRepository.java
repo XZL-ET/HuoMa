@@ -36,6 +36,18 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByExternalUserid(String externalUserid);
 
     /**
+     * 根据 externalUserid 列表批量查询客户。
+     * <p>
+     * 用于后台列表页一次加载多个客户记录（如删除关系列表的客户昵称映射），
+     * 避免逐条 {@code findByExternalUserid} 造成 N+1 查询。
+     * </p>
+     *
+     * @param externalUserids 企微外部联系人 ID 列表，不可为 null
+     * @return 匹配的客户列表
+     */
+    List<Customer> findByExternalUseridIn(java.util.Collection<String> externalUserids);
+
+    /**
      * 根据学校 ID 查询该学校下的所有客户。
      * <p>
      * 用于标签修复等批量操作场景，按学校维度获取客户列表。

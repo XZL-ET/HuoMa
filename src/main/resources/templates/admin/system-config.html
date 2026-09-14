@@ -88,6 +88,53 @@
         </div>
     </div>
 
+    <!-- 客户删除员工日报 -->
+    <div class="card border-0 shadow-sm mt-4">
+        <div class="card-header bg-white border-bottom-0">
+            <h5 class="mb-0">客户删除员工日报</h5>
+        </div>
+        <div class="card-body">
+            <form th:action="@{/admin/system-config/deletion-report-recipients}" method="post"
+                  class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small text-muted mb-1" for="deletionRecipientsInput">接收人企微 userid（逗号分隔）</label>
+                    <input id="deletionRecipientsInput" type="text" name="recipients"
+                           class="form-control form-control-sm" th:value="${deletionReportRecipients}"
+                           style="width:360px" placeholder="例如：zhangsan,lisi,wangwu">
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary btn-sm">保存</button>
+                </div>
+            </form>
+            <small class="text-muted d-block mt-2">填写需要接收每日「客户删除员工」汇总日报的管理员企微 userid，多个用逗号分隔；留空则不在企微推送（仍可在「删除记录」页查看）。</small>
+
+            <hr class="my-3">
+            <form th:action="@{/admin/system-config/deletion-report-time}" method="post"
+                  class="row g-3 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small text-muted mb-1" for="deletionTimeInput">定时推送时间</label>
+                    <input id="deletionTimeInput" type="time" name="time"
+                           class="form-control form-control-sm" th:value="${deletionReportTime}"
+                           required style="width:140px">
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary btn-sm">保存</button>
+                </div>
+            </form>
+            <small class="text-muted d-block mt-2">设置每天自动推送「客户删除员工」汇总日报的时间，保存后即时生效，无需重启。</small>
+
+            <hr class="my-3">
+            <form th:action="@{/admin/system-config/deletion-report/push}" method="post"
+                  class="d-flex align-items-center gap-2">
+                <button type="submit" class="btn btn-outline-primary btn-sm"
+                        onclick="return confirm('立即推送昨日的客户删除员工汇总日报给配置的接收人？')">
+                    立即推送昨日日报
+                </button>
+                <span class="small text-muted">定时任务每天 <span th:text="${deletionReportTime}">09:00</span> 自动推送昨日汇总，此按钮用于立即补推。</span>
+            </form>
+        </div>
+    </div>
+
     <!-- 运维工具 -->
     <div class="card border-0 shadow-sm mt-4">
         <div class="card-header bg-white border-bottom-0">

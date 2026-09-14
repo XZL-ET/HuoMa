@@ -214,9 +214,9 @@ public class WecomCallbackController {
             // ================================================================
             String msgId = extractXmlTag(decryptedXml, "MsgId");
             if (msgId == null || msgId.isEmpty()) {
-                String raw = String.format("%s|%s|%s|%s",
+                String raw = String.format("%s|%s|%s|%s|%s",
                     extractXmlTag(decryptedXml, "CreateTime"),
-                    eventType, externalUserId, userId);
+                    eventType, changeType, externalUserId, userId);
                 msgId = Integer.toHexString(raw.hashCode());
             }
             if (!messageGuardService.tryDedup(msgId)) {

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='删除记录', content=~{::main})}">
+<main>
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>🗑️ 删除记录</h5>
+        <span class="text-muted small" th:if="${events.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
+    </div>
+
+    <!-- 时间范围 + 方向 + 关键字筛选 -->
+    <form class="row g-2 align-items-end mb-3" method="get" th:action="@{/deletion-records}">
+        <div class="col-auto">
+            <div class="btn-group" role="group" aria-label="时间预设">
+                <input type="radio" class="btn-check" name="range" id="r-today" value="today"
+                       th:checked="${range == 'today'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-today">今天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-yesterday" value="yesterday"
+                       th:checked="${range == 'yesterday'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-yesterday">昨日</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-7d" value="7d"
+                       th:checked="${range == '7d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-7d">近7天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-30d" value="30d"
+                       th:checked="${range == '30d'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-30d">近30天</label>
+
+                <input type="radio" class="btn-check" name="range" id="r-custom" value="custom"
+                       th:checked="${range == 'custom'}" autocomplete="off">
+                <label class="btn btn-outline-primary" for="r-custom">自定义</label>
+            </div>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">起</label>
+            <input type="date" class="form-control form-control-sm" name="start" th:value="${start}">
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">止</label>
+            <input type="date" class="form-control form-control-sm" name="end" th:value="${end}">
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">方向</label>
+            <select name="direction" class="form-select form-select-sm">
+                <option value="" th:selected="${direction == ''}">全部方向</option>
+                <option value="CUSTOMER_DELETED_AGENT" th:selected="${direction == 'CUSTOMER_DELETED_AGENT'}">客户删除员工</option>
+                <option value="AGENT_DELETED_CUSTOMER" th:selected="${direction == 'AGENT_DELETED_CUSTOMER'}">员工删除客户</option>
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">关键字</label>
+            <input type="text" class="form-control form-control-sm" name="keyword"
+                   placeholder="客户 / 员工 / 来源" th:value="${keyword}">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary btn-sm">查询</button>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-outline-success btn-sm"
+                    formaction="/deletion-records/export"
+                    title="导出当前筛选条件下的全部记录">导出 Excel</button>
+        </div>
+    </form>
+
+    <!-- 记录表 -->
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>时间</th>
+                    <th>方向</th>
+                    <th>客户</th>
+                    <th>员工</th>
+                    <th>来源</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr th:each="e : ${events}">
+                    <td class="text-nowrap" th:text="${#temporals.format(e.deletedAt, 'yyyy-MM-dd HH:mm')}"></td>
+                    <td>
+                        <span class="badge"
+                              th:classappend="${e.direction.name() == 'CUSTOMER_DELETED_AGENT' ? 'bg-danger' : 'bg-secondary'}"
+                              th:text="${e.direction.name() == 'CUSTOMER_DELETED_AGENT' ? '客户删除员工' : '员工删除客户'}"></span>
+                    </td>
+                    <td th:text="${customerNameMap.get(e.externalUserid)}"></td>
+                    <td><code th:text="${employeeNameMap.get(e.userid)}"></code></td>
+                    <td th:text="${e.source != null ? e.source : '—'}"></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(events)}">
+                    <td colspan="5" class="text-center text-muted py-4">该时间段内暂无删除记录</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+</main>
+</html>
