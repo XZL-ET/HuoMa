@@ -94,7 +94,7 @@ class DeletionReportServiceTest {
 
         assertThat(sent).isEqualTo(2);
         verify(wecomApi).sendReportMessage(eq("admin1"),
-                org.mockito.ArgumentMatchers.contains("昨日共 16 位客户删除员工，涉及 3 名员工"));
+                org.mockito.ArgumentMatchers.contains("昨日 共 16 位客户删除员工，涉及 3 名员工"));
         verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
         verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("2. 赵老师：6 人"));
         verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("其余 1 名员工各被删除不超过 5 人"));
@@ -303,5 +303,75 @@ class DeletionReportServiceTest {
                         .build()));
 
         assertThat(reportService.resolvePushTime()).isEqualTo(LocalTime.of(9, 0));
+    }
+
+    // ============ 今日推送 ============
+
+    @Test
+    @DisplayName("reportTodayUntilNow — 推送今日截至现在的汇总给传入接收人，不读环境变量接收人")
+    void reportTodayUntilNowPushesToGivenRecipients() {
+        ReflectionTestUtils.setField(reportService, "adminUserids", "");
+        List<CustomerDeletionEvent> events = new java.util.ArrayList<>();
+        events.addAll(eventsFor("agent1", 7));
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(events);
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+
+        int sent = reportService.reportTodayUntilNow("boss1, boss2");
+
+        assertThat(sent).isEqualTo(2);
+        verify(deletionRepo).findByDirectionAndDeletedAtBetween(
+                eq(CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT), any(), any());
+        verify(wecomApi).sendReportMessage(eq("boss1"),
+                org.mockito.ArgumentMatchers.contains("今日截至"));
+        verify(wecomApi).sendReportMessage(eq("boss1"),
+                org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
+        verify(wecomApi).sendReportMessage(eq("boss2"),
+                org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
+    }
+
+    @Test
+    @DisplayName("reportTodayUntilNow — 接收人为空时不推送")
+    void reportTodayUntilNowSkipsWhenNoRecipients() {
+        int sent = reportService.reportTodayUntilNow("  , , ");
+
+        assertThat(sent).isEqualTo(0);
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("reportTodayWithLock — 锁被占用时返回 LOCK_BUSY")
+    void reportTodayWithLockReturnsBusyWhenLocked() {
+        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(false);
+
+        int result = reportService.reportTodayWithLock("boss1");
+
+        assertThat(result).isEqualTo(DeletionReportService.LOCK_BUSY);
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("saveTodayRecipients — 规范化后保存，getTodayRecipients 读回")
+    void saveAndGetTodayRecipients() {
+        when(configRepository.findByConfigKey(DeletionReportService.TODAY_RECIPIENTS_CONFIG_KEY))
+                .thenReturn(Optional.empty());
+
+        reportService.saveTodayRecipients("  boss1 , boss2 ,, ");
+
+        org.mockito.ArgumentCaptor<SystemConfig> captor =
+                org.mockito.ArgumentCaptor.forClass(SystemConfig.class);
+        verify(configRepository).save(captor.capture());
+        assertThat(captor.getValue().getConfigValue()).isEqualTo("boss1,boss2");
+    }
+
+    @Test
+    @DisplayName("getTodayRecipients — 未配置时返回空串")
+    void getTodayRecipientsDefaultsEmpty() {
+        when(configRepository.findByConfigKey(DeletionReportService.TODAY_RECIPIENTS_CONFIG_KEY))
+                .thenReturn(Optional.empty());
+
+        assertThat(reportService.getTodayRecipients()).isEqualTo("");
     }
 }

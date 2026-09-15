@@ -8,6 +8,20 @@
         <span class="text-muted small" th:if="${events.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
     </div>
 
+    <!-- 今日推送：把今天 00:00 至当前的客户删除员工汇总推送给指定接收人 -->
+    <form class="row g-2 align-items-end mb-3" method="post" th:action="@{/deletion-records/push-today}">
+        <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
+        <div class="col-auto">
+            <label class="form-label small text-muted mb-0">推送接收人（企微 userid，逗号分隔）</label>
+            <input type="text" class="form-control form-control-sm" name="recipients"
+                   placeholder="如 zhangsan,lisi" th:value="${todayRecipients}" style="min-width: 320px;">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-warning btn-sm"
+                    title="推送今天 00:00 至当前时刻的客户删除员工汇总">📤 立即推送今日汇总</button>
+        </div>
+    </form>
+
     <!-- 时间范围 + 方向 + 关键字筛选 -->
     <form class="row g-2 align-items-end mb-3" method="get" th:action="@{/deletion-records}">
         <div class="col-auto">

@@ -20,12 +20,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.IntSupplier;
+import java.util.stream.Collectors;
 
 /**
  * 客户删除员工每日汇总日报服务。
@@ -49,6 +52,9 @@ public class DeletionReportService {
 
     /** 系统配置表中存储日报推送时间的键（值格式 HH:mm） */
     public static final String TIME_CONFIG_KEY = "deletion_report_time";
+
+    /** 系统配置表中存储「今日推送」接收人的键（删除记录页独立配置） */
+    public static final String TODAY_RECIPIENTS_CONFIG_KEY = "deletion_report_today_recipients";
 
     /** 日报默认推送时间（早 9 点），未配置或非法时回退此值 */
     public static final LocalTime DEFAULT_PUSH_TIME = LocalTime.of(9, 0);
@@ -88,15 +94,23 @@ public class DeletionReportService {
      * @return 成功推送的管理员数量，或 {@link #LOCK_BUSY} 表示正在执行中
      */
     public int reportWithLock(LocalDate date) {
+        return withLock(() -> report(date));
+    }
+
+    public int reportTodayWithLock(String recipientsRaw) {
+        return withLock(() -> reportTodayUntilNow(recipientsRaw));
+    }
+
+    private int withLock(IntSupplier action) {
         String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
                 .setIfAbsent(LOCK_KEY, lockValue, LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
-            log.info("客户删除员工日报推送已在进行中，跳过本次: date={}", date);
+            log.info("客户删除员工日报推送已在进行中，跳过本次");
             return LOCK_BUSY;
         }
         try {
-            return report(date);
+            return action.getAsInt();
         } finally {
             try {
                 redisTemplate.execute(RedisConfig.SAFE_UNLOCK_SCRIPT, List.of(LOCK_KEY), lockValue);
@@ -118,18 +132,33 @@ public class DeletionReportService {
             log.warn("客户删除员工日报：未配置推送对象，跳过推送 date={}", date);
             return 0;
         }
+        return reportRange(admins, date.atStartOfDay(), date.plusDays(1).atStartOfDay(), "昨日", date);
+    }
 
-        LocalDateTime start = date.atStartOfDay();
-        LocalDateTime end = date.plusDays(1).atStartOfDay();
+    public int reportTodayUntilNow(String recipientsRaw) {
+        List<String> admins = parseAdmins(recipientsRaw);
+        if (admins.isEmpty()) {
+            log.warn("客户删除员工今日推送：接收人为空，跳过推送");
+            return 0;
+        }
+        LocalDateTime now = LocalDateTime.now(REPORT_ZONE);
+        String period = "今日截至 " + now.format(DateTimeFormatter.ofPattern("HH:mm"));
+        return reportRange(admins, now.toLocalDate().atStartOfDay(), now, period, now.toLocalDate());
+    }
+
+    private int reportRange(List<String> admins, LocalDateTime start, LocalDateTime end,
+                            String period, LocalDate date) {
         List<CustomerDeletionEvent> events = deletionRepo.findByDirectionAndDeletedAtBetween(
                 CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT, start, end);
-
         if (events.isEmpty()) {
             log.info("客户删除员工日报：{} 无删除事件，跳过推送", date);
             return 0;
         }
+        String message = buildMessage(date, period, events);
+        return sendToAdmins(admins, message, date);
+    }
 
-        String message = buildMessage(date, events);
+    private int sendToAdmins(List<String> admins, String message, LocalDate date) {
         int sent = 0;
         for (String admin : admins) {
             try {
@@ -144,8 +173,7 @@ public class DeletionReportService {
                         AgentAlert.AutoAction.none, null);
             }
         }
-        log.info("客户删除员工日报完成: date={}, events={}, admins={}, sent={}",
-                date, events.size(), admins.size(), sent);
+        log.info("客户删除员工日报完成: date={}, admins={}, sent={}", date, admins.size(), sent);
         return sent;
     }
 
@@ -164,6 +192,25 @@ public class DeletionReportService {
         return configRepository.findByConfigKey(RECIPIENTS_CONFIG_KEY)
                 .map(SystemConfig::getConfigValue)
                 .orElse(adminUserids);
+    }
+
+    public String getTodayRecipients() {
+        return configRepository.findByConfigKey(TODAY_RECIPIENTS_CONFIG_KEY)
+                .map(SystemConfig::getConfigValue)
+                .orElse("");
+    }
+
+    public void saveTodayRecipients(String raw) {
+        String normalized = normalizeAdmins(raw);
+        SystemConfig config = configRepository.findByConfigKey(TODAY_RECIPIENTS_CONFIG_KEY)
+                .orElseGet(() -> {
+                    SystemConfig c = new SystemConfig();
+                    c.setConfigKey(TODAY_RECIPIENTS_CONFIG_KEY);
+                    c.setConfigName("删除记录页今日推送接收人（企微 userid，逗号分隔）");
+                    return c;
+                });
+        config.setConfigValue(normalized);
+        configRepository.save(config);
     }
 
     /**
@@ -190,16 +237,24 @@ public class DeletionReportService {
     }
 
     private List<String> parseAdmins(String raw) {
-        if (raw == null || raw.isBlank()) {
+        String normalized = normalizeAdmins(raw);
+        if (normalized.isEmpty()) {
             return List.of();
+        }
+        return Arrays.asList(normalized.split(","));
+    }
+
+    private String normalizeAdmins(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
         }
         return Arrays.stream(raw.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .toList();
+                .collect(Collectors.joining(","));
     }
 
-    private String buildMessage(LocalDate date, List<CustomerDeletionEvent> events) {
+    private String buildMessage(LocalDate date, String period, List<CustomerDeletionEvent> events) {
         Map<String, Long> countByUserid = new LinkedHashMap<>();
         for (CustomerDeletionEvent e : events) {
             countByUserid.merge(e.getUserid(), 1L, Long::sum);
@@ -219,7 +274,7 @@ public class DeletionReportService {
 
         StringBuilder sb = new StringBuilder();
         sb.append("【客户删除员工日报】").append(date).append("\n");
-        sb.append("昨日共 ").append(events.size()).append(" 位客户删除员工，涉及 ")
+        sb.append(period).append(" 共 ").append(events.size()).append(" 位客户删除员工，涉及 ")
                 .append(sorted.size()).append(" 名员工：\n");
         int i = 1;
         for (Map.Entry<String, Long> entry : shown) {

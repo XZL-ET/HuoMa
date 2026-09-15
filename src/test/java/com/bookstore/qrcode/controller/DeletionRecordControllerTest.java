@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerDeletionEventRepository;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.service.DeletionReportService;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.ui.ExtendedModelMap;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
@@ -23,6 +25,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,6 +37,7 @@ class DeletionRecordControllerTest {
     @Mock private CustomerRepository customerRepo;
     @Mock private EmployeeRepository employeeRepo;
     @Mock private AgentRepository agentRepo;
+    @Mock private DeletionReportService deletionReportService;
 
     @InjectMocks
     private DeletionRecordController controller;
@@ -126,5 +130,44 @@ class DeletionRecordControllerTest {
             assertThat(sheet.getLastRowNum()).isEqualTo(1);
             assertThat(sheet.getRow(1).getCell(1).getStringCellValue()).isEqualTo("员工删除客户");
         }
+    }
+
+    @Test
+    @DisplayName("list — 注入今日推送接收人到模型")
+    void listAddsTodayRecipientsToModel() {
+        when(deletionRepo.findByDeletedAtBetweenOrderByDeletedAtDesc(any(), any(), any()))
+                .thenReturn(List.of());
+        when(deletionReportService.getTodayRecipients()).thenReturn("boss1,boss2");
+
+        ExtendedModelMap model = new ExtendedModelMap();
+        controller.list("7d", null, null, "CUSTOMER_DELETED_AGENT", null, model);
+
+        assertThat(model.getAttribute("todayRecipients")).isEqualTo("boss1,boss2");
+    }
+
+    @Test
+    @DisplayName("pushToday — 保存接收人并推送今日汇总后重定向")
+    void pushTodaySavesRecipientsAndPushes() {
+        when(deletionReportService.reportTodayWithLock("boss1,boss2")).thenReturn(2);
+
+        RedirectAttributes ra = mock(RedirectAttributes.class);
+        String view = controller.pushToday("boss1,boss2", ra);
+
+        assertThat(view).isEqualTo("redirect:/deletion-records");
+        verify(deletionReportService).saveTodayRecipients("boss1,boss2");
+        verify(deletionReportService).reportTodayWithLock("boss1,boss2");
+    }
+
+    @Test
+    @DisplayName("pushToday — 锁被占用时提示进行中")
+    void pushTodayShowsBusyWhenLocked() {
+        when(deletionReportService.reportTodayWithLock("boss1"))
+                .thenReturn(DeletionReportService.LOCK_BUSY);
+
+        RedirectAttributes ra = mock(RedirectAttributes.class);
+        controller.pushToday("boss1", ra);
+
+        verify(ra).addFlashAttribute(org.mockito.ArgumentMatchers.eq("message"),
+                org.mockito.ArgumentMatchers.contains("进行中"));
     }
 }

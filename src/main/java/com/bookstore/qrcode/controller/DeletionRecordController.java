@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerDeletionEventRepository;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.service.DeletionReportService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,8 +22,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.net.URLEncoder;
 import java.time.LocalDate;
@@ -54,6 +57,7 @@ public class DeletionRecordController {
     private final CustomerRepository customerRepo;
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
+    private final DeletionReportService deletionReportService;
 
     @GetMapping
     public String list(@RequestParam(defaultValue = "7d") String range,
@@ -73,7 +77,26 @@ public class DeletionRecordController {
         model.addAttribute("direction", direction == null ? "" : direction);
         model.addAttribute("keyword", keyword == null ? "" : keyword);
         model.addAttribute("maxRows", MAX_ROWS);
+        model.addAttribute("todayRecipients", deletionReportService.getTodayRecipients());
         return "deletion-records";
+    }
+
+    /**
+     * 立即推送「今天 00:00 至当前时刻」的客户删除员工汇总给指定接收人。
+     * <p>接收人由删除记录页输入框传入，独立于每日日报接收人配置，保存后下次自动带出。</p>
+     */
+    @PostMapping("/push-today")
+    public String pushToday(@RequestParam String recipients, RedirectAttributes ra) {
+        deletionReportService.saveTodayRecipients(recipients);
+        int sent = deletionReportService.reportTodayWithLock(recipients);
+        if (sent == DeletionReportService.LOCK_BUSY) {
+            ra.addFlashAttribute("message", "推送正在进行中，请稍后重试");
+        } else if (sent > 0) {
+            ra.addFlashAttribute("message", "已推送今日汇总给 " + sent + " 位接收人");
+        } else {
+            ra.addFlashAttribute("message", "未推送：今日暂无删除事件，或接收人为空");
+        }
+        return "redirect:/deletion-records";
     }
 
     /**
