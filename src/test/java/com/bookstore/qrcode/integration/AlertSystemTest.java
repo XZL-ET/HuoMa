@@ -86,4 +86,21 @@ class AlertSystemTest extends BaseIntegrationTest {
                 "agent1", "test_alert", LocalDateTime.now().minusMinutes(5));
         assertThat(count).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("createAlert — agent_userid 无外键约束，可关联不存在的 userid")
+    void shouldAllowCreatingAlertWithUnknownAgentUserid() {
+        // agent_alert.agent_userid 已移除对 agent(userid) 的外键，告警可关联任意 userid（含非 agent 账号），
+        // 避免插入告警时对父行加共享锁、与 findByIdForUpdate 的悲观锁(FOR UPDATE)产生死锁。
+        AgentAlert result = alertService.createAlert("nonexistent-agent", "test_alert",
+                AgentAlert.AlertSeverity.medium,
+                "集成测试告警详情",
+                AgentAlert.AutoAction.none,
+                null);
+
+        assertThat(result).isNotNull();
+        long count = alertRepo.countByAgentUseridAndAlertTypeAndCreatedAtAfter(
+                "nonexistent-agent", "test_alert", LocalDateTime.now().minusMinutes(5));
+        assertThat(count).isEqualTo(1);
+    }
 }

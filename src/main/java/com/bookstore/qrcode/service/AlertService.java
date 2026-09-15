@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomErrorCodes;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -14,8 +15,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -62,6 +65,7 @@ public class AlertService {
     private final GlobalAgentPoolRepository poolRepo;
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redisTemplate;
+    private final PlatformTransactionManager transactionManager;
 
     /** 累计型告警 1 小时滑动窗口计数 Lua 脚本：ZADD + ZREMRANGE + ZCARD + EXPIRE 原子执行 */
     private static final String ALERT_COUNT_LUA =
@@ -263,33 +267,43 @@ public class AlertService {
      * @param detail      详细内容（String 或 Map，自动序列化为 JSON）
      * @param autoAction  已执行的自动处置动作
      * @param qrCodeId    关联的活码 ID（可为 null）
-     * @return 持久化后的 {@link AgentAlert} 实体，若序列化失败则返回 null
+     * @return 持久化后的 {@link AgentAlert} 实体，序列化或写入失败时返回 null
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AgentAlert createAlert(String agentUserid, String alertType,
                                    AgentAlert.AlertSeverity severity,
                                    Object detail,
                                    AgentAlert.AutoAction autoAction,
                                    Long qrCodeId) {
+        final String detailJson;
         try {
             // 统一经 Jackson 序列化，确保字符串也会被 JSON 编码（加引号），
             // 否则 MySQL JSON 列会拒绝裸中文字符串（Invalid JSON text）
-            String detailJson = objectMapper.writeValueAsString(detail);
-
-            AgentAlert alert = AgentAlert.builder()
-                .agentUserid(agentUserid)
-                .alertType(alertType)
-                .severity(severity)
-                .detail(detailJson)
-                .autoAction(autoAction)
-                .status(AgentAlert.AlertStatus.open)
-                .qrCodeId(qrCodeId)
-                .build();
-            alert = alertRepo.save(alert);
-
-            log.warn("告警: user={}, type={}, severity={}, detail={}",
-                agentUserid, alertType, severity, detailJson);
-            return alert;
+            detailJson = objectMapper.writeValueAsString(detail);
+        } catch (JsonProcessingException e) {
+            log.error("创建告警失败: detail 序列化异常", e);
+            return null;
+        }
+        // 用 TransactionTemplate 而非 @Transactional(REQUIRES_NEW)：@Transactional 在自调用时被代理绕过，
+        // 且提交异常发生在方法体返回之后、try-catch 之外，仍会抛 UnexpectedRollbackException 冒泡给调用方。
+        // TransactionTemplate 把事务边界移进方法内，写入/提交失败都能被下方 catch 接住，告警保持「尽力而为」。
+        try {
+            TransactionTemplate tx = new TransactionTemplate(transactionManager);
+            tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            return tx.execute(status -> {
+                AgentAlert alert = AgentAlert.builder()
+                    .agentUserid(agentUserid)
+                    .alertType(alertType)
+                    .severity(severity)
+                    .detail(detailJson)
+                    .autoAction(autoAction)
+                    .status(AgentAlert.AlertStatus.open)
+                    .qrCodeId(qrCodeId)
+                    .build();
+                AgentAlert saved = alertRepo.save(alert);
+                log.warn("告警: user={}, type={}, severity={}, detail={}",
+                    agentUserid, alertType, severity, detailJson);
+                return saved;
+            });
         } catch (Exception e) {
             log.error("创建告警失败", e);
             return null;

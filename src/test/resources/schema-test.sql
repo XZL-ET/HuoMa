@@ -201,8 +201,7 @@ CREATE TABLE IF NOT EXISTS agent_alert (
     resolved_by VARCHAR(100),
     resolved_at TIMESTAMP,
     qr_code_id BIGINT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (agent_userid) REFERENCES agent(userid)
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_alert_agent_status ON agent_alert (agent_userid, status);
 CREATE INDEX IF NOT EXISTS idx_alert_created ON agent_alert (created_at);

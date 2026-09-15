@@ -20,6 +20,7 @@ import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.Optional;
 
@@ -36,6 +37,7 @@ class AlertServiceTest {
     @Mock private QrCodeRepository qrCodeRepo;
     @Mock private GlobalAgentPoolRepository poolRepo;
     @Mock private StringRedisTemplate redisTemplate;
+    @Mock private PlatformTransactionManager transactionManager;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
@@ -179,5 +181,16 @@ class AlertServiceTest {
         ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
         verify(alertRepo).save(captor.capture());
         assertThat(captor.getValue().getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
+    }
+
+    @Test
+    @DisplayName("createAlert — 写入失败时返回 null 而不抛出")
+    void shouldReturnNullWhenSaveFails() {
+        when(alertRepo.save(any(AgentAlert.class))).thenThrow(new RuntimeException("db down"));
+
+        AgentAlert result = alertService.createAlert("user1", "test_alert",
+                AgentAlert.AlertSeverity.high, "详情", AgentAlert.AutoAction.none, null);
+
+        assertThat(result).isNull();
     }
 }

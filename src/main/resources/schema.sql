@@ -240,7 +240,6 @@ CREATE TABLE IF NOT EXISTS agent_alert (
     resolved_at DATETIME COMMENT '处理时间',
     qr_code_id BIGINT COMMENT '关联活码',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (agent_userid) REFERENCES agent(userid),
     INDEX idx_agent_status (agent_userid, status),
     INDEX idx_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异常记录表';
@@ -555,6 +554,16 @@ SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND COLUMN_NAME = 'agent_userid' AND IS_NULLABLE = 'NO') > 0,
     'ALTER TABLE agent_alert MODIFY COLUMN agent_userid VARCHAR(100) NULL COMMENT ''员工ID（系统告警时为 NULL）''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- agent_alert: 移除 agent_userid 外键（告警为弱关联，允许任意 userid；且避免插入告警时对父行加共享锁、与 FOR UPDATE 悲观锁死锁）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND REFERENCED_TABLE_NAME = 'agent') > 0,
+    CONCAT('ALTER TABLE agent_alert DROP FOREIGN KEY `',
+           (SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+            WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_alert' AND REFERENCED_TABLE_NAME = 'agent' LIMIT 1), '`'),
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
