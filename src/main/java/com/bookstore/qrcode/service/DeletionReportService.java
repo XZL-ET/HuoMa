@@ -133,7 +133,7 @@ public class DeletionReportService {
         int sent = 0;
         for (String admin : admins) {
             try {
-                wecomApi.sendAppMessage(admin, message);
+                wecomApi.sendReportMessage(admin, message);
                 sent++;
             } catch (Exception e) {
                 log.error("客户删除员工日报推送失败: date={}, admin={}", date, admin, e);

@@ -81,6 +81,24 @@ public class WecomConfig {
     private Integer agentId;
 
     /**
+     * 删除日报专用自建应用 AgentId。
+     * <p>
+     * 删除日报通过独立的企微自建应用推送，与主应用 {@link #agentId} 分离，
+     * 避免日报通知与转接对账等共用同一应用。对应环境变量 {@code WECOM_REPORT_AGENT_ID}。
+     * </p>
+     */
+    private Integer reportAgentId;
+
+    /**
+     * 删除日报专用自建应用 Secret。
+     * <p>
+     * 与 {@link #reportAgentId} 配对，用于为删除日报应用单独获取 access_token。
+     * 对应环境变量 {@code WECOM_REPORT_CORP_SECRET}。
+     * </p>
+     */
+    private String reportCorpSecret;
+
+    /**
      * 当前缓存的 access_token。
      * <p>
      * access_token 是企业微信 API 调用的全局唯一凭证，
@@ -100,4 +118,18 @@ public class WecomConfig {
      * </p>
      */
     private long accessTokenExpireAt;
+
+    /**
+     * 删除日报应用缓存的 access_token（运行时动态更新，不源自配置文件）。
+     * <p>
+     * 与主应用的 {@link #accessToken} 分离缓存，用 {@link #reportCorpSecret} 独立换取，
+     * 供删除日报的 {@code /message/send} 应用消息推送使用。
+     * </p>
+     */
+    private String reportAccessToken;
+
+    /**
+     * 删除日报应用 access_token 的过期时间戳（秒，与 {@link #accessTokenExpireAt} 同单位）。
+     */
+    private long reportAccessTokenExpireAt;
 }

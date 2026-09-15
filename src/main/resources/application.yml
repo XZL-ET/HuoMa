@@ -131,6 +131,8 @@ wecom:
   callback-token: ${WECOM_CALLBACK_TOKEN:dev-token}                       # 回调 URL 验证 Token
   callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY:}                   # 回调消息 AES 密钥（不设默认值）
   agent-id: ${WECOM_AGENT_ID:}                                            # 应用 AgentId（用于应用消息推送，如转接对账）
+  report-agent-id: ${WECOM_REPORT_AGENT_ID:}                              # 删除日报专用自建应用 AgentId
+  report-corp-secret: ${WECOM_REPORT_CORP_SECRET:}                        # 删除日报专用自建应用 Secret
   mp-appid: ${WECOM_MP_APPID:}                                            # 公众号（服务号）AppID，网页授权拿 openid 用
   mp-secret: ${WECOM_MP_SECRET:}                                          # 公众号（服务号）AppSecret
 
@@ -169,6 +171,8 @@ wecom:
   callback-token: ${WECOM_CALLBACK_TOKEN}                # 回调 URL 验证 Token（环境变量注入）
   callback-encoding-aes-key: ${WECOM_CALLBACK_AES_KEY}   # 回调消息 AES 密钥（环境变量注入）
   agent-id: ${WECOM_AGENT_ID:}                           # 应用 AgentId（环境变量注入，未配置则应用消息推送不可用）
+  report-agent-id: ${WECOM_REPORT_AGENT_ID:}             # 删除日报专用自建应用 AgentId（环境变量注入）
+  report-corp-secret: ${WECOM_REPORT_CORP_SECRET:}       # 删除日报专用自建应用 Secret（环境变量注入）
   mp-appid: ${WECOM_MP_APPID:}                           # 公众号（服务号）AppID（环境变量注入）
   mp-secret: ${WECOM_MP_SECRET:}                         # 公众号（服务号）AppSecret（环境变量注入）
 

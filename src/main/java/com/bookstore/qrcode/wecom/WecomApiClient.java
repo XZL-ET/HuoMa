@@ -157,6 +157,63 @@ public class WecomApiClient {
     }
 
     /**
+     * 获取删除日报应用的 access_token（自动缓存与刷新，线程安全）。
+     * <p>
+     * 用 {@link WecomConfig#getReportCorpSecret()} 独立换取，缓存与主应用分离，
+     * 供删除日报的 {@code /message/send} 推送使用。缓存提前 200 秒过期，与
+     * {@link #getAccessToken()} 一致。
+     * </p>
+     *
+     * @return 删除日报应用的有效 access_token 字符串
+     * @throws WecomApiException 获取失败时抛出
+     */
+    public String getReportAccessToken() {
+        tokenLock.readLock().lock();
+        try {
+            if (config.getReportAccessToken() != null
+                    && Instant.now().getEpochSecond() < config.getReportAccessTokenExpireAt()) {
+                return config.getReportAccessToken();
+            }
+        } finally {
+            tokenLock.readLock().unlock();
+        }
+
+        tokenLock.writeLock().lock();
+        try {
+            if (config.getReportAccessToken() != null
+                    && Instant.now().getEpochSecond() < config.getReportAccessTokenExpireAt()) {
+                return config.getReportAccessToken();
+            }
+
+            String url = String.format(TOKEN_URL, config.getCorpId(), config.getReportCorpSecret());
+            String resp = restTemplate.getForObject(url, String.class);
+            JsonNode node = objectMapper.readTree(resp);
+
+            int errcode = node.has("errcode") ? node.get("errcode").asInt() : -1;
+            if (errcode != 0) {
+                String errmsg = node.has("errmsg") ? node.get("errmsg").asText() : "";
+                throwWecomException(errcode, errmsg, resp);
+            }
+
+            String token = node.get("access_token").asText();
+            long expiresIn = node.get("expires_in").asLong();
+
+            config.setReportAccessToken(token);
+            config.setReportAccessTokenExpireAt(Instant.now().getEpochSecond() + expiresIn - 200);
+            log.info("删除日报应用 access_token 已刷新，过期时间: {}", config.getReportAccessTokenExpireAt());
+            return token;
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("获取删除日报应用 access_token 异常", e);
+            throw new WecomTransientException(-1,
+                "获取删除日报应用 access_token 失败: " + e.getMessage(), null);
+        } finally {
+            tokenLock.writeLock().unlock();
+        }
+    }
+
+    /**
      * 强制刷新 access_token（用于 Token 过期后的重试前置操作）。
      * <p>
      * 清除缓存后由下次 {@link #getAccessToken()} 调用触发实际刷新。
@@ -773,12 +830,31 @@ public class WecomApiClient {
      * @throws WecomApiException 发送失败时抛出
      */
     public void sendAppMessage(String toUser, String text) {
-        String url = BASE_URL + "/message/send?access_token=" + getAccessToken();
+        sendAppMessageWith(toUser, text, getAccessToken(), config.getAgentId());
+    }
+
+    /**
+     * 向企业成员发送删除日报应用消息（走独立的 report 自建应用）。
+     * <p>
+     * 与 {@link #sendAppMessage} 的区别在于使用删除日报专用应用的
+     * access_token 与 agentId，避免日报通知与转接对账等共用主应用。
+     * </p>
+     *
+     * @param toUser 接收消息的企业成员 userid
+     * @param text   消息文本内容
+     * @throws WecomApiException 发送失败时抛出
+     */
+    public void sendReportMessage(String toUser, String text) {
+        sendAppMessageWith(toUser, text, getReportAccessToken(), config.getReportAgentId());
+    }
+
+    private void sendAppMessageWith(String toUser, String text, String accessToken, Integer agentId) {
+        String url = BASE_URL + "/message/send?access_token=" + accessToken;
         try {
             Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
             bodyMap.put("touser", toUser);
             bodyMap.put("msgtype", "text");
-            bodyMap.put("agentid", config.getAgentId());
+            bodyMap.put("agentid", agentId);
             bodyMap.put("text", Map.of("content", text));
             String body = objectMapper.writeValueAsString(bodyMap);
             String resp = postForJson(url, body);

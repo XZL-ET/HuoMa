@@ -93,16 +93,16 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(2);
-        verify(wecomApi).sendAppMessage(eq("admin1"),
+        verify(wecomApi).sendReportMessage(eq("admin1"),
                 org.mockito.ArgumentMatchers.contains("昨日共 16 位客户删除员工，涉及 3 名员工"));
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("2. 赵老师：6 人"));
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("其余 1 名员工各被删除不超过 5 人"));
-        verify(wecomApi).sendAppMessage(eq("admin2"), org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("2. 赵老师：6 人"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("其余 1 名员工各被删除不超过 5 人"));
+        verify(wecomApi).sendReportMessage(eq("admin2"), org.mockito.ArgumentMatchers.contains("1. 王老师：7 人"));
         // 未超 5 人的员工不逐行列出（agent3 未 stub，若被错误列出会以 userid 回退出现）
-        verify(wecomApi, never()).sendAppMessage(anyString(), org.mockito.ArgumentMatchers.contains("agent3"));
+        verify(wecomApi, never()).sendReportMessage(anyString(), org.mockito.ArgumentMatchers.contains("agent3"));
         // 不推送具体客户 external_userid
-        verify(wecomApi, never()).sendAppMessage(anyString(), org.mockito.ArgumentMatchers.contains("wm-agent1"));
+        verify(wecomApi, never()).sendReportMessage(anyString(), org.mockito.ArgumentMatchers.contains("wm-agent1"));
     }
 
     @Test
@@ -118,9 +118,9 @@ class DeletionReportServiceTest {
 
         reportService.report(date);
 
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("1. 六老师：6 人"));
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("其余 1 名员工各被删除不超过 5 人"));
-        verify(wecomApi, never()).sendAppMessage(anyString(), org.mockito.ArgumentMatchers.contains("agent-five"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("1. 六老师：6 人"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("其余 1 名员工各被删除不超过 5 人"));
+        verify(wecomApi, never()).sendReportMessage(anyString(), org.mockito.ArgumentMatchers.contains("agent-five"));
     }
 
     @Test
@@ -132,7 +132,7 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(0);
-        verify(wecomApi, never()).sendAppMessage(anyString(), anyString());
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
     }
 
     @Test
@@ -143,7 +143,7 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(0);
-        verify(wecomApi, never()).sendAppMessage(anyString(), anyString());
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
     }
 
     @Test
@@ -163,9 +163,9 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(2);
-        verify(wecomApi).sendAppMessage(eq("db-admin1"), org.mockito.ArgumentMatchers.contains("王老师"));
-        verify(wecomApi).sendAppMessage(eq("db-admin2"), org.mockito.ArgumentMatchers.contains("王老师"));
-        verify(wecomApi, never()).sendAppMessage(eq("env-admin"), anyString());
+        verify(wecomApi).sendReportMessage(eq("db-admin1"), org.mockito.ArgumentMatchers.contains("王老师"));
+        verify(wecomApi).sendReportMessage(eq("db-admin2"), org.mockito.ArgumentMatchers.contains("王老师"));
+        verify(wecomApi, never()).sendReportMessage(eq("env-admin"), anyString());
     }
 
     @Test
@@ -186,7 +186,7 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(0);
-        verify(wecomApi, never()).sendAppMessage(anyString(), anyString());
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
     }
 
     @Test
@@ -198,7 +198,7 @@ class DeletionReportServiceTest {
 
         reportService.report(date);
 
-        verify(wecomApi).sendAppMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("agent-unknown"));
+        verify(wecomApi).sendReportMessage(eq("admin1"), org.mockito.ArgumentMatchers.contains("agent-unknown"));
     }
 
     @Test
@@ -210,7 +210,7 @@ class DeletionReportServiceTest {
         int result = reportService.reportWithLock(date);
 
         assertThat(result).isEqualTo(DeletionReportService.LOCK_BUSY);
-        verify(wecomApi, never()).sendAppMessage(anyString(), anyString());
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
     }
 
     @Test
@@ -243,7 +243,7 @@ class DeletionReportServiceTest {
                 throw new RuntimeException("userid not found");
             }
             return null;
-        }).when(wecomApi).sendAppMessage(anyString(), anyString());
+        }).when(wecomApi).sendReportMessage(anyString(), anyString());
 
         int sent = reportService.report(date);
 
@@ -264,11 +264,11 @@ class DeletionReportServiceTest {
 
         reportService.report(date);
 
-        verify(wecomApi).sendAppMessage(eq("admin1"),
+        verify(wecomApi).sendReportMessage(eq("admin1"),
                 org.mockito.ArgumentMatchers.contains("50. agent49：6 人"));
-        verify(wecomApi).sendAppMessage(eq("admin1"),
+        verify(wecomApi).sendReportMessage(eq("admin1"),
                 org.mockito.ArgumentMatchers.contains("另有 1 名员工"));
-        verify(wecomApi, never()).sendAppMessage(anyString(),
+        verify(wecomApi, never()).sendReportMessage(anyString(),
                 org.mockito.ArgumentMatchers.contains("agent50"));
     }
 
