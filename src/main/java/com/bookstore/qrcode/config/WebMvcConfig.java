@@ -19,16 +19,24 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Value("${upload.card-pic-dir:./data/uploads/card-pics}")
     private String cardPicDir;
 
+    @Value("${upload.grade-cover-dir:./data/uploads/grade-covers}")
+    private String gradeCoverDir;
+
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        registerDir(registry, cardPicDir, "/uploads/card-pics/**");
+        registerDir(registry, gradeCoverDir, "/uploads/grade-covers/**");
+    }
+
+    private void registerDir(ResourceHandlerRegistry registry, String dirValue, String urlPattern) {
         try {
-            Path dir = Path.of(cardPicDir).toAbsolutePath().normalize();
+            Path dir = Path.of(dirValue).toAbsolutePath().normalize();
             Files.createDirectories(dir);
-            registry.addResourceHandler("/uploads/card-pics/**")
+            registry.addResourceHandler(urlPattern)
                     .addResourceLocations("file:" + dir.toString().replace('\\', '/') + "/");
-            log.info("Upload resource handler registered: /uploads/card-pics/** → {}", dir);
+            log.info("Upload resource handler registered: {} → {}", urlPattern, dir);
         } catch (Exception e) {
-            log.error("Failed to create upload directory: {}", cardPicDir, e);
+            log.error("Failed to create upload directory: {}", dirValue, e);
         }
     }
 }

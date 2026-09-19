@@ -41,6 +41,8 @@ public class SecurityConfig {
                         .ignoringRequestMatchers("/api/wecom/callback/**")
                         // H5 收集表单提交无 CSRF token
                         .ignoringRequestMatchers("/api/form/submit")
+                        // 补发表单提交无 CSRF token
+                        .ignoringRequestMatchers("/api/form/resend-submit")
                         // 管理后台内部 API（活码操作 / 在职继承等），页面内 fetch() 调用无 CSRF token
                         .ignoringRequestMatchers("/api/qrcodes/**")
                         .ignoringRequestMatchers("/api/inheritance/**")
@@ -48,6 +50,9 @@ public class SecurityConfig {
                         .ignoringRequestMatchers("/qrcodes/*/agents/batch-recycle")
                         // 客户标签修复：管理后台表单提交
                         .ignoringRequestMatchers("/customers/repair-tags")
+                        // 年级封面图上传/删除：管理后台页面内 fetch() 调用无 CSRF token
+                        .ignoringRequestMatchers("/admin/form-templates/grade-cover")
+                        .ignoringRequestMatchers("/admin/form-templates/grade-cover/delete")
                         // 企微标签同步：部署后一键触发
                         .ignoringRequestMatchers("/admin/tags/sync")
                         // 备注修复：部署后一键触发
@@ -59,8 +64,10 @@ public class SecurityConfig {
                         // Actuator 健康检查：供 K8s 探针使用
                         .requestMatchers("/actuator/health/**").permitAll()
                         .requestMatchers("/actuator/metrics/**").hasRole("ADMIN")
-                        // H5 收集表单：客户侧无需登录
-                        .requestMatchers("/form/**", "/api/form/submit").permitAll()
+                        // H5 收集表单：客户侧无需登录（含县区码选校/年级接口、补发表单提交）
+                        .requestMatchers("/form/**", "/api/form/submit",
+                                "/api/form/schools", "/api/form/grades",
+                                "/api/form/resend-submit").permitAll()
                         // 下载中心全部路径：由 DownloadAuthenticationFilter 独立处理认证
                         .requestMatchers("/download/**").permitAll()
                         // 用户管理：仅 admin 可访问

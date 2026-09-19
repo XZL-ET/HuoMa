@@ -2,8 +2,8 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
-import com.bookstore.qrcode.repository.SchoolCategoryRepository;
-import com.bookstore.qrcode.repository.SchoolRepository;
+import com.bookstore.qrcode.service.FormTemplateService;
+import com.bookstore.qrcode.service.GradeTextbookCoverService;
 import com.bookstore.qrcode.service.SchoolSelectionService;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,11 +25,11 @@ public class FormController {
     private final FormSubmissionRepository submissionRepo;
     private final CustomerRepository customerRepo;
     private final QrCodeGroupRepository groupRepo;
-    private final SchoolCategoryRepository categoryRepo;
-    private final SchoolRepository schoolRepo;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final SchoolSelectionService schoolSelectionService;
+    private final FormTemplateService formTemplateService;
+    private final GradeTextbookCoverService gradeTextbookCoverService;
 
     @GetMapping("/form/{qrCodeId}")
     public String fillForm(@PathVariable Long qrCodeId,
@@ -38,20 +38,8 @@ public class FormController {
         QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
         if (qr == null) return "form/success";
 
-        // 表单模板：活码 → 分组 → 学校分类（独立继承）
-        Long formTemplateId = qr.getFormTemplateId();
-        if (formTemplateId == null && qr.getGroupId() != null) {
-            QrCodeGroup group = groupRepo.findById(qr.getGroupId()).orElse(null);
-            if (group != null) formTemplateId = group.getDefaultFormTemplateId();
-        }
-        // 新增：学校分类层
-        if (formTemplateId == null && qr.getSchoolId() != null) {
-            School school = schoolRepo.findBySchoolIdAndDeletedFalse(qr.getSchoolId()).orElse(null);
-            if (school != null && school.getCategoryId() != null) {
-                SchoolCategory cat = categoryRepo.findById(school.getCategoryId()).orElse(null);
-                if (cat != null) formTemplateId = cat.getDefaultFormTemplateId();
-            }
-        }
+        // 表单模板：图片版模式全站覆盖，否则活码 → 分组 → 学校分类（独立继承）
+        Long formTemplateId = formTemplateService.resolveTemplateId(qr);
         if (formTemplateId == null) return "form/success";
 
         FormTemplate tpl = formTemplateRepo.findById(formTemplateId).orElse(null);
@@ -61,7 +49,20 @@ public class FormController {
         model.addAttribute("customerId", c);
         model.addAttribute("schoolName", qr.getSchoolName());
         model.addAttribute("subtitle", tpl.getSubtitle());  // null 时模板用默认文案
-        model.addAttribute("fieldsJson", tpl.getFields());
+
+        String fieldsJson = tpl.getFields();
+
+        // 图片版模式：注入年级封面图，供前端按选中年级联动展示
+        if (formTemplateService.isImageMode()) {
+            model.addAttribute("imageMode", true);
+            model.addAttribute("gradeImagesJson", gradeImagesJson());
+            // 按活码绑定学校的学段过滤年级选项（县区码走三级级联，不适用）
+            if (!schoolSelectionService.isCountyCode(qr)) {
+                fieldsJson = formTemplateService.filterImageGradeOptions(fieldsJson, qr);
+            }
+        }
+
+        model.addAttribute("fieldsJson", fieldsJson);
 
         // 区域联盟场景：加载分组学校列表，表单页展示学校选择下拉框
         if (qr.getGroupId() != null) {
@@ -107,20 +108,8 @@ public class FormController {
                 : (qr != null ? qr.getSchoolName() : null);  // 非联盟自动取活码学校名
             String fieldData = objectMapper.writeValueAsString(
                 body.getOrDefault("fieldData", Map.of()));
-            // 表单模板：活码 → 分组 → 学校分类（独立继承）
-            Long formTemplateId = (qr != null) ? qr.getFormTemplateId() : null;
-            if (formTemplateId == null && qr != null && qr.getGroupId() != null) {
-                QrCodeGroup group = groupRepo.findById(qr.getGroupId()).orElse(null);
-                if (group != null) formTemplateId = group.getDefaultFormTemplateId();
-            }
-            // 新增：学校分类层
-            if (formTemplateId == null && qr != null && qr.getSchoolId() != null) {
-                School school = schoolRepo.findBySchoolIdAndDeletedFalse(qr.getSchoolId()).orElse(null);
-                if (school != null && school.getCategoryId() != null) {
-                    SchoolCategory cat = categoryRepo.findById(school.getCategoryId()).orElse(null);
-                    if (cat != null) formTemplateId = cat.getDefaultFormTemplateId();
-                }
-            }
+            // 表单模板：图片版模式全站覆盖，否则活码 → 分组 → 学校分类（独立继承）
+            Long formTemplateId = formTemplateService.resolveTemplateId(qr);
             if (qr == null || formTemplateId == null) {
                 result.put("success", false); result.put("error", "活码未配置表单"); return result;
             }
@@ -173,6 +162,16 @@ public class FormController {
             result.put("success", false); result.put("error", e.getMessage());
         }
         return result;
+    }
+
+    /** 读取各年级语文课本封面图（grade_textbook_cover 表）序列化为 JSON。 */
+    private String gradeImagesJson() {
+        try {
+            return objectMapper.writeValueAsString(gradeTextbookCoverService.listAsMap());
+        } catch (Exception e) {
+            log.warn("序列化年级封面图失败", e);
+            return "{}";
+        }
     }
 
     @GetMapping("/api/form/schools")

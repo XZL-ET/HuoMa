@@ -30,10 +30,10 @@ public class SchoolSelectionService {
     /** 县区码 school_id 前缀，用于区分县区码与学校活码 */
     public static final String COUNTY_PREFIX = "county:";
 
-    /** 学段 → 年级枚举（见 spec §2.4） */
-    private static final Map<String, List<String>> GRADE_MAP = Map.of(
+    /** 学段 → 年级枚举（见 spec §2.4）。初中统一用「七年级」，与图片版封面图命名一致。 */
+    public static final Map<String, List<String>> GRADE_MAP = Map.of(
         "小学", List.of("一年级", "二年级", "三年级", "四年级", "五年级", "六年级"),
-        "初中", List.of("初一", "初二", "初三"),
+        "初中", List.of("七年级", "八年级", "九年级"),
         "高中", List.of("高一", "高二", "高三"),
         "幼儿园", List.of("小班", "中班", "大班")
     );

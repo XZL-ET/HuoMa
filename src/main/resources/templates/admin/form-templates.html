@@ -2,6 +2,32 @@
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='表单模板管理', content=~{::main})}">
 <main>
+<div class="card p-4 mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="mb-0">🔄 收集表单全局版本</h5>
+        <div class="btn-group" role="group">
+            <form method="post" th:action="@{/admin/form-templates/version}" class="d-inline">
+                <input type="hidden" name="version" value="text">
+                <button class="btn btn-sm"
+                        th:classappend="${formVersion == 'text'} ? 'btn-primary' : 'btn-outline-primary'">文字版</button>
+            </form>
+            <form method="post" th:action="@{/admin/form-templates/version}" class="d-inline"
+                  onsubmit="return confirm('切换后全站收集表单将变为图片版（仅保留年级字段），确认切换？')">
+                <input type="hidden" name="version" value="image">
+                <button class="btn btn-sm"
+                        th:classappend="${formVersion == 'image'} ? 'btn-primary' : 'btn-outline-primary'">图片版</button>
+            </form>
+        </div>
+    </div>
+    <div class="form-text">文字版 = 各活码原有表单；图片版 = 全站统一「选年级看语文课本封面」表单。</div>
+</div>
+
+<div class="card p-4 mb-4" th:if="${formVersion == 'image'}">
+    <h5 class="mb-1">📚 各年级语文课本封面图</h5>
+    <div class="form-text mb-3">图片版模式下，家长选中某年级即展示对应封面。逐年级上传或删除（jpg/png，≤5MB）。</div>
+    <div id="gradeCoverList" class="table-responsive"></div>
+</div>
+
 <div class="card p-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h5>📋 收集表单模板</h5>
@@ -29,5 +55,84 @@
         </tbody>
     </table>
 </div>
+
+<script th:inline="javascript">
+    var gradeImages = JSON.parse(/*[[${gradeImagesJson ?: '{}'}]]*/ '{}');
+    var grades = JSON.parse(/*[[${gradeOptionsJson ?: '[]'}]]*/ '[]');
+    (function() {
+        var list = document.getElementById('gradeCoverList');
+        var grid = document.createElement('div');
+        grid.className = 'row g-3';
+        grades.forEach(function(g) {
+            var has = !!gradeImages[g];
+            var col = document.createElement('div');
+            col.className = 'col-6 col-md-4 col-lg-3';
+            col.innerHTML =
+                '<div class="card h-100">' +
+                  '<div class="card-body text-center p-2">' +
+                    '<div class="fw-bold small mb-1">' + g + '</div>' +
+                    '<label class="grade-cover-box d-flex align-items-center justify-content-center" style="height:120px;border:1px dashed #dee2e6;border-radius:8px;background:#f8f9fa;cursor:pointer;overflow:hidden;margin-bottom:6px;">' +
+                      '<img class="grade-preview img-fluid" style="max-height:120px;max-width:100%;object-fit:contain;' +
+                          (has ? '' : 'display:none;') + '" src="' + (gradeImages[g] || '') + '">' +
+                      '<span class="text-muted small grade-empty"' + (has ? ' style="display:none;"' : '') + '>点击上传</span>' +
+                      '<input type="file" accept="image/*" class="grade-file d-none" data-grade="' + g + '">' +
+                    '</label>' +
+                    '<button type="button" class="btn btn-sm btn-outline-danger grade-del"' +
+                        ' data-grade="' + g + '"' + (has ? '' : ' style="display:none;"') + '>🗑 删除</button>' +
+                  '</div>' +
+                '</div>';
+            grid.appendChild(col);
+        });
+        list.appendChild(grid);
+
+        list.addEventListener('change', function(e) {
+            var input = e.target;
+            if (!input.classList.contains('grade-file') || !input.files || !input.files[0]) return;
+            var grade = input.dataset.grade;
+            var fd = new FormData();
+            fd.append('grade', grade);
+            fd.append('file', input.files[0]);
+            fetch('/admin/form-templates/grade-cover', { method: 'POST', body: fd })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.success) {
+                        gradeImages[grade] = d.url;
+                        var card = input.closest('.card');
+                        card.querySelector('.grade-preview').src = d.url;
+                        card.querySelector('.grade-preview').style.display = '';
+                        card.querySelector('.grade-empty').style.display = 'none';
+                        card.querySelector('.grade-del').style.display = '';
+                        input.value = '';
+                    } else {
+                        alert('上传失败：' + (d.error || '未知错误'));
+                    }
+                })
+                .catch(function() { alert('上传失败'); });
+        });
+
+        list.addEventListener('click', function(e) {
+            var btn = e.target.closest('.grade-del');
+            if (!btn) return;
+            var grade = btn.dataset.grade;
+            if (!confirm('确定删除「' + grade + '」的封面图？')) return;
+            var fd = new FormData();
+            fd.append('grade', grade);
+            fetch('/admin/form-templates/grade-cover/delete', { method: 'POST', body: fd })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.success) {
+                        delete gradeImages[grade];
+                        var card = btn.closest('.card');
+                        card.querySelector('.grade-preview').style.display = 'none';
+                        card.querySelector('.grade-empty').style.display = '';
+                        btn.style.display = 'none';
+                    } else {
+                        alert('删除失败：' + (d.error || '未知错误'));
+                    }
+                })
+                .catch(function() { alert('删除失败'); });
+        });
+    })();
+</script>
 </main>
 </html>

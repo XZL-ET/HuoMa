@@ -36,6 +36,7 @@ server:
 # 文件上传配置
 upload:
   card-pic-dir: ${UPLOAD_CARD_PIC_DIR:./data/uploads/card-pics}   # 表单模板卡片图片上传目录
+  grade-cover-dir: ${UPLOAD_GRADE_COVER_DIR:./data/uploads/grade-covers}   # 年级语文课本封面图上传目录
 
 # Actuator 健康检查（供 K8s 探针 / 负载均衡器使用）
 management:

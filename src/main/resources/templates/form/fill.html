@@ -9,18 +9,17 @@
     <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
     <style>
         body { background:#f5f6fa; }
-        .org-topbar { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%); color: white; padding: 14px 16px; text-align: center; }
-        .org-topbar .brand-icon { font-size: 1.6rem; display: block; margin-bottom: 2px; }
-        .org-topbar .brand-name { font-size: 1rem; font-weight: 700; letter-spacing: 1px; }
-        .org-topbar .brand-sub { font-size: 0.75rem; opacity: 0.85; margin-top: 2px; }
-        .privacy-notice { background: #fef9e7; border-left: 3px solid #f39c12; padding: 10px 14px; font-size: 0.8rem; color: #7d6608; margin: 1rem 0; border-radius: 0 8px 8px 0; line-height: 1.6; }
-        .org-footer { text-align: center; padding: 20px 16px 28px; color: #999; font-size: 0.75rem; line-height: 2; }
+        .org-topbar { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%); color: white; padding: 8px 16px; text-align: center; }
+        .org-topbar .brand-name { font-size: 0.9rem; font-weight: 700; letter-spacing: 1px; }
+        .org-topbar .brand-sub { font-size: 0.7rem; opacity: 0.85; margin-top: 1px; }
+        .privacy-notice { background: #fef9e7; border-left: 3px solid #f39c12; padding: 6px 10px; font-size: 0.72rem; color: #7d6608; margin: 0.5rem 0; border-radius: 0 8px 8px 0; line-height: 1.4; }
+        .org-footer { text-align: center; padding: 10px 12px 16px; color: #999; font-size: 0.7rem; line-height: 1.6; }
         .org-footer a { color: #2980b9; text-decoration: none; }
-        .stage-btn { border:1px solid #dee2e6; border-radius:8px; padding:10px 0; text-align:center; cursor:pointer; background:#fff; }
+        .stage-btn { border:1px solid #dee2e6; border-radius:8px; padding:8px 0; text-align:center; cursor:pointer; background:#fff; font-size:0.9rem; }
         .stage-btn.active { border-color:#2980b9; background:#eaf4fb; color:#1a5276; font-weight:700; }
-        .school-item { padding:10px 12px; border:1px solid #eef0f3; border-radius:8px; margin-bottom:8px; cursor:pointer; }
+        .school-item { padding:8px 10px; border:1px solid #eef0f3; border-radius:8px; margin-bottom:6px; cursor:pointer; }
         .school-item.selected { border-color:#2980b9; background:#eaf4fb; }
-        .last-hint { background:#f0f7ee; border:1px solid #d4e7cd; border-radius:8px; padding:10px 12px; font-size:0.85rem; color:#3c763d; margin-bottom:1rem; cursor:pointer; }
+        .last-hint { background:#f0f7ee; border:1px solid #d4e7cd; border-radius:8px; padding:8px 10px; font-size:0.8rem; color:#3c763d; margin-bottom:0.75rem; cursor:pointer; }
     </style>
 </head>
 <body>
@@ -29,11 +28,11 @@
     <div class="brand-name">甘肃省新华书店</div>
     <div class="brand-sub">教材发行服务</div>
 </div>
-<div class="container py-4" style="max-width:500px;">
+<div class="container py-2" style="max-width:500px;">
     <div class="card shadow-sm">
-        <div class="card-body p-4">
-            <h5 class="text-center mb-2" th:text="${groupName != null ? groupName : schoolName}"></h5>
-            <p class="text-center text-muted small mb-3"
+        <div class="card-body p-3">
+            <h5 class="text-center mb-1" th:text="${groupName != null ? groupName : schoolName}"></h5>
+            <p class="text-center text-muted small mb-2"
                th:text="${#strings.isEmpty(subtitle)} ? '请填写孩子信息，以便为您精准服务' : ${subtitle}">请填写孩子信息，以便为您精准服务</p>
 
             <!-- 隐私声明 -->
@@ -45,7 +44,7 @@
                 <input type="hidden" id="qrCodeId" th:value="${qrCodeId}">
                 <input type="hidden" id="customerId" th:value="${customerId}">
                 <!-- 区域联盟：学校选择下拉框 -->
-                <div class="mb-3" id="schoolPicker" th:if="${schoolList != null and !schoolList.isEmpty()}">
+                <div class="mb-2" id="schoolPicker" th:if="${schoolList != null and !schoolList.isEmpty()}">
                     <label class="form-label">所属学校 <span class="text-danger">*</span></label>
                     <select id="schoolSelect" class="form-select" required>
                         <option value="">请选择学校</option>
@@ -54,7 +53,7 @@
                 </div>
                 <!-- 县区码：三级级联选校 -->
                 <div id="countyPicker" style="display:none;">
-                    <div class="mb-3">
+                    <div class="mb-2">
                         <label class="form-label">学段 <span class="text-danger">*</span></label>
                         <div class="row g-2" id="stageButtons">
                             <div class="col-3"><div class="stage-btn" data-stage="小学">小学</div></div>
@@ -64,12 +63,12 @@
                             <div class="col-3"><div class="stage-btn" data-stage="未分类">未分类</div></div>
                         </div>
                     </div>
-                    <div class="mb-3" id="schoolSearchBox" style="display:none;">
+                    <div class="mb-2" id="schoolSearchBox" style="display:none;">
                         <label class="form-label">学校 <span class="text-danger">*</span></label>
                         <input type="text" id="schoolSearch" class="form-control" placeholder="搜索学校名称 / 拼音首字母">
-                        <div id="schoolList" class="mt-2" style="max-height:280px;overflow:auto;"></div>
+                        <div id="schoolList" class="mt-2" style="max-height:220px;overflow:auto;"></div>
                     </div>
-                    <div class="mb-3" id="gradeBox" style="display:none;">
+                    <div class="mb-2" id="gradeBox" style="display:none;">
                         <label class="form-label">年级 + 班级 <span class="text-danger">*</span></label>
                         <div class="row g-2">
                             <div class="col-6">
@@ -82,7 +81,7 @@
                     </div>
                 </div>
                 <div id="formFields"></div>
-                <button type="submit" class="btn btn-primary w-100 mt-3">提交</button>
+                <button type="submit" class="btn btn-primary w-100 mt-2">提交</button>
             </form>
             <div id="submitMsg" class="text-center mt-2" style="display:none;"></div>
         </div>
@@ -98,11 +97,13 @@
 <script th:inline="javascript">
     var fields = JSON.parse(/*[[${fieldsJson}]]*/ '[]');
     var isCountyCode = /*[[${countyCode ?: false}]]*/ false;
+    var imageMode = /*[[${imageMode ?: false}]]*/ false;
+    var gradeImages = JSON.parse(/*[[${gradeImagesJson ?: '{}'}]]*/ '{}');
 
     // ===== 动态表单字段（既有逻辑） =====
     var container = document.getElementById('formFields');
     fields.forEach(function(f) {
-        var div = document.createElement('div'); div.className = 'mb-3';
+        var div = document.createElement('div'); div.className = 'mb-2';
         var label = document.createElement('label');
         label.className = 'form-label'; label.textContent = f.label + (f.required ? ' *' : '');
         div.appendChild(label);
@@ -118,6 +119,19 @@
                 sel.appendChild(opt);
             });
             div.appendChild(sel);
+            // 图片版：只要有 grade 下拉即联动展示对应语文课本封面
+            if (imageMode && f.name === 'grade') {
+                var cover = document.createElement('img');
+                cover.className = 'img-fluid rounded border mt-2 mb-2 d-block mx-auto';
+                cover.style.display = 'none';
+                cover.style.maxHeight = '180px';
+                div.appendChild(cover);
+                sel.addEventListener('change', function() {
+                    var url = gradeImages[sel.value];
+                    if (url) { cover.src = url; cover.style.display = ''; }
+                    else { cover.style.display = 'none'; }
+                });
+            }
         } else {
             var input = document.createElement('input');
             input.type = 'text'; input.className = 'form-control';

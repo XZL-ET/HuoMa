@@ -927,6 +927,64 @@ UPDATE qr_code         SET welcome_text          = NULL WHERE welcome_text = '';
 UPDATE system_config   SET config_value = NULL WHERE config_key = 'default_welcome_text' AND config_value = '';
 
 -- ============================================
+-- 补发表单·送试题（未打标签家长再触达 + 静默打标）
+-- ============================================
+
+-- paper_link：试题内容链接（年级 × 科目）
+CREATE TABLE IF NOT EXISTS paper_link (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    grade      VARCHAR(50)  NOT NULL COMMENT '年级',
+    subject    VARCHAR(50)  NOT NULL COMMENT '科目',
+    title      VARCHAR(200) COMMENT '试题标题',
+    paper_url  VARCHAR(500) NOT NULL COMMENT '试题图文永久链接',
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_grade_subject (grade, subject)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='试题内容链接（年级×科目）';
+
+-- form_resend_task：补发表单群发任务
+CREATE TABLE IF NOT EXISTS form_resend_task (
+    id               BIGINT AUTO_INCREMENT PRIMARY KEY,
+    sender           VARCHAR(100) NOT NULL COMMENT '发送员工 userid（群发 sender）',
+    external_userids JSON         NOT NULL COMMENT '该批客户 external_userid 列表（单批≤1万）',
+    msgid            VARCHAR(100) COMMENT '企微群发返回的 msgid',
+    fail_list        JSON         COMMENT '企微返回 fail_list（不可触达客户）',
+    covered_count    INT          NOT NULL DEFAULT 0 COMMENT '覆盖人数',
+    status           VARCHAR(20)  NOT NULL DEFAULT 'created' COMMENT 'created=待员工确认 / failed=调用失败',
+    created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_resend_sender (sender),
+    INDEX idx_resend_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='补发表单群发任务';
+
+-- customer_openid_map：external_userid ↔ 公众号 openid 映射
+CREATE TABLE IF NOT EXISTS customer_openid_map (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    external_userid VARCHAR(100) NOT NULL UNIQUE COMMENT '企微外部联系人ID',
+    openid          VARCHAR(100) COMMENT '公众号 openid',
+    appid           VARCHAR(100) COMMENT '公众号 appid',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_openid (openid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='external_userid↔openid映射表';
+
+-- 补发表单默认模板锚点：年级（单选）+ 科目（多选）
+INSERT IGNORE INTO system_config (config_key, config_name, config_value) VALUES
+('resend_form_template_id', '补发表单模板ID', '');
+
+-- 收集表单全局版本（text=原解析链 / image=全站覆盖图片版）
+INSERT IGNORE INTO system_config (config_key, config_name, config_value) VALUES
+('collection_form_version', '收集表单全局版本', 'text');
+
+-- 各年级语文课本封面图（图片版收集表单联动展示，年级名为主键）
+CREATE TABLE IF NOT EXISTS grade_textbook_cover (
+    grade_name VARCHAR(50)  NOT NULL COMMENT '年级名（如 一年级/高一）',
+    image_url  VARCHAR(500) NOT NULL COMMENT '封面图访问路径',
+    updated_at DATETIME     DEFAULT NULL COMMENT '更新时间',
+    PRIMARY KEY (grade_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='各年级语文课本封面图';
+
+-- ============================================
 -- 客户删除关系事件（删除关系日报）
 -- ============================================
 

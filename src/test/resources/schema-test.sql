@@ -357,6 +357,13 @@ CREATE TABLE IF NOT EXISTS system_config (
     updated_at TIMESTAMP DEFAULT NULL
 );
 
+-- grade_textbook_cover：各年级语文课本封面图（图片版收集表单联动展示）
+CREATE TABLE IF NOT EXISTS grade_textbook_cover (
+    grade_name VARCHAR(50) PRIMARY KEY,
+    image_url VARCHAR(500) NOT NULL,
+    updated_at TIMESTAMP DEFAULT NULL
+);
+
 -- qr_access_log：活码访问日志表
 CREATE TABLE IF NOT EXISTS qr_access_log (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

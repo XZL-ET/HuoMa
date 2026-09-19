@@ -85,6 +85,7 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
     void 按学段返回年级枚举() {
         assertThat(service.listGrades("小学"))
             .containsExactly("一年级", "二年级", "三年级", "四年级", "五年级", "六年级");
+        assertThat(service.listGrades("初中")).containsExactly("七年级", "八年级", "九年级");
         assertThat(service.listGrades("幼儿园")).containsExactly("小班", "中班", "大班");
         assertThat(service.listGrades("不存在的学段")).isEmpty();
     }

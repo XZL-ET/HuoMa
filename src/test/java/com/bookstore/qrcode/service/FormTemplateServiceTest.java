@@ -2,6 +2,7 @@ package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.FormTemplate;
 import com.bookstore.qrcode.repository.FormTemplateRepository;
+import com.bookstore.qrcode.config.ObjectMapperTestConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @DataJpaTest
 @ActiveProfiles("test")
-@Import(FormTemplateService.class)
+@Import({FormTemplateService.class, ObjectMapperTestConfig.class})
 @Sql(scripts = "classpath:schema-test.sql")
 @DisplayName("FormTemplateService 县区码默认模板")
 class FormTemplateServiceTest {
