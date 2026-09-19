@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.CustomerTag;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -365,4 +366,40 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     List<Object[]> countTotalAndRangeByQrIds(@Param("qrIds") List<Long> qrIds,
                                               @Param("dateStart") LocalDateTime dateStart,
                                               @Param("dateEnd") LocalDateTime dateEnd);
+
+    /**
+     * 查询「未打标签家长」：当前归属员工非空、来源活码非空、无任何 source=form 的表单标签。
+     * 用于补发表单场景筛选触达对象。
+     */
+    @Query("SELECT c FROM Customer c WHERE c.currentAgent IS NOT NULL AND c.sourceQrId IS NOT NULL "
+         + "AND c.status = :status "
+         + "AND NOT EXISTS (SELECT ct FROM CustomerTag ct WHERE ct.customerId = c.id "
+         + "AND ct.source = :source)")
+    List<Customer> findUntaggedParents(@Param("status") Customer.CustomerStatus status,
+                                       @Param("source") CustomerTag.TagSource source);
+
+    /**
+     * 按当前归属员工分组统计未打标签家长数量。
+     * 返回 {@code Object[]}：[0]=currentAgent（String），[1]=数量（Long）。
+     */
+    @Query("SELECT c.currentAgent, COUNT(c) FROM Customer c "
+         + "WHERE c.currentAgent IS NOT NULL AND c.sourceQrId IS NOT NULL "
+         + "AND c.status = :status "
+         + "AND NOT EXISTS (SELECT ct FROM CustomerTag ct WHERE ct.customerId = c.id "
+         + "AND ct.source = :source) "
+         + "GROUP BY c.currentAgent")
+    List<Object[]> countUntaggedByAgent(@Param("status") Customer.CustomerStatus status,
+                                        @Param("source") CustomerTag.TagSource source);
+
+    /**
+     * 查询指定员工名下的未打标签家长。
+     */
+    @Query("SELECT c FROM Customer c WHERE c.currentAgent = :currentAgent "
+         + "AND c.sourceQrId IS NOT NULL "
+         + "AND c.status = :status "
+         + "AND NOT EXISTS (SELECT ct FROM CustomerTag ct WHERE ct.customerId = c.id "
+         + "AND ct.source = :source)")
+    List<Customer> findUntaggedByAgent(@Param("currentAgent") String currentAgent,
+                                       @Param("status") Customer.CustomerStatus status,
+                                       @Param("source") CustomerTag.TagSource source);
 }

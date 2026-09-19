@@ -1,0 +1,44 @@
+<!-- form/mp-openid-test.html — 公众号网页授权拿 openid 的最小回显页（spike 临时物） -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+    <title>openid 验证</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background:#f5f6fa; }
+        .org-topbar { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%); color: white; padding: 14px 16px; text-align: center; }
+        .org-topbar .brand-name { font-size: 1rem; font-weight: 700; letter-spacing: 1px; }
+        .org-topbar .brand-sub { font-size: 0.75rem; opacity: 0.85; margin-top: 2px; }
+        code.openid { word-break: break-all; }
+    </style>
+</head>
+<body>
+<div class="org-topbar">
+    <div class="brand-name">甘肃省新华书店</div>
+    <div class="brand-sub">openid 验证页</div>
+</div>
+<div class="container py-4" style="max-width:500px;">
+    <div class="card shadow-sm">
+        <div class="card-body p-4">
+            <div th:if="${openid}">
+                <div class="text-center mb-3"><span class="display-5">✅</span></div>
+                <h5 class="text-center mb-3">网页授权拿到的 openid</h5>
+                <div class="alert alert-light border">
+                    <code class="openid" th:text="${openid}"></code>
+                </div>
+                <p class="text-muted small mb-0">
+                    请与 <code>convert_to_openid</code> 返回的 openid 比对是否一致。
+                </p>
+            </div>
+            <div th:if="${error}">
+                <div class="text-center mb-3"><span class="display-5">⚠️</span></div>
+                <h5 class="text-center mb-3">获取失败</h5>
+                <div class="alert alert-danger small" th:text="${error}"></div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

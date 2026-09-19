@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='补发表单', content=~{::main})}">
+<main>
+<!-- 概览卡片 -->
+<div class="row g-3 mb-3">
+    <div class="col-md-4">
+        <div class="card p-3 text-center">
+            <div class="text-muted small">未打标签家长总数</div>
+            <div class="display-6 fw-bold text-primary" th:text="${untaggedCount}">0</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-3 text-center">
+            <div class="text-muted small">涉及员工数</div>
+            <div class="display-6 fw-bold" th:text="${#lists.size(untaggedByAgent)}">0</div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-3 text-center">
+            <div class="text-muted small">群发任务数</div>
+            <div class="display-6 fw-bold" th:text="${#lists.size(tasks)}">0</div>
+        </div>
+    </div>
+</div>
+
+<!-- 发起群发 -->
+<div class="card p-4 mb-3">
+    <h6>📨 发起补发群发</h6>
+    <p class="text-muted small">按员工分批调用企微群发（add_msg_template），每批 ≤ 1 万 external_userid；发起后自动给相关员工发内部消息催办。员工在企微端确认后才会真正发出（半自动）。</p>
+    <form th:action="@{/admin/form-resend/initiate}" method="post" class="row g-2 align-items-end">
+        <div class="col-auto">
+            <label class="form-label small">仅指定员工（可选）</label>
+            <input type="text" name="agentUserid" class="form-control" placeholder="留空则全部员工">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary"
+                    onclick="return confirm('确定发起群发？将向未打标签家长推送补发表单链接。')">发起群发</button>
+        </div>
+    </form>
+</div>
+
+<div class="row g-3">
+    <!-- 未打标签按员工分布 -->
+    <div class="col-lg-5">
+        <div class="card p-4">
+            <h6>👥 未打标签家长 · 按员工</h6>
+            <div th:if="${untaggedByAgent.isEmpty()}" class="text-muted small py-3">暂无未打标签家长</div>
+            <table th:if="${!untaggedByAgent.isEmpty()}" class="table table-sm">
+                <thead><tr><th>员工</th><th class="text-end">未打标签数</th></tr></thead>
+                <tbody>
+                    <tr th:each="a : ${untaggedByAgent}">
+                        <td th:text="${a.agent}"></td>
+                        <td class="text-end" th:text="${a.count}"></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 群发任务 -->
+    <div class="col-lg-7">
+        <div class="card p-4">
+            <h6>📋 群发任务记录</h6>
+            <div th:if="${tasks.isEmpty()}" class="text-muted small py-3">暂无任务</div>
+            <div th:if="${!tasks.isEmpty()}" class="table-responsive">
+                <table class="table table-sm">
+                    <thead><tr><th>员工</th><th class="text-end">覆盖人数</th><th>状态</th><th>msgid</th><th>创建时间</th></tr></thead>
+                    <tbody>
+                        <tr th:each="t : ${tasks}">
+                            <td th:text="${t.sender}"></td>
+                            <td class="text-end" th:text="${t.coveredCount}"></td>
+                            <td>
+                                <span class="badge" th:classappend="${t.status == 'failed'} ? 'bg-danger' : 'bg-secondary'"
+                                      th:text="${t.status}"></span>
+                            </td>
+                            <td class="small text-muted" th:text="${t.msgid}"></td>
+                            <td class="small text-muted" th:text="${#temporals.format(t.createdAt, 'MM-dd HH:mm')}"></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 试题链接映射管理 -->
+<div class="card p-4 mt-3">
+    <h6>🔗 试题链接映射（年级 × 科目）</h6>
+    <p class="text-muted small">家长提交补发表单后，按其选择的年级与科目返回对应试题链接。同一「年级 + 科目」唯一，重复保存会覆盖。</p>
+
+    <form th:action="@{/admin/form-resend/paper-link/save}" method="post" class="row g-2 align-items-end mb-3">
+        <div class="col-auto">
+            <label class="form-label small">年级</label>
+            <input type="text" name="grade" class="form-control" placeholder="如：三年级" required>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small">科目</label>
+            <input type="text" name="subject" class="form-control" placeholder="如：数学" required>
+        </div>
+        <div class="col-auto">
+            <label class="form-label small">标题</label>
+            <input type="text" name="title" class="form-control" placeholder="如：三年级数学试题">
+        </div>
+        <div class="col-3">
+            <label class="form-label small">试题链接</label>
+            <input type="url" name="paperUrl" class="form-control" placeholder="https://..." required>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+    </form>
+
+    <div th:if="${paperLinks.isEmpty()}" class="text-muted small py-2">暂无映射，请先添加</div>
+    <table th:if="${!paperLinks.isEmpty()}" class="table table-sm">
+        <thead><tr><th>年级</th><th>科目</th><th>标题</th><th>链接</th><th class="text-end">操作</th></tr></thead>
+        <tbody>
+            <tr th:each="p : ${paperLinks}">
+                <td th:text="${p.grade}"></td>
+                <td th:text="${p.subject}"></td>
+                <td th:text="${p.title}"></td>
+                <td class="small text-muted text-truncate" style="max-width:280px;" th:text="${p.paperUrl}"></td>
+                <td class="text-end">
+                    <form th:action="@{/admin/form-resend/paper-link/delete}" method="post" class="d-inline"
+                          onsubmit="return confirm('确定删除该映射？')">
+                        <input type="hidden" name="id" th:value="${p.id}">
+                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                    </form>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+</main>
+</html>
