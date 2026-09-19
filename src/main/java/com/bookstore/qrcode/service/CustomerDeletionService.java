@@ -53,6 +53,8 @@ public class CustomerDeletionService {
     /**
      * 记录「员工删除客户」事件（企微 del_external_contact）。
      *
+     * <p>source 字段已弃用（企微回调不携带，恒为 null），保留读取仅为兼容历史结构。</p>
+     *
      * @param event 回调事件 JSON，需含 external_userid 与 userid 字段，source 可选
      */
     @Transactional

@@ -42,7 +42,12 @@ public class CustomerDeletionEvent {
     @Enumerated(EnumType.STRING)
     private Direction direction;
 
-    /** 删除来源（仅员工删客户事件携带，如 DELETE_BY_TRANSFER），可为 null */
+    /**
+     * 删除来源（仅员工删客户事件携带，如 DELETE_BY_TRANSFER），可为 null。
+     *
+     * <p><b>已弃用：</b>企微删除回调未携带该字段，落库值恒为 null；删除记录页的
+     * 「来源」列已改为经 {@link Customer#sourceQrId} 反查活码学校名展示。</p>
+     */
     @Column(length = 50)
     private String source;
 

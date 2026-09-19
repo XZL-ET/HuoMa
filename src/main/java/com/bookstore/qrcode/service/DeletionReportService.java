@@ -22,12 +22,13 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -65,6 +66,19 @@ public class DeletionReportService {
     /** 锁被其他执行占用时的哨兵返回值 */
     public static final int LOCK_BUSY = -1;
 
+    /**
+     * 今日推送结果：sent 成功人数，failed 失败账号列表，busy 是否锁被占用。
+     * <p>供「删除记录」页回显哪些账号推送失败（如不在日报应用可见范围、userid 无效）。</p>
+     */
+    public record TodayPushResult(int sent, List<String> failed, boolean busy) {
+        public static TodayPushResult of(int sent, List<String> failed) {
+            return new TodayPushResult(sent, failed, false);
+        }
+        public static TodayPushResult lockBusy() {
+            return new TodayPushResult(0, List.of(), true);
+        }
+    }
+
     /** 被删超过该人数的员工才逐行列出，其余合并为员工总数 */
     private static final long HIGHLIGHT_MIN_DELETIONS = 5;
 
@@ -74,6 +88,11 @@ public class DeletionReportService {
     /** 分布式锁键与 TTL，防止定时任务与手动推送撞车重复推送 */
     private static final String LOCK_KEY = "lock:deletion-report:daily";
     private static final Duration LOCK_TTL = Duration.ofMinutes(30);
+
+    /** 按日期幂等标记键前缀，配合 {@link #reportScheduledDaily} 保证每日日报只推一次 */
+    private static final String SENT_KEY_PREFIX = "deletion-report:daily:sent:";
+    /** 幂等标记存活时长，覆盖到下一天日报触发之后 */
+    private static final Duration SENT_TTL = Duration.ofHours(25);
 
     private final CustomerDeletionEventRepository deletionRepo;
     private final EmployeeRepository employeeRepo;
@@ -94,23 +113,47 @@ public class DeletionReportService {
      * @return 成功推送的管理员数量，或 {@link #LOCK_BUSY} 表示正在执行中
      */
     public int reportWithLock(LocalDate date) {
-        return withLock(() -> report(date));
+        return withLock(() -> report(date), LOCK_BUSY);
     }
 
-    public int reportTodayWithLock(String recipientsRaw) {
-        return withLock(() -> reportTodayUntilNow(recipientsRaw));
+    /**
+     * 定时任务专用：按日期幂等地推送某日日报。
+     * <p>双机热备部署下两台 ECS 都会注册定时任务，且触发时机存在毫秒级先后。
+     * 瞬时分布式锁只能防「并发」、防不住「先后各推一次」，故在锁内再叠加
+     * 按日期幂等标记：推送成功后写入 {@code sent:{date}}（TTL 25h），
+     * 后续执行（无论哪台机器）看到标记即跳过。</p>
+     *
+     * @param date 统计日期
+     * @return 成功推送的管理员数量，已推送过时为 0，锁被占用时为 {@link #LOCK_BUSY}
+     */
+    public int reportScheduledDaily(LocalDate date) {
+        return withLock(() -> {
+            if (isSent(date)) {
+                log.info("客户删除员工日报 {} 已推送过，跳过本次（幂等）", date);
+                return 0;
+            }
+            int sent = report(date);
+            if (sent > 0) {
+                markSent(date);
+            }
+            return sent;
+        }, LOCK_BUSY);
     }
 
-    private int withLock(IntSupplier action) {
+    public TodayPushResult reportTodayWithLock(String recipientsRaw) {
+        return withLock(() -> reportTodayUntilNow(recipientsRaw), TodayPushResult.lockBusy());
+    }
+
+    private <T> T withLock(Supplier<T> action, T busyValue) {
         String lockValue = UUID.randomUUID().toString();
         Boolean locked = redisTemplate.opsForValue()
                 .setIfAbsent(LOCK_KEY, lockValue, LOCK_TTL);
         if (!Boolean.TRUE.equals(locked)) {
             log.info("客户删除员工日报推送已在进行中，跳过本次");
-            return LOCK_BUSY;
+            return busyValue;
         }
         try {
-            return action.getAsInt();
+            return action.get();
         } finally {
             try {
                 redisTemplate.execute(RedisConfig.SAFE_UNLOCK_SCRIPT, List.of(LOCK_KEY), lockValue);
@@ -118,6 +161,18 @@ public class DeletionReportService {
                 log.warn("释放日报推送锁失败: {}", e.getMessage());
             }
         }
+    }
+
+    private boolean isSent(LocalDate date) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(sentKey(date)));
+    }
+
+    private void markSent(LocalDate date) {
+        redisTemplate.opsForValue().set(sentKey(date), "1", SENT_TTL);
+    }
+
+    private String sentKey(LocalDate date) {
+        return SENT_KEY_PREFIX + date;
     }
 
     /**
@@ -132,49 +187,55 @@ public class DeletionReportService {
             log.warn("客户删除员工日报：未配置推送对象，跳过推送 date={}", date);
             return 0;
         }
-        return reportRange(admins, date.atStartOfDay(), date.plusDays(1).atStartOfDay(), "昨日", date);
+        return reportRange(admins, date.atStartOfDay(), date.plusDays(1).atStartOfDay(), "昨日", date).sent();
     }
 
-    public int reportTodayUntilNow(String recipientsRaw) {
+    public TodayPushResult reportTodayUntilNow(String recipientsRaw) {
         List<String> admins = parseAdmins(recipientsRaw);
         if (admins.isEmpty()) {
             log.warn("客户删除员工今日推送：接收人为空，跳过推送");
-            return 0;
+            return TodayPushResult.of(0, List.of());
         }
         LocalDateTime now = LocalDateTime.now(REPORT_ZONE);
         String period = "今日截至 " + now.format(DateTimeFormatter.ofPattern("HH:mm"));
-        return reportRange(admins, now.toLocalDate().atStartOfDay(), now, period, now.toLocalDate());
+        RangeResult r = reportRange(admins, now.toLocalDate().atStartOfDay(), now, period, now.toLocalDate());
+        return TodayPushResult.of(r.sent(), r.failed());
     }
 
-    private int reportRange(List<String> admins, LocalDateTime start, LocalDateTime end,
-                            String period, LocalDate date) {
+    private RangeResult reportRange(List<String> admins, LocalDateTime start, LocalDateTime end,
+                                    String period, LocalDate date) {
         List<CustomerDeletionEvent> events = deletionRepo.findByDirectionAndDeletedAtBetween(
                 CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT, start, end);
         if (events.isEmpty()) {
             log.info("客户删除员工日报：{} 无删除事件，跳过推送", date);
-            return 0;
+            return new RangeResult(0, List.of());
         }
         String message = buildMessage(date, period, events);
         return sendToAdmins(admins, message, date);
     }
 
-    private int sendToAdmins(List<String> admins, String message, LocalDate date) {
-        int sent = 0;
+    private RangeResult sendToAdmins(List<String> admins, String message, LocalDate date) {
+        List<String> failed = new ArrayList<>();
         for (String admin : admins) {
             try {
                 wecomApi.sendReportMessage(admin, message);
-                sent++;
             } catch (Exception e) {
+                failed.add(admin);
                 log.error("客户删除员工日报推送失败: date={}, admin={}", date, admin, e);
-                alertService.createAlert(admin, "deletion_report_fail",
+                // 接收人是管理员，不一定是服务老师(agent)；agent_alert.agent_userid 有外键
+                // → agent(userid)，写入非 agent 账号会违反外键。故 agent_userid 置 null（系统级告警），
+                // 失败账号仍保留在 detail.admin 里。
+                alertService.createAlert(null, "deletion_report_fail",
                         AgentAlert.AlertSeverity.high,
                         Map.of("date", date.toString(), "admin", admin,
                                 "error", String.valueOf(e.getMessage())),
                         AgentAlert.AutoAction.none, null);
             }
         }
-        log.info("客户删除员工日报完成: date={}, admins={}, sent={}", date, admins.size(), sent);
-        return sent;
+        int sent = admins.size() - failed.size();
+        log.info("客户删除员工日报完成: date={}, admins={}, sent={}, failed={}",
+                date, admins.size(), sent, failed);
+        return new RangeResult(sent, List.copyOf(failed));
     }
 
     /** 接收人解析：优先系统配置，回退环境变量。 */
@@ -300,4 +361,7 @@ public class DeletionReportService {
                 .filter(name -> name != null && !name.isBlank())
                 .orElse(userid);
     }
+
+    /** 内部推送结果：sent 成功人数，failed 失败账号列表。 */
+    private record RangeResult(int sent, List<String> failed) {}
 }

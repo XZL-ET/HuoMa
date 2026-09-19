@@ -2,19 +2,30 @@
 <html xmlns:th="http://www.thymeleaf.org"
       th:replace="~{layout :: layout(title='删除记录', content=~{::main})}">
 <main>
-<div class="card p-4">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h5>🗑️ 删除记录</h5>
-        <span class="text-muted small" th:if="${events.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
-    </div>
+<div class="card p-4 mb-3">
+    <h5 class="mb-2">📤 今日推送</h5>
+    <p class="text-muted small mb-3">推送今天 00:00 至当前时刻的客户删除员工汇总给指定接收人</p>
 
     <!-- 今日推送：把今天 00:00 至当前的客户删除员工汇总推送给指定接收人 -->
     <form class="row g-2 align-items-end mb-3" method="post" th:action="@{/deletion-records/push-today}">
         <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
-        <div class="col-auto">
-            <label class="form-label small text-muted mb-0">推送接收人（企微 userid，逗号分隔）</label>
-            <input type="text" class="form-control form-control-sm" name="recipients"
-                   placeholder="如 zhangsan,lisi" th:value="${todayRecipients}" style="min-width: 320px;">
+        <div class="col-12 col-lg-4">
+            <label class="form-label small text-muted mb-0">推送接收人（搜索姓名或 userid）</label>
+            <div class="position-relative" id="recipient-picker">
+                <div class="d-flex flex-wrap gap-1 mb-1" id="recipient-chips">
+                    <span class="badge bg-primary d-inline-flex align-items-center gap-1"
+                          th:each="entry : ${todayRecipientNames}" th:attr="data-userid=${entry.key}">
+                        <span th:text="${entry.value}"></span>
+                        <button type="button" class="btn-close btn-close-white" style="font-size:.5rem"
+                                aria-label="删除" onclick="removeRecipient(this.parentElement)"></button>
+                    </span>
+                </div>
+                <input type="text" class="form-control form-control-sm" id="recipient-search"
+                       placeholder="输入姓名或 userid 搜索" autocomplete="off">
+                <div class="list-group position-absolute w-100 shadow-sm" id="recipient-results"
+                     style="z-index:1050; display:none; max-height:240px; overflow-y:auto;"></div>
+            </div>
+            <input type="hidden" name="recipients" th:value="${todayRecipients}">
         </div>
         <div class="col-auto">
             <button type="submit" class="btn btn-warning btn-sm"
@@ -22,8 +33,119 @@
         </div>
     </form>
 
+    <script>
+    (function () {
+        var searchInput = document.getElementById('recipient-search');
+        var resultsBox = document.getElementById('recipient-results');
+        var chipsBox = document.getElementById('recipient-chips');
+        var hiddenInput = document.querySelector('input[name="recipients"]');
+        var picker = document.getElementById('recipient-picker');
+        var debounceTimer = null;
+
+        function currentUserids() {
+            var v = hiddenInput.value.trim();
+            if (!v) return [];
+            return v.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+        }
+        function setUserids(ids) {
+            hiddenInput.value = ids.join(',');
+        }
+        function hideResults() {
+            resultsBox.style.display = 'none';
+        }
+
+        function removeChip(chipEl) {
+            if (!chipEl) return;
+            var userid = chipEl.getAttribute('data-userid');
+            setUserids(currentUserids().filter(function (id) { return id !== userid; }));
+            chipEl.remove();
+        }
+        // 供服务端渲染 chip 的删除按钮 onclick 调用
+        window.removeRecipient = removeChip;
+
+        function addChip(userid, name) {
+            var ids = currentUserids();
+            if (ids.indexOf(userid) !== -1) return;
+            ids.push(userid);
+            setUserids(ids);
+
+            var span = document.createElement('span');
+            span.className = 'badge bg-primary d-inline-flex align-items-center gap-1';
+            span.setAttribute('data-userid', userid);
+
+            var nameNode = document.createElement('span');
+            nameNode.textContent = name;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn-close btn-close-white';
+            btn.style.fontSize = '.5rem';
+            btn.setAttribute('aria-label', '删除');
+            btn.addEventListener('click', function () { removeChip(span); });
+
+            span.appendChild(nameNode);
+            span.appendChild(btn);
+            chipsBox.appendChild(span);
+        }
+
+        searchInput.addEventListener('input', function () {
+            clearTimeout(debounceTimer);
+            var kw = searchInput.value.trim();
+            if (!kw) { hideResults(); return; }
+            debounceTimer = setTimeout(function () { fetchResults(kw); }, 300);
+        });
+
+        function fetchResults(kw) {
+            fetch('/api/employees/search?keyword=' + encodeURIComponent(kw))
+                .then(function (r) { return r.json(); })
+                .then(renderResults)
+                .catch(hideResults);
+        }
+
+        function renderResults(list) {
+            resultsBox.innerHTML = '';
+            if (!list || list.length === 0) { hideResults(); return; }
+            var selected = currentUserids();
+            list.forEach(function (item) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'list-group-item list-group-item-action py-1 px-2';
+                if (selected.indexOf(item.userid) !== -1) btn.classList.add('disabled');
+
+                var nameSpan = document.createElement('span');
+                nameSpan.textContent = item.name;
+                var uidSpan = document.createElement('span');
+                uidSpan.className = 'text-muted small ms-2';
+                uidSpan.textContent = item.userid;
+
+                btn.appendChild(nameSpan);
+                btn.appendChild(uidSpan);
+                btn.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    if (selected.indexOf(item.userid) !== -1) return;
+                    addChip(item.userid, item.name);
+                    searchInput.value = '';
+                    hideResults();
+                });
+                resultsBox.appendChild(btn);
+            });
+            resultsBox.style.display = 'block';
+        }
+
+        document.addEventListener('click', function (e) {
+            if (!picker.contains(e.target)) hideResults();
+        });
+    })();
+    </script>
+</div>
+
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5>🗑️ 删除记录</h5>
+        <span class="text-muted small" th:if="${events.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
+    </div>
+
     <!-- 时间范围 + 方向 + 关键字筛选 -->
-    <form class="row g-2 align-items-end mb-3" method="get" th:action="@{/deletion-records}">
+    <form id="filter-form" class="row g-2 align-items-end mb-3" method="get" th:action="@{/deletion-records}">
         <div class="col-auto">
             <div class="btn-group" role="group" aria-label="时间预设">
                 <input type="radio" class="btn-check" name="range" id="r-today" value="today"
@@ -72,11 +194,32 @@
             <button type="submit" class="btn btn-primary btn-sm">查询</button>
         </div>
         <div class="col-auto">
-            <button type="submit" class="btn btn-outline-success btn-sm"
-                    formaction="/deletion-records/export"
-                    title="导出当前筛选条件下的全部记录">导出 Excel</button>
+            <button type="button" class="btn btn-outline-success btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#exportModal"
+                    title="导出删除记录（可独立选择时间/方向/关键字）">导出 Excel</button>
         </div>
     </form>
+
+    <!-- 按单位汇总 -->
+    <div class="mb-3" th:if="${!deptSummary.isEmpty()}">
+        <h6 class="mb-2">🏢 按单位汇总</h6>
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0" style="max-width: 480px;">
+                <thead class="table-light">
+                    <tr>
+                        <th>单位</th>
+                        <th class="text-end">被删人数</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="entry : ${deptSummary}">
+                        <td th:text="${entry.key}"></td>
+                        <td class="text-end"><span class="badge bg-danger" th:text="${entry.value}"></span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     <!-- 记录表 -->
     <div class="table-responsive">
@@ -87,6 +230,7 @@
                     <th>方向</th>
                     <th>客户</th>
                     <th>员工</th>
+                    <th>单位</th>
                     <th>来源</th>
                 </tr>
             </thead>
@@ -100,14 +244,113 @@
                     </td>
                     <td th:text="${customerNameMap.get(e.externalUserid)}"></td>
                     <td><code th:text="${employeeNameMap.get(e.userid)}"></code></td>
-                    <td th:text="${e.source != null ? e.source : '—'}"></td>
+                    <td th:text="${employeeDeptMap.get(e.userid) ?: '—'}"></td>
+                    <td th:text="${sourceMap.get(e.externalUserid) ?: '—'}"></td>
                 </tr>
                 <tr th:if="${#lists.isEmpty(events)}">
-                    <td colspan="5" class="text-center text-muted py-4">该时间段内暂无删除记录</td>
+                    <td colspan="6" class="text-center text-muted py-4">该时间段内暂无删除记录</td>
                 </tr>
             </tbody>
         </table>
     </div>
 </div>
+
+<!-- 导出 Excel 弹窗：独立选择时间范围 / 方向 / 关键字 -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="exportModalLabel">导出删除记录</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-1">时间范围</label>
+                    <div class="btn-group w-100" role="group" aria-label="导出时间预设">
+                        <input type="radio" class="btn-check" name="exportRange" id="er-today" value="today" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="er-today">今天</label>
+                        <input type="radio" class="btn-check" name="exportRange" id="er-yesterday" value="yesterday" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="er-yesterday">昨日</label>
+                        <input type="radio" class="btn-check" name="exportRange" id="er-7d" value="7d" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="er-7d">近7天</label>
+                        <input type="radio" class="btn-check" name="exportRange" id="er-30d" value="30d" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="er-30d">近30天</label>
+                        <input type="radio" class="btn-check" name="exportRange" id="er-custom" value="custom" autocomplete="off">
+                        <label class="btn btn-outline-primary" for="er-custom">自定义</label>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-6">
+                        <label class="form-label small text-muted mb-0">起</label>
+                        <input type="date" class="form-control form-control-sm" id="export-start">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small text-muted mb-0">止</label>
+                        <input type="date" class="form-control form-control-sm" id="export-end">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small text-muted mb-0">方向</label>
+                    <select id="export-direction" class="form-select form-select-sm">
+                        <option value="">全部方向</option>
+                        <option value="CUSTOMER_DELETED_AGENT">客户删除员工</option>
+                        <option value="AGENT_DELETED_CUSTOMER">员工删除客户</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label small text-muted mb-0">关键字</label>
+                    <input type="text" class="form-control form-control-sm" id="export-keyword"
+                           placeholder="客户 / 员工 / 来源">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-success btn-sm" onclick="doExportDeletion()">导出 Excel</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function () {
+        var exportModal = document.getElementById('exportModal');
+        var filterForm = document.getElementById('filter-form');
+
+        function checkedRange(root, name) {
+            var el = root.querySelector('input[name="' + name + '"]:checked');
+            return el ? el.value : '';
+        }
+
+        // 打开弹窗时，用列表页当前筛选条件初始化弹窗（读取实时 DOM，继承未提交的编辑）
+        exportModal.addEventListener('show.bs.modal', function () {
+            var range = checkedRange(filterForm, 'range');
+            var radio = exportModal.querySelector('input[name="exportRange"][value="' + range + '"]');
+            if (radio) radio.checked = true;
+            document.getElementById('export-start').value =
+                filterForm.querySelector('input[name="start"]').value;
+            document.getElementById('export-end').value =
+                filterForm.querySelector('input[name="end"]').value;
+            document.getElementById('export-direction').value =
+                filterForm.querySelector('select[name="direction"]').value;
+            document.getElementById('export-keyword').value =
+                filterForm.querySelector('input[name="keyword"]').value;
+        });
+
+        window.doExportDeletion = function () {
+            var range = checkedRange(exportModal, 'exportRange');
+            var params = new URLSearchParams();
+            if (range) params.set('range', range);
+            var start = document.getElementById('export-start').value;
+            var end = document.getElementById('export-end').value;
+            var direction = document.getElementById('export-direction').value;
+            var keyword = document.getElementById('export-keyword').value.trim();
+            if (start) params.set('start', start);
+            if (end) params.set('end', end);
+            if (direction) params.set('direction', direction);
+            if (keyword) params.set('keyword', keyword);
+            window.location.href = '/deletion-records/export?' + params.toString();
+        };
+    })();
+</script>
 </main>
 </html>

@@ -27,7 +27,8 @@ public class CacheConfig {
         manager.setCaches(Arrays.asList(
                 buildCache("cities", 5),
                 buildCache("districts", 5),
-                buildCache("dashboard-stats", 1)
+                buildCache("dashboard-stats", 1),
+                buildCache("departments", 30)
         ));
         return manager;
     }

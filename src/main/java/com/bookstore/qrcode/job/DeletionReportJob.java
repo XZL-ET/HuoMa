@@ -18,8 +18,8 @@ import java.util.concurrent.ScheduledFuture;
  * 客户删除员工每日日报定时任务。
  * <p>
  * 推送时间可在「系统配置」页动态设置（HH:mm），保存后即时生效，无需重启。
- * 任务本体通过 {@link DeletionReportService#reportWithLock} 执行，与手动推送共用同一把分布式锁，
- * 避免重复推送。统计时区以 {@link DeletionReportService#REPORT_ZONE} 为准。</p>
+ * 任务本体通过 {@link DeletionReportService#reportScheduledDaily} 执行，与手动推送共用同一把分布式锁，
+ * 并按日期幂等避免双机部署下重复推送。统计时区以 {@link DeletionReportService#REPORT_ZONE} 为准。</p>
  *
  * @author Bookstore Dev
  * @since 2.x
@@ -73,7 +73,7 @@ public class DeletionReportJob {
 
     public void runDailyDeletionReport() {
         try {
-            deletionReportService.reportWithLock(
+            deletionReportService.reportScheduledDaily(
                     LocalDate.now(DeletionReportService.REPORT_ZONE).minusDays(1));
         } catch (Exception e) {
             log.error("客户删除员工日报定时任务异常", e);

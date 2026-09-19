@@ -1,11 +1,17 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.CustomerDeletionEvent;
+import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerDeletionEventRepository;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.DeletionReportService;
+import com.bookstore.qrcode.service.DepartmentService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,11 +37,14 @@ import java.net.URLEncoder;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 删除记录列表页 —— 跨方向查看「客户删除员工」与「员工删除客户」的历史记录。
@@ -57,7 +66,10 @@ public class DeletionRecordController {
     private final CustomerRepository customerRepo;
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
+    private final QrCodeRepository qrCodeRepo;
     private final DeletionReportService deletionReportService;
+    private final DepartmentService departmentService;
+    private final ObjectMapper objectMapper;
 
     @GetMapping
     public String list(@RequestParam(defaultValue = "7d") String range,
@@ -71,13 +83,18 @@ public class DeletionRecordController {
         model.addAttribute("events", r.events());
         model.addAttribute("customerNameMap", r.customerNameMap());
         model.addAttribute("employeeNameMap", r.employeeNameMap());
+        model.addAttribute("employeeDeptMap", r.employeeDeptMap());
+        model.addAttribute("deptSummary", r.deptSummary());
+        model.addAttribute("sourceMap", r.sourceMap());
         model.addAttribute("range", range);
         model.addAttribute("start", r.window().start().toLocalDate().toString());
         model.addAttribute("end", r.window().end().toLocalDate().toString());
         model.addAttribute("direction", direction == null ? "" : direction);
         model.addAttribute("keyword", keyword == null ? "" : keyword);
         model.addAttribute("maxRows", MAX_ROWS);
-        model.addAttribute("todayRecipients", deletionReportService.getTodayRecipients());
+        String todayRecipients = deletionReportService.getTodayRecipients();
+        model.addAttribute("todayRecipients", todayRecipients);
+        model.addAttribute("todayRecipientNames", buildTodayRecipientNameMap(todayRecipients));
         return "deletion-records";
     }
 
@@ -88,11 +105,15 @@ public class DeletionRecordController {
     @PostMapping("/push-today")
     public String pushToday(@RequestParam String recipients, RedirectAttributes ra) {
         deletionReportService.saveTodayRecipients(recipients);
-        int sent = deletionReportService.reportTodayWithLock(recipients);
-        if (sent == DeletionReportService.LOCK_BUSY) {
+        DeletionReportService.TodayPushResult result = deletionReportService.reportTodayWithLock(recipients);
+        if (result.busy()) {
             ra.addFlashAttribute("message", "推送正在进行中，请稍后重试");
-        } else if (sent > 0) {
-            ra.addFlashAttribute("message", "已推送今日汇总给 " + sent + " 位接收人");
+        } else if (!result.failed().isEmpty()) {
+            ra.addFlashAttribute("message", "已推送今日汇总给 " + result.sent() + " 位接收人；"
+                    + "以下账号推送失败：" + String.join("、", result.failed())
+                    + "（可能不在日报应用可见范围内）");
+        } else if (result.sent() > 0) {
+            ra.addFlashAttribute("message", "已推送今日汇总给 " + result.sent() + " 位接收人");
         } else {
             ra.addFlashAttribute("message", "未推送：今日暂无删除事件，或接收人为空");
         }
@@ -119,6 +140,8 @@ public class DeletionRecordController {
         List<CustomerDeletionEvent> events = r.events();
         Map<String, String> customerNameMap = r.customerNameMap();
         Map<String, String> employeeNameMap = r.employeeNameMap();
+        Map<String, String> employeeDeptMap = r.employeeDeptMap();
+        Map<String, String> sourceMap = r.sourceMap();
 
         String filename = "删除记录_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".xlsx";
         String encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20");
@@ -137,7 +160,7 @@ public class DeletionRecordController {
             headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             headerStyle.setAlignment(HorizontalAlignment.CENTER);
 
-            String[] headers = {"删除时间", "方向", "客户", "员工", "来源"};
+            String[] headers = {"删除时间", "方向", "客户", "员工", "单位", "来源"};
             Row header = sheet.createRow(0);
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = header.createCell(i);
@@ -157,7 +180,8 @@ public class DeletionRecordController {
                         customerNameMap.getOrDefault(e.getExternalUserid(), e.getExternalUserid()));
                 row.createCell(3).setCellValue(
                         employeeNameMap.getOrDefault(e.getUserid(), e.getUserid()));
-                row.createCell(4).setCellValue(e.getSource() != null ? e.getSource() : "");
+                row.createCell(4).setCellValue(employeeDeptMap.getOrDefault(e.getUserid(), ""));
+                row.createCell(5).setCellValue(sourceMap.getOrDefault(e.getExternalUserid(), ""));
             }
 
             sheet.createFreezePane(0, 1);
@@ -190,43 +214,122 @@ public class DeletionRecordController {
                 : deletionRepo.findByDeletedAtBetweenOrderByDeletedAtDesc(
                         window.start(), window.end());
 
-        Map<String, String> customerNameMap = buildCustomerNameMap(events);
-        Map<String, String> employeeNameMap = buildEmployeeNameMap(events);
+        CustomerMaps customerMaps = buildCustomerMaps(events);
+        EmployeeMaps employeeMaps = buildEmployeeMaps(events);
         events = filterByDirection(events, direction);
-        events = filterByKeyword(events, keyword, customerNameMap, employeeNameMap);
-        return new LoadResult(events, customerNameMap, employeeNameMap, window);
+        events = filterByKeyword(events, keyword, customerMaps.customerNameMap(), employeeMaps.employeeNameMap(), customerMaps.sourceMap());
+        Map<String, Long> deptSummary = buildDeptSummary(events, employeeMaps.employeeDeptMap());
+        return new LoadResult(events, customerMaps.customerNameMap(), employeeMaps.employeeNameMap(),
+                employeeMaps.employeeDeptMap(), deptSummary, customerMaps.sourceMap(), window);
     }
 
-    /** 客户名映射（external_userid → 微信名，非「未知」时才显示名，否则回退 ID）。 */
-    private Map<String, String> buildCustomerNameMap(List<CustomerDeletionEvent> events) {
+    /** 今日推送接收人 userid → 姓名映射，供前端 chips 回显；查不到时回退 userid。 */
+    private Map<String, String> buildTodayRecipientNameMap(String recipients) {
+        if (recipients == null || recipients.isBlank()) return Map.of();
+        List<String> userids = Arrays.stream(recipients.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).toList();
+        if (userids.isEmpty()) return Map.of();
+        Map<String, String> map = new LinkedHashMap<>();
+        employeeRepo.findByUseridIn(userids).forEach(e -> map.put(e.getUserid(), e.getName()));
+        userids.forEach(uid -> map.putIfAbsent(uid, uid));
+        return map;
+    }
+
+    /** 客户维度映射：一次查询 customer 表，同时产出客户名映射与来源（学校）映射。 */
+    private CustomerMaps buildCustomerMaps(List<CustomerDeletionEvent> events) {
         Set<String> externalUserids = new HashSet<>();
         for (CustomerDeletionEvent e : events) externalUserids.add(e.getExternalUserid());
-        Map<String, String> map = new HashMap<>();
-        if (!externalUserids.isEmpty()) {
-            customerRepo.findByExternalUseridIn(externalUserids).forEach(c -> {
-                String name = c.getName();
-                if (name != null && !name.isBlank() && !"未知".equals(name)) {
-                    map.put(c.getExternalUserid(), name);
-                }
-            });
-            externalUserids.forEach(euid -> map.putIfAbsent(euid, euid));
+
+        Map<String, String> customerNameMap = new HashMap<>();
+        Map<String, String> sourceMap = new HashMap<>();
+        if (externalUserids.isEmpty()) return new CustomerMaps(customerNameMap, sourceMap);
+
+        List<Customer> customers = customerRepo.findByExternalUseridIn(externalUserids);
+
+        // 客户名：非「未知」时显示微信名，否则回退 ID
+        for (Customer c : customers) {
+            String name = c.getName();
+            if (name != null && !name.isBlank() && !"未知".equals(name)) {
+                customerNameMap.put(c.getExternalUserid(), name);
+            }
         }
-        return map;
+        externalUserids.forEach(euid -> customerNameMap.putIfAbsent(euid, euid));
+
+        // 来源：external_userid → sourceQrId → QrCode.schoolName
+        Map<String, Long> extToQrId = new HashMap<>();
+        for (Customer c : customers) {
+            if (c.getSourceQrId() != null) extToQrId.put(c.getExternalUserid(), c.getSourceQrId());
+        }
+        if (!extToQrId.isEmpty()) {
+            Map<Long, String> qrIdToSchool = new HashMap<>();
+            qrCodeRepo.findAllById(extToQrId.values()).forEach(q -> qrIdToSchool.put(q.getId(), q.getSchoolName()));
+            extToQrId.forEach((euid, qrId) -> {
+                String school = qrIdToSchool.get(qrId);
+                if (school != null) sourceMap.put(euid, school);
+            });
+        }
+        return new CustomerMaps(customerNameMap, sourceMap);
     }
 
-    /** 员工名映射（userid → 姓名），通讯录优先，回退 Agent 主数据，再回退 userid。 */
-    private Map<String, String> buildEmployeeNameMap(List<CustomerDeletionEvent> events) {
+    /** 员工维度映射：一次查询 employee 表，同时产出员工名映射与单位（部门）映射。 */
+    private EmployeeMaps buildEmployeeMaps(List<CustomerDeletionEvent> events) {
         Set<String> userids = new HashSet<>();
         for (CustomerDeletionEvent e : events) userids.add(e.getUserid());
-        Map<String, String> map = new HashMap<>();
-        if (!userids.isEmpty()) {
-            employeeRepo.findByUseridIn(userids).forEach(em ->
-                    map.put(em.getUserid(), em.getName()));
-            agentRepo.findAllById(userids).forEach(a ->
-                    map.putIfAbsent(a.getUserid(), a.getName()));
-            userids.forEach(uid -> map.putIfAbsent(uid, uid));
+
+        Map<String, String> employeeNameMap = new HashMap<>();
+        Map<String, String> employeeDeptMap = new HashMap<>();
+        if (userids.isEmpty()) return new EmployeeMaps(employeeNameMap, employeeDeptMap);
+
+        List<Employee> employees = employeeRepo.findByUseridIn(userids);
+
+        // 员工名：通讯录优先，回退 Agent 主数据，再回退 userid
+        for (Employee em : employees) employeeNameMap.put(em.getUserid(), em.getName());
+        agentRepo.findAllById(userids).forEach(a -> employeeNameMap.putIfAbsent(a.getUserid(), a.getName()));
+        userids.forEach(uid -> employeeNameMap.putIfAbsent(uid, uid));
+
+        // 单位：userid → 主部门 ID → 部门名称
+        Map<String, Long> useridToDeptId = new HashMap<>();
+        for (Employee em : employees) {
+            Long deptId = extractPrimaryDeptId(em.getDepartment());
+            if (deptId != null) useridToDeptId.put(em.getUserid(), deptId);
         }
-        return map;
+        if (!useridToDeptId.isEmpty()) {
+            Map<Long, String> deptIdToName = departmentService.loadDeptIdNameMap();
+            useridToDeptId.forEach((uid, deptId) -> {
+                String name = deptIdToName.get(deptId);
+                if (name != null) employeeDeptMap.put(uid, name);
+            });
+        }
+        return new EmployeeMaps(employeeNameMap, employeeDeptMap);
+    }
+
+    /** 按单位汇总删除人数（deptName → count），降序。 */
+    private Map<String, Long> buildDeptSummary(List<CustomerDeletionEvent> events,
+                                               Map<String, String> employeeDeptMap) {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (CustomerDeletionEvent e : events) {
+            String dept = employeeDeptMap.get(e.getUserid());
+            if (dept == null || dept.isBlank()) continue;
+            counts.merge(dept, 1L, Long::sum);
+        }
+        return counts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                        (a, b) -> a, LinkedHashMap::new));
+    }
+
+    /** 从 Employee.department JSON 数组字符串中提取主部门 ID（取第一个元素）。 */
+    private Long extractPrimaryDeptId(String departmentJson) {
+        if (departmentJson == null || departmentJson.isBlank()) return null;
+        try {
+            JsonNode arr = objectMapper.readTree(departmentJson);
+            if (arr.isArray() && arr.size() > 0) {
+                return arr.get(0).asLong();
+            }
+        } catch (Exception e) {
+            log.warn("解析部门 JSON 失败: {}", departmentJson, e);
+        }
+        return null;
     }
 
     private List<CustomerDeletionEvent> filterByDirection(List<CustomerDeletionEvent> events, String direction) {
@@ -246,7 +349,8 @@ public class DeletionRecordController {
 
     private List<CustomerDeletionEvent> filterByKeyword(List<CustomerDeletionEvent> events, String keyword,
                                                         Map<String, String> customerNameMap,
-                                                        Map<String, String> employeeNameMap) {
+                                                        Map<String, String> employeeNameMap,
+                                                        Map<String, String> sourceMap) {
         if (keyword == null || keyword.isBlank()) {
             return events;
         }
@@ -256,7 +360,7 @@ public class DeletionRecordController {
                         || contains(e.getExternalUserid(), kw)
                         || contains(employeeNameMap.get(e.getUserid()), kw)
                         || contains(e.getUserid(), kw)
-                        || contains(e.getSource(), kw)
+                        || contains(sourceMap.get(e.getExternalUserid()), kw)
         ).toList();
     }
 
@@ -304,5 +408,14 @@ public class DeletionRecordController {
     private record LoadResult(List<CustomerDeletionEvent> events,
                               Map<String, String> customerNameMap,
                               Map<String, String> employeeNameMap,
+                              Map<String, String> employeeDeptMap,
+                              Map<String, Long> deptSummary,
+                              Map<String, String> sourceMap,
                               Window window) {}
+
+    private record CustomerMaps(Map<String, String> customerNameMap,
+                                Map<String, String> sourceMap) {}
+
+    private record EmployeeMaps(Map<String, String> employeeNameMap,
+                                Map<String, String> employeeDeptMap) {}
 }

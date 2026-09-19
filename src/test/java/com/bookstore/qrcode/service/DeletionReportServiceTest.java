@@ -232,6 +232,54 @@ class DeletionReportServiceTest {
     }
 
     @Test
+    @DisplayName("reportScheduledDaily — 同日期已推送过时跳过，不重复推送")
+    void scheduledDailySkipsWhenAlreadySent() {
+        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(true);
+        when(redisTemplate.hasKey("deletion-report:daily:sent:2026-09-13"))
+                .thenReturn(true);
+
+        int result = reportService.reportScheduledDaily(date);
+
+        assertThat(result).isEqualTo(0);
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
+        verify(deletionRepo, never()).findByDirectionAndDeletedAtBetween(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("reportScheduledDaily — 首次推送成功后写入按日期幂等标记")
+    void scheduledDailyMarksSentAfterPush() {
+        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(true);
+        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(eventsFor("agent1", 6));
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+
+        int result = reportService.reportScheduledDaily(date);
+
+        assertThat(result).isEqualTo(2);
+        verify(valueOps).set(eq("deletion-report:daily:sent:2026-09-13"), eq("1"),
+                eq(Duration.ofHours(25)));
+    }
+
+    @Test
+    @DisplayName("reportScheduledDaily — 无删除事件时不写幂等标记")
+    void scheduledDailyDoesNotMarkWhenNoEvents() {
+        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(true);
+        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(List.of());
+
+        int result = reportService.reportScheduledDaily(date);
+
+        assertThat(result).isEqualTo(0);
+        verify(valueOps, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
     @DisplayName("report — 推送给某接收人失败时创建告警")
     void reportCreatesAlertOnPushFailure() {
         when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
@@ -248,7 +296,7 @@ class DeletionReportServiceTest {
         int sent = reportService.report(date);
 
         assertThat(sent).isEqualTo(1);
-        verify(alertService).createAlert(eq("admin2"), eq("deletion_report_fail"),
+        verify(alertService).createAlert(isNull(), eq("deletion_report_fail"),
                 any(), any(), any(), isNull());
     }
 
@@ -318,9 +366,10 @@ class DeletionReportServiceTest {
         when(employeeRepo.findByUserid("agent1"))
                 .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
 
-        int sent = reportService.reportTodayUntilNow("boss1, boss2");
+        DeletionReportService.TodayPushResult result = reportService.reportTodayUntilNow("boss1, boss2");
 
-        assertThat(sent).isEqualTo(2);
+        assertThat(result.sent()).isEqualTo(2);
+        assertThat(result.failed()).isEmpty();
         verify(deletionRepo).findByDirectionAndDeletedAtBetween(
                 eq(CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT), any(), any());
         verify(wecomApi).sendReportMessage(eq("boss1"),
@@ -334,22 +383,68 @@ class DeletionReportServiceTest {
     @Test
     @DisplayName("reportTodayUntilNow — 接收人为空时不推送")
     void reportTodayUntilNowSkipsWhenNoRecipients() {
-        int sent = reportService.reportTodayUntilNow("  , , ");
+        DeletionReportService.TodayPushResult result = reportService.reportTodayUntilNow("  , , ");
 
-        assertThat(sent).isEqualTo(0);
+        assertThat(result.sent()).isEqualTo(0);
+        assertThat(result.failed()).isEmpty();
         verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("reportTodayWithLock — 锁被占用时返回 LOCK_BUSY")
+    @DisplayName("reportTodayWithLock — 锁被占用时返回 busy 结果")
     void reportTodayWithLockReturnsBusyWhenLocked() {
         when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
                 .thenReturn(false);
 
-        int result = reportService.reportTodayWithLock("boss1");
+        DeletionReportService.TodayPushResult result = reportService.reportTodayWithLock("boss1");
 
-        assertThat(result).isEqualTo(DeletionReportService.LOCK_BUSY);
+        assertThat(result.busy()).isTrue();
         verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("reportTodayUntilNow — 某接收人推送失败时返回失败账号列表")
+    void reportTodayUntilNowReturnsFailedRecipients() {
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(eventsFor("agent1", 6));
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+        doAnswer(invocation -> {
+            if ("boss2".equals(invocation.getArgument(0))) {
+                throw new RuntimeException("81013 user invalid");
+            }
+            return null;
+        }).when(wecomApi).sendReportMessage(anyString(), anyString());
+
+        DeletionReportService.TodayPushResult result = reportService.reportTodayUntilNow("boss1, boss2");
+
+        assertThat(result.sent()).isEqualTo(1);
+        assertThat(result.failed()).containsExactly("boss2");
+    }
+
+    @Test
+    @DisplayName("reportTodayWithLock — 锁空闲时部分失败返回失败账号列表")
+    void reportTodayWithLockReturnsFailedRecipients() {
+        when(valueOps.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(true);
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
+                .thenReturn(1L);
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(eventsFor("agent1", 6));
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+        doAnswer(invocation -> {
+            if ("boss2".equals(invocation.getArgument(0))) {
+                throw new RuntimeException("81013 user invalid");
+            }
+            return null;
+        }).when(wecomApi).sendReportMessage(anyString(), anyString());
+
+        DeletionReportService.TodayPushResult result = reportService.reportTodayWithLock("boss1, boss2");
+
+        assertThat(result.busy()).isFalse();
+        assertThat(result.sent()).isEqualTo(1);
+        assertThat(result.failed()).containsExactly("boss2");
     }
 
     @Test
