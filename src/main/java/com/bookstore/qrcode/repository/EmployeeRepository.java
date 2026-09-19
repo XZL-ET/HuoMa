@@ -35,6 +35,12 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     /** 按姓名模糊搜索 */
     List<Employee> findByNameContaining(String keyword);
 
+    /** 在职员工按姓名模糊搜索，按姓名排序 */
+    List<Employee> findByActiveTrueAndNameContainingOrderByName(String keyword);
+
+    /** 在职员工按 userid 模糊搜索，按姓名排序 */
+    List<Employee> findByActiveTrueAndUseridContainingOrderByName(String keyword);
+
     /**
      * 将指定 userid 之外的员工标记为离职。
      * 用在全量同步后批量清理已不在企微通讯录中的员工记录。
