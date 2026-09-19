@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.config.LoginSuccessHandler;
 import com.bookstore.qrcode.config.SecurityConfig;
 import com.bookstore.qrcode.entity.SystemConfig;
 import com.bookstore.qrcode.job.DeletionReportJob;
@@ -50,6 +51,7 @@ class AdminSystemConfigControllerWebTest {
     @MockBean private DeletionReportJob deletionReportJob;
     @MockBean private EmployeeRepository employeeRepo;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
+    @MockBean private LoginSuccessHandler loginSuccessHandler;
 
     @Test
     @WithMockUser(roles = "ADMIN")

@@ -7,6 +7,7 @@ import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.config.LoginSuccessHandler;
 import com.bookstore.qrcode.config.SecurityConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,7 @@ class TransferRecordControllerWebTest {
     @MockBean private EmployeeRepository employeeRepo;
     @MockBean private AgentRepository agentRepo;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
+    @MockBean private LoginSuccessHandler loginSuccessHandler;
 
     @Test
     @WithMockUser(roles = "ADMIN")
