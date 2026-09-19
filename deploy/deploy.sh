@@ -173,6 +173,12 @@ if [ -n "${ECS2_IP}" ]; then
     cat /etc/systemd/system/huoma.env    | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > /etc/systemd/system/huoma.env"
     cat /etc/nginx/conf.d/huoma.conf     | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > /etc/nginx/conf.d/huoma.conf"
 
+    # 同步上传目录（卡片图 / 封面图）到 ECS-2
+    mkdir -p /opt/HuoMa/data/uploads
+    tar -C /opt/HuoMa/data -cf - uploads \
+        | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} \
+            "mkdir -p /opt/HuoMa/data && tar -C /opt/HuoMa/data -xf - && chown -R huoma:huoma /opt/HuoMa/data/uploads"
+
     ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "
         chown huoma:huoma ${APP_DIR}/app.jar
         systemctl daemon-reload
