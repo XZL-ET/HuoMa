@@ -1457,6 +1457,8 @@ public class QrCodeController {
                            RedirectAttributes redirect) {
         try {
             qrCodeService.addAgent(id, agentUserid);
+            operationLogService.log(getOperator(), "add", "agent", agentUserid,
+                    "添加联系人 " + agentUserid + " 到活码 " + id);
             redirect.addFlashAttribute("message", "联系人已添加: " + agentUserid);
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -1492,6 +1494,8 @@ public class QrCodeController {
                               RedirectAttributes redirect) {
         try {
             qrCodeService.updateAgent(id, agentId, dailyMax, role, sortOrder);
+            operationLogService.log(getOperator(), "update", "agent", String.valueOf(agentId),
+                    "更新联系人 " + agentId + "（dailyMax=" + dailyMax + ", role=" + role + ", sortOrder=" + sortOrder + "）");
             redirect.addFlashAttribute("message", "联系人已更新");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -1521,6 +1525,8 @@ public class QrCodeController {
                               RedirectAttributes redirect) {
         try {
             qrCodeService.removeAgent(id, agentId);
+            operationLogService.log(getOperator(), "remove", "agent", String.valueOf(agentId),
+                    "移除联系人 " + agentId + " 从活码 " + id);
             redirect.addFlashAttribute("message", "联系人已移除");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -1906,7 +1912,10 @@ public class QrCodeController {
     public Map<String, Object> batchRecycleAgents(
             @PathVariable Long id,
             @RequestBody BatchRecycleRequest request) {
-        return qrCodeService.batchRecycleAgents(id, request.getAgentIds());
+        Map<String, Object> result = qrCodeService.batchRecycleAgents(id, request.getAgentIds());
+        operationLogService.log(getOperator(), "batch_recycle", "qrcode",
+                String.valueOf(id), "批量回收接待员 " + request.getAgentIds() + "（活码 " + id + "）");
+        return result;
     }
 
     /**
@@ -2418,6 +2427,9 @@ public class QrCodeController {
             int removed = (int) result.get("removed");
             int replaced = (int) result.get("replaced");
             int shortfall = (int) result.get("shortfall");
+            operationLogService.log(getOperator(), "replace_anomaly", "qrcode",
+                    String.valueOf(id), "替换异常员工（活码 " + id + "）：移除 " + removed
+                            + " 补入 " + replaced + " 缺口 " + shortfall);
             if (removed == 0) {
                 redirect.addFlashAttribute("message", "✅ 未发现异常员工，无需替换");
             } else if (shortfall == 0) {
@@ -2483,6 +2495,9 @@ public class QrCodeController {
                 log.error("批量替换异常员工失败: qrCodeId={}", qr.getId(), e);
             }
         }
+        operationLogService.log(getOperator(), "replace_anomaly_all", "qrcode",
+                "all", "批量替换全部活码异常员工：移除 " + totalRemoved
+                        + " 补入 " + totalReplaced + " 缺口 " + totalShortfall);
         if (totalRemoved == 0) {
             redirect.addFlashAttribute("message", "✅ 未发现异常员工");
         } else if (totalShortfall == 0) {

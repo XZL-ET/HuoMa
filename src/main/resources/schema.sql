@@ -631,6 +631,14 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- operation_log: 按操作人+时间（审计追溯"谁做的"）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_log' AND INDEX_NAME = 'idx_operation_log_operator_created') = 0,
+    'CREATE INDEX idx_operation_log_operator_created ON operation_log (operator, created_at)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- customer_transfer: 按状态+重试次数（继承监控）
 SET @stmt = (SELECT IF(
     (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS

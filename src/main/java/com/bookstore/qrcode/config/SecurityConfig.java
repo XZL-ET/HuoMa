@@ -27,6 +27,9 @@ public class SecurityConfig {
     @Qualifier("rateLimitRedisTemplate")
     private StringRedisTemplate rateLimitRedisTemplate;
 
+    @Autowired
+    private LoginSuccessHandler loginSuccessHandler;
+
     @Value("${app.school-rate-limit.max-per-minute:30}")
     private int schoolRateLimitMaxPerMinute;
 
@@ -95,8 +98,8 @@ public class SecurityConfig {
                 )
                 .formLogin(form -> form
                         .loginPage("/login")
-                        .defaultSuccessUrl("/", true)
                         .failureUrl("/login?error")
+                        .successHandler(loginSuccessHandler)
                         .permitAll()
                 )
                 .logout(logout -> logout
