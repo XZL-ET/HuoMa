@@ -74,6 +74,9 @@ public class InheritanceJob {
     /** 上次缺服务老师告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
     private static volatile long lastNoServiceAlertTime = 0L;
 
+    /** 上次「服务老师不唯一」告警时间戳 — 限流：每小时最多告警一次。 */
+    private static volatile long lastAmbiguousServiceAlertTime = 0L;
+
     /** Redis key: 自动在职继承开关，值 "true"=开启 "false"=暂停，key 不存在视为开启 */
     public static final String AUTO_ENABLED_KEY = "inheritance:auto:enabled";
 
@@ -213,8 +216,10 @@ public class InheritanceJob {
         int totalTransfers = 0;
         int skippedNoReceptionist = 0;
         int skippedNoService = 0;
+        int skippedAmbiguousService = 0;
         List<String> noServiceSchools = new ArrayList<>();
         List<String> noReceptionistSchools = new ArrayList<>();
+        List<String> ambiguousServiceSchools = new ArrayList<>();
 
         // ---- 增量扫描优化：只处理有新客户添加的学校，减少无效 DB 查询 ----
         // 仅用于白天/启动补偿等有后续兜底窗口的批次；夜间批次禁用（全量扫描）。
@@ -250,16 +255,31 @@ public class InheritanceJob {
                               || a.getRole() == QrAgent.AgentRole.dual)
                     .toList();
 
-                // 查找服务老师（优先 service，其次 dual）
-                // 必须显式排序：findFirst() 取决于迭代顺序（非确定性），
-                // 当自动提拔的 dual 排在 service 之前时会导致转移目标错误
-                QrAgent serviceTeacher = agents.stream()
+                // 查找服务老师（优先 service，其次 dual）。
+                // 同一角色内存在多个时转移目标不唯一，findFirst() 依赖迭代顺序（非确定性），
+                // 与手动触发 transferTrigger 一致：宁可跳过也不赌，避免转错人。
+                List<QrAgent> serviceTeachers = agents.stream()
                     .filter(a -> a.getRole() == QrAgent.AgentRole.service)
-                    .findFirst()
-                    .orElseGet(() -> agents.stream()
-                        .filter(a -> a.getRole() == QrAgent.AgentRole.dual)
-                        .findFirst()
-                        .orElse(null));
+                    .toList();
+                List<QrAgent> dualTeachers = agents.stream()
+                    .filter(a -> a.getRole() == QrAgent.AgentRole.dual)
+                    .toList();
+                QrAgent serviceTeacher;
+                if (serviceTeachers.size() == 1) {
+                    serviceTeacher = serviceTeachers.get(0);
+                } else if (serviceTeachers.size() > 1) {
+                    skippedAmbiguousService++;
+                    ambiguousServiceSchools.add(qr.getSchoolName());
+                    continue;
+                } else if (dualTeachers.size() == 1) {
+                    serviceTeacher = dualTeachers.get(0);
+                } else if (dualTeachers.size() > 1) {
+                    skippedAmbiguousService++;
+                    ambiguousServiceSchools.add(qr.getSchoolName());
+                    continue;
+                } else {
+                    serviceTeacher = null;
+                }
 
                 if (receptionists.isEmpty()) {
                     skippedNoReceptionist++;
@@ -332,9 +352,27 @@ public class InheritanceJob {
             }
         }
 
-        if (totalTransfers > 0 || skippedNoReceptionist > 0 || skippedNoService > 0) {
-            log.info("在职继承（{}）: 共发起 {} 条转移, 无接待员跳过 {} 条, 无服务老师跳过 {} 条, 窗口=[{}, {}]",
-                windowLabel, totalTransfers, skippedNoReceptionist, skippedNoService,
+        // 服务老师不唯一时发送告警（每小时限流一次）：这类活码无法确定唯一转移目标，需人工修正配置
+        if (!ambiguousServiceSchools.isEmpty()) {
+            long now = System.currentTimeMillis();
+            if (now - lastAmbiguousServiceAlertTime > 3600_000L) {
+                lastAmbiguousServiceAlertTime = now;
+                alertService.createAlert(null, "inheritance_ambiguous_service",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("在职继承：%d 个活码配置了多个服务老师，转移目标不唯一，已跳过。请人工修正。学校: %s",
+                        ambiguousServiceSchools.size(),
+                        String.join("、", ambiguousServiceSchools.subList(0,
+                            Math.min(ambiguousServiceSchools.size(), 10)))),
+                    AgentAlert.AutoAction.none, null);
+            } else {
+                log.warn("在职继承服务老师不唯一（告警限流）: {} 个活码, 学校: {}",
+                    ambiguousServiceSchools.size(), String.join("、", ambiguousServiceSchools));
+            }
+        }
+
+        if (totalTransfers > 0 || skippedNoReceptionist > 0 || skippedNoService > 0 || skippedAmbiguousService > 0) {
+            log.info("在职继承（{}）: 共发起 {} 条转移, 无接待员跳过 {} 条, 无服务老师跳过 {} 条, 服务老师不唯一跳过 {} 条, 窗口=[{}, {}]",
+                windowLabel, totalTransfers, skippedNoReceptionist, skippedNoService, skippedAmbiguousService,
                 windowStart, windowEnd);
         }
     }

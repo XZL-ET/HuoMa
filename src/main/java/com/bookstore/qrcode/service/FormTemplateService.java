@@ -226,8 +226,8 @@ public class FormTemplateService {
             && qr.getSchoolId().startsWith(SchoolSelectionService.COUNTY_PREFIX);
     }
 
-    /** 图片版支持的学段；其余（幼儿园/未分类）无对应封面，回退全部年级 */
-    private static final Set<String> IMAGE_STAGES = Set.of("小学", "初中", "高中");
+    /** 图片版支持的学段；未分类学段无对应封面，回退全部年级 */
+    private static final Set<String> IMAGE_STAGES = Set.of("小学", "初中", "高中", "幼儿园");
 
     /**
      * 图片版模式：按活码绑定学校的学段解析年级选项，复用县区码学段→年级映射；
