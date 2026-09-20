@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.SystemConfig;
 import com.bookstore.qrcode.job.DeletionReportJob;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.service.DeletionReportService;
+import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.ServiceTeacherDailyMaxService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
@@ -36,6 +37,7 @@ public class AdminSystemConfigController {
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
     private final DeletionReportService deletionReportService;
     private final DeletionReportJob deletionReportJob;
+    private final FormTemplateService formTemplateService;
 
     /**
      * 配置列表页
@@ -43,6 +45,7 @@ public class AdminSystemConfigController {
     @GetMapping
     public String index(Model model) {
         model.addAttribute("configs", configRepository.findAll());
+        model.addAllAttributes(formTemplateService.resolveImageCopy());
         model.addAttribute("serviceTeacherDailyMax", serviceTeacherDailyMaxService.resolveDefault());
         model.addAttribute("deletionReportRecipients", deletionReportService.getEffectiveRecipients());
         model.addAttribute("deletionReportTime",
@@ -154,5 +157,38 @@ public class AdminSystemConfigController {
             ra.addFlashAttribute("message", "服务老师日限默认值已设为 " + value);
         }
         return "redirect:/admin/system-config";
+    }
+
+    /**
+     * 图片版表单文案：保存 6 项到 system_config，空值也写入（读取时回退默认值）。
+     */
+    @PostMapping("/image-copy")
+    public String updateImageCopy(@RequestParam(required = false) String headingLine1,
+                                  @RequestParam(required = false) String headingLine2,
+                                  @RequestParam(required = false) String subtitle,
+                                  @RequestParam(required = false) String gradeHint,
+                                  @RequestParam(required = false) String buttonText,
+                                  @RequestParam(required = false) String privacyNotice,
+                                  RedirectAttributes ra) {
+        saveConfig(FormTemplateService.IMAGE_HEADING_LINE1_KEY, "图片版学校行第一行", headingLine1);
+        saveConfig(FormTemplateService.IMAGE_HEADING_LINE2_KEY, "图片版学校行第二行", headingLine2);
+        saveConfig(FormTemplateService.IMAGE_SUBTITLE_KEY, "图片版副标题", subtitle);
+        saveConfig(FormTemplateService.IMAGE_GRADE_HINT_KEY, "图片版封面下提示", gradeHint);
+        saveConfig(FormTemplateService.IMAGE_BUTTON_TEXT_KEY, "图片版按钮文字", buttonText);
+        saveConfig(FormTemplateService.PRIVACY_NOTICE_KEY, "隐私声明", privacyNotice);
+        ra.addFlashAttribute("message", "图片版文案已更新");
+        return "redirect:/admin/system-config";
+    }
+
+    private void saveConfig(String key, String name, String value) {
+        SystemConfig config = configRepository.findByConfigKey(key)
+                .orElseGet(() -> {
+                    SystemConfig c = new SystemConfig();
+                    c.setConfigKey(key);
+                    c.setConfigName(name);
+                    return c;
+                });
+        config.setConfigValue(value == null ? "" : value);
+        configRepository.save(config);
     }
 }

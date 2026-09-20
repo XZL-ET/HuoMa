@@ -7,6 +7,7 @@ import com.bookstore.qrcode.job.DeletionReportJob;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.service.DeletionReportService;
+import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.ServiceTeacherDailyMaxService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -49,6 +51,7 @@ class AdminSystemConfigControllerWebTest {
     @MockBean private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
     @MockBean private DeletionReportService deletionReportService;
     @MockBean private DeletionReportJob deletionReportJob;
+    @MockBean private FormTemplateService formTemplateService;
     @MockBean private EmployeeRepository employeeRepo;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
     @MockBean private LoginSuccessHandler loginSuccessHandler;
@@ -61,6 +64,7 @@ class AdminSystemConfigControllerWebTest {
         when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
         when(deletionReportService.getEffectiveRecipients()).thenReturn("admin1,admin2");
         when(deletionReportService.resolvePushTime()).thenReturn(LocalTime.of(9, 0));
+        when(formTemplateService.resolveImageCopy()).thenReturn(Collections.emptyMap());
 
         mockMvc.perform(get("/admin/system-config"))
                 .andExpect(status().isOk())
@@ -234,5 +238,23 @@ class AdminSystemConfigControllerWebTest {
 
         verify(configRepository, never()).save(any(SystemConfig.class));
         verify(deletionReportJob, never()).reschedule(any(LocalTime.class));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("POST 保存图片版文案（6 项）")
+    void savesImageCopy() throws Exception {
+        mockMvc.perform(post("/admin/system-config/image-copy")
+                        .param("headingLine1", "您是 {school} 的学生")
+                        .param("headingLine2", "请选择教材")
+                        .param("subtitle", "欢迎填写")
+                        .param("gradeHint", "请选年级")
+                        .param("buttonText", "下一步")
+                        .param("privacyNotice", "隐私说明")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/system-config"));
+
+        verify(configRepository, times(6)).save(any(SystemConfig.class));
     }
 }

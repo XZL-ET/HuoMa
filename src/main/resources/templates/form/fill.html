@@ -32,11 +32,10 @@
     <div class="card shadow-sm">
         <div class="card-body p-3">
             <h5 class="text-center" th:classappend="${imageMode} ? 'mb-3' : 'mb-1'">
-                <th:block th:if="${imageMode}">您是 <strong th:text="${schoolName}">学校名</strong> 的学生<br>请您选择正在使用的教材版本</th:block>
+                <span th:if="${imageMode}" id="imageHeading"></span>
                 <span th:unless="${imageMode}" th:text="${groupName != null ? groupName : schoolName}">学校名</span>
             </h5>
-            <p class="text-center text-muted small mb-2" th:unless="${imageMode}"
-               th:text="${#strings.isEmpty(subtitle)} ? '请填写孩子信息，以便为您精准服务' : ${subtitle}">请填写孩子信息，以便为您精准服务</p>
+            <p id="formSubtitle" class="text-center text-muted small mb-2" style="display:none;"></p>
 
             <form id="collectForm">
                 <input type="hidden" id="qrCodeId" th:value="${qrCodeId}">
@@ -81,9 +80,9 @@
                 <div id="formFields"></div>
                 <!-- 隐私声明 -->
                 <div class="privacy-notice">
-                    <strong>隐私说明：</strong>您填写的信息仅用于新华书店教材发行对接服务，不会向第三方泄露或用于其他目的。提交即表示您同意我们收集以下信息。
+                    <strong>隐私说明：</strong><span th:text="${privacyNotice}">您填写的信息仅用于新华书店教材发行对接服务，不会向第三方泄露或用于其他目的。提交即表示您同意我们收集以下信息。</span>
                 </div>
-                <button type="submit" class="btn btn-primary w-100 mt-2" th:text="${imageMode} ? '确认' : '提交'">提交</button>
+                <button type="submit" class="btn btn-primary w-100 mt-2" th:text="${imageMode} ? ${imageButtonText} : '提交'">提交</button>
             </form>
             <div id="submitMsg" class="text-center mt-2" style="display:none;"></div>
         </div>
@@ -101,6 +100,33 @@
     var isCountyCode = /*[[${countyCode ?: false}]]*/ false;
     var imageMode = /*[[${imageMode ?: false}]]*/ false;
     var gradeImages = JSON.parse(/*[[${gradeImagesJson ?: '{}'}]]*/ '{}');
+    var schoolName = /*[[${schoolName ?: ''}]]*/ '';
+    var subtitle = /*[[${subtitle ?: ''}]]*/ '';
+    var imageHeadingLine1 = /*[[${imageHeadingLine1 ?: '您是 {school} 的学生'}]]*/ '您是 {school} 的学生';
+    var imageHeadingLine2 = /*[[${imageHeadingLine2 ?: '请您选择正在使用的教材版本'}]]*/ '请您选择正在使用的教材版本';
+    var imageSubtitle = /*[[${imageSubtitle ?: ''}]]*/ '';
+    var imageGradeHint = /*[[${imageGradeHint ?: '请选择年级'}]]*/ '请选择年级';
+
+    // ===== 图片版文案渲染（学校行、副标题） =====
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = (s == null) ? '' : s;
+        return d.innerHTML;
+    }
+
+    (function renderHeading() {
+        if (imageMode) {
+            var headingEl = document.getElementById('imageHeading');
+            var line1 = escapeHtml(imageHeadingLine1).replace(/\{school\}/g, '<strong>' + escapeHtml(schoolName) + '</strong>');
+            headingEl.innerHTML = line1 + '<br>' + escapeHtml(imageHeadingLine2);
+        }
+        var sub = imageMode ? imageSubtitle : (subtitle || '请填写孩子信息，以便为您精准服务');
+        if (sub) {
+            var subEl = document.getElementById('formSubtitle');
+            subEl.textContent = sub;
+            subEl.style.display = '';
+        }
+    })();
 
     // ===== 动态表单字段（既有逻辑） =====
     var container = document.getElementById('formFields');
@@ -136,6 +162,13 @@
                     cover.src = gradeImages[defaultGrade];
                 } else {
                     cover.style.display = 'none';
+                }
+                // 封面下提示（如"请选择年级"）
+                if (imageGradeHint) {
+                    var hint = document.createElement('div');
+                    hint.className = 'text-center text-muted small mb-1';
+                    hint.textContent = imageGradeHint;
+                    div.appendChild(hint);
                 }
                 sel.addEventListener('change', function() {
                     var url = gradeImages[sel.value];

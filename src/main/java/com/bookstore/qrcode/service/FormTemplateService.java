@@ -58,8 +58,45 @@ public class FormTemplateService {
         "一年级", "二年级", "三年级", "四年级", "五年级", "六年级",
         "七年级", "八年级", "九年级", "高一", "高二", "高三");
 
+    /** 图片版表单文案配置键（system_config），缺省/空白回退默认值 */
+    public static final String IMAGE_HEADING_LINE1_KEY = "image.heading.line1";
+    public static final String IMAGE_HEADING_LINE2_KEY = "image.heading.line2";
+    public static final String IMAGE_SUBTITLE_KEY = "image.subtitle";
+    public static final String IMAGE_GRADE_HINT_KEY = "image.grade.hint";
+    public static final String IMAGE_BUTTON_TEXT_KEY = "image.button.text";
+    public static final String PRIVACY_NOTICE_KEY = "privacy.notice";
+
+    /** 图片版文案默认值（imageSubtitle 默认空 = 隐藏副标题） */
+    public static final String DEFAULT_IMAGE_HEADING_LINE1 = "您是 {school} 的学生";
+    public static final String DEFAULT_IMAGE_HEADING_LINE2 = "请您选择正在使用的教材版本";
+    public static final String DEFAULT_IMAGE_GRADE_HINT = "请选择年级";
+    public static final String DEFAULT_IMAGE_BUTTON_TEXT = "确认";
+    public static final String DEFAULT_PRIVACY_NOTICE = "您填写的信息仅用于新华书店教材发行对接服务，不会向第三方泄露或用于其他目的。提交即表示您同意我们收集以下信息。";
+
     public List<FormTemplate> listAll() {
         return templateRepo.findAllByOrderByName();
+    }
+
+    /**
+     * 图片版表单文案（含隐私声明），从 system_config 读取，缺省/空白回退默认值。
+     * 返回的 key 直接作为前端 model 属性名；imageSubtitle 为空字符串表示隐藏副标题。
+     */
+    public Map<String, String> resolveImageCopy() {
+        Map<String, String> copy = new LinkedHashMap<>();
+        copy.put("imageHeadingLine1", resolveCopy(IMAGE_HEADING_LINE1_KEY, DEFAULT_IMAGE_HEADING_LINE1));
+        copy.put("imageHeadingLine2", resolveCopy(IMAGE_HEADING_LINE2_KEY, DEFAULT_IMAGE_HEADING_LINE2));
+        copy.put("imageSubtitle", resolveCopy(IMAGE_SUBTITLE_KEY, ""));
+        copy.put("imageGradeHint", resolveCopy(IMAGE_GRADE_HINT_KEY, DEFAULT_IMAGE_GRADE_HINT));
+        copy.put("imageButtonText", resolveCopy(IMAGE_BUTTON_TEXT_KEY, DEFAULT_IMAGE_BUTTON_TEXT));
+        copy.put("privacyNotice", resolveCopy(PRIVACY_NOTICE_KEY, DEFAULT_PRIVACY_NOTICE));
+        return copy;
+    }
+
+    private String resolveCopy(String key, String defaultValue) {
+        return systemConfigRepo.findByConfigKey(key)
+            .map(SystemConfig::getConfigValue)
+            .filter(v -> v != null && !v.isBlank())
+            .orElse(defaultValue);
     }
 
     public FormTemplate getById(Long id) {

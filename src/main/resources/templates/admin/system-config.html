@@ -59,6 +59,53 @@
         </div>
     </div>
 
+    <!-- 图片版文案 -->
+    <div class="card border-0 shadow-sm mt-4">
+        <div class="card-header bg-white border-bottom-0">
+            <h5 class="mb-0">📚 图片版文案</h5>
+        </div>
+        <div class="card-body">
+            <form th:action="@{/admin/system-config/image-copy}" method="post">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small text-muted mb-1">学校行第一行</label>
+                        <input type="text" name="headingLine1" class="form-control form-control-sm"
+                               th:value="${imageHeadingLine1}" placeholder="您是 {school} 的学生">
+                        <small class="text-muted d-block mt-1">{school} 自动替换为学校名并加粗</small>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small text-muted mb-1">学校行第二行</label>
+                        <input type="text" name="headingLine2" class="form-control form-control-sm"
+                               th:value="${imageHeadingLine2}" placeholder="请您选择正在使用的教材版本">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small text-muted mb-1">副标题（留空隐藏）</label>
+                        <input type="text" name="subtitle" class="form-control form-control-sm"
+                               th:value="${imageSubtitle}" placeholder="留空则图片版不显示副标题">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small text-muted mb-1">封面下提示</label>
+                        <input type="text" name="gradeHint" class="form-control form-control-sm"
+                               th:value="${imageGradeHint}" placeholder="请选择年级">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small text-muted mb-1">按钮文字</label>
+                        <input type="text" name="buttonText" class="form-control form-control-sm"
+                               th:value="${imageButtonText}" placeholder="确认">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small text-muted mb-1">隐私声明（两种模式共用）</label>
+                        <textarea name="privacyNotice" class="form-control form-control-sm" rows="2"
+                                  th:text="${privacyNotice}"></textarea>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary btn-sm">保存图片版文案</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- 服务老师日限 -->
     <div class="card border-0 shadow-sm mt-4">
         <div class="card-header bg-white border-bottom-0">

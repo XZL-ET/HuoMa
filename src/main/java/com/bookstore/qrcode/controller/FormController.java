@@ -50,6 +50,9 @@ public class FormController {
         model.addAttribute("schoolName", qr.getSchoolName());
         model.addAttribute("subtitle", tpl.getSubtitle());  // null 时模板用默认文案
 
+        // 图片版文案（含隐私声明，两种模式共用），从 system_config 读取、缺省回退默认
+        model.addAllAttributes(formTemplateService.resolveImageCopy());
+
         String fieldsJson = tpl.getFields();
 
         // 图片版模式：注入年级封面图，供前端按选中年级联动展示
