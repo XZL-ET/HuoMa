@@ -287,7 +287,7 @@ public class CallbackWorker {
                 handleAddSuccess(event);
                 break;
             case "del_external_contact":
-                // 客户删除员工
+                // 员工删除客户
                 customerService.handleDelete(event);
                 break;
             default:

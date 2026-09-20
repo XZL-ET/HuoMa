@@ -3,6 +3,9 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomErrorCodes;
+import com.bookstore.qrcode.wecom.WecomPermanentException;
+import com.bookstore.qrcode.wecom.WecomTransientException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -18,6 +21,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -39,11 +43,39 @@ class CustomerServiceTest {
     private CustomerService customerService;
 
     @Test
-    @DisplayName("handleDelete — 存在客户时标记为已删除")
-    void shouldMarkCustomerAsDeleted() throws Exception {
+    @DisplayName("handleDelete — 客户仍归属其他员工时保持 active 并更新归属")
+    void shouldKeepActiveAndUpdateAgentWhenFollowUserStillExists() throws Exception {
         Customer customer = Customer.builder()
-                .id(1L).externalUserid("wm-abc123").status(Customer.CustomerStatus.active).build();
+                .id(1L).externalUserid("wm-abc123")
+                .currentAgent("agent1").status(Customer.CustomerStatus.active).build();
+        JsonNode detail = objectMapper.readTree("""
+            {"errcode":0,"follow_user":[{"userid":"agent2"}]}
+            """);
         when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123")).thenReturn(detail);
+
+        JsonNode event = objectMapper.readTree("""
+            {"external_userid":"wm-abc123","userid":"agent1"}
+            """);
+
+        customerService.handleDelete(event);
+
+        assertThat(customer.getStatus()).isEqualTo(Customer.CustomerStatus.active);
+        assertThat(customer.getCurrentAgent()).isEqualTo("agent2");
+        verify(customerRepo).save(customer);
+    }
+
+    @Test
+    @DisplayName("handleDelete — follow_user 为空时标记为已删除")
+    void shouldMarkDeletedWhenFollowUserEmpty() throws Exception {
+        Customer customer = Customer.builder()
+                .id(1L).externalUserid("wm-abc123")
+                .currentAgent("agent1").status(Customer.CustomerStatus.active).build();
+        JsonNode detail = objectMapper.readTree("""
+            {"errcode":0,"follow_user":[]}
+            """);
+        when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123")).thenReturn(detail);
 
         JsonNode event = objectMapper.readTree("""
             {"external_userid":"wm-abc123","userid":"agent1"}
@@ -53,6 +85,66 @@ class CustomerServiceTest {
 
         assertThat(customer.getStatus()).isEqualTo(Customer.CustomerStatus.deleted);
         verify(customerRepo).save(customer);
+    }
+
+    @Test
+    @DisplayName("handleDelete — 客户关系不存在(84061)时标记为已删除")
+    void shouldMarkDeletedWhenNotExternalContact() throws Exception {
+        Customer customer = Customer.builder()
+                .id(1L).externalUserid("wm-abc123").status(Customer.CustomerStatus.active).build();
+        when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123"))
+                .thenThrow(new WecomPermanentException(WecomErrorCodes.NOT_EXTERNAL_CONTACT,
+                        "not external contact", "{}"));
+
+        JsonNode event = objectMapper.readTree("""
+            {"external_userid":"wm-abc123","userid":"agent1"}
+            """);
+
+        customerService.handleDelete(event);
+
+        assertThat(customer.getStatus()).isEqualTo(Customer.CustomerStatus.deleted);
+        verify(customerRepo).save(customer);
+    }
+
+    @Test
+    @DisplayName("handleDelete — 企微 API 瞬时故障时不删，抛异常触发重试")
+    void shouldRethrowTransientWhenApiFails() throws Exception {
+        Customer customer = Customer.builder()
+                .id(1L).externalUserid("wm-abc123").status(Customer.CustomerStatus.active).build();
+        when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123"))
+                .thenThrow(new WecomTransientException(-1, "timeout", "{}"));
+
+        JsonNode event = objectMapper.readTree("""
+            {"external_userid":"wm-abc123","userid":"agent1"}
+            """);
+
+        assertThatThrownBy(() -> customerService.handleDelete(event))
+                .isInstanceOf(WecomTransientException.class);
+
+        assertThat(customer.getStatus()).isEqualTo(Customer.CustomerStatus.active);
+        verify(customerRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("handleDelete — 企微 API 永久故障(非84061)时不删，抛异常进 DLQ")
+    void shouldRethrowPermanentWhenApiFails() throws Exception {
+        Customer customer = Customer.builder()
+                .id(1L).externalUserid("wm-abc123").status(Customer.CustomerStatus.active).build();
+        when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123"))
+                .thenThrow(new WecomPermanentException(40003, "invalid userid", "{}"));
+
+        JsonNode event = objectMapper.readTree("""
+            {"external_userid":"wm-abc123","userid":"agent1"}
+            """);
+
+        assertThatThrownBy(() -> customerService.handleDelete(event))
+                .isInstanceOf(WecomPermanentException.class);
+
+        assertThat(customer.getStatus()).isEqualTo(Customer.CustomerStatus.active);
+        verify(customerRepo, never()).save(any());
     }
 
     @Test
@@ -67,6 +159,7 @@ class CustomerServiceTest {
         customerService.handleDelete(event);
 
         verify(customerRepo, never()).save(any());
+        verify(wecomApiClient, never()).getExternalContact(any());
     }
 
     @Test

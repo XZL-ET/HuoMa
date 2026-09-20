@@ -4,6 +4,8 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -221,8 +223,15 @@ public class CustomerService {
     /**
      * 处理客户删除事件。
      *
-     * <p>当企微回调通知客户删除时，将对应客户记录的状态标记为 {@link Customer.CustomerStatus#deleted}，
-     * 而非物理删除记录，以保留客户历史数据供后续分析或恢复。
+     * <p>企微里同一微信客户可被多个员工添加；{@code del_external_contact} 回调只代表
+     * <b>某个员工</b>删除了该客户，客户仍可能是其他员工的有效客户。因此不能无条件标记 deleted，
+     * 而应先调企微 API 查实际归属（{@code follow_user}）：</p>
+     * <ol>
+     *   <li>仍有归属员工（{@code follow_user} 非空）→ 保持 active，并将归属更新为
+     *       {@code follow_user[0]} 的实际归属员工；</li>
+     *   <li>归属为空或客户关系已不存在（84061）→ 才标记 deleted；</li>
+     *   <li>其余 API 故障 → 不删，抛出异常由 {@code CallbackWorker} 重试（fail-closed）。</li>
+     * </ol>
      *
      * @param event 企微回调事件 JSON 节点，需包含 "external_userid" 字段
      */
@@ -234,12 +243,37 @@ public class CustomerService {
         if (externalUserId == null) return;
 
         Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
-        if (customer != null) {
-            // 标记为 deleted 而非物理删除，保留历史记录以便后续恢复或数据分析
-            customer.setStatus(Customer.CustomerStatus.deleted);
-            customerRepo.save(customer);
-            log.info("客户已标记删除: external={}", externalUserId);
+        if (customer == null) return;
+
+        JsonNode followUser;
+        try {
+            followUser = wecomApi.getExternalContact(externalUserId).get("follow_user");
+        } catch (WecomApiException e) {
+            if (e.getErrcode() == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                // 客户关系已彻底不存在 → 真正删除
+                markDeleted(customer, externalUserId);
+                return;
+            }
+            // fail-closed：瞬时/其他故障不删，抛出让 CallbackWorker 分类后重试
+            throw e;
         }
+
+        if (followUser != null && followUser.isArray() && followUser.size() > 0) {
+            String newAgent = followUser.get(0).get("userid").asText();
+            customer.setCurrentAgent(newAgent);
+            customer.setStatus(Customer.CustomerStatus.active);
+            customerRepo.save(customer);
+            log.info("客户仍归属其他员工，保持 active 并更新归属: external={}, currentAgent={}",
+                externalUserId, newAgent);
+        } else {
+            markDeleted(customer, externalUserId);
+        }
+    }
+
+    private void markDeleted(Customer customer, String externalUserId) {
+        customer.setStatus(Customer.CustomerStatus.deleted);
+        customerRepo.save(customer);
+        log.info("客户已标记删除: external={}", externalUserId);
     }
 
     /**
