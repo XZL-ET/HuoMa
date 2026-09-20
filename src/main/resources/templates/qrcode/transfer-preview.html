@@ -329,8 +329,8 @@ document.getElementById('triggerBtn')?.addEventListener('click', async function(
 
 document.getElementById('backfillBtn')?.addEventListener('click', async function() {
     const qrId = this.dataset.qrid;
-    if (!confirm('⚠️ 全量补转将把该活码下所有历史客户（不限添加时间）转到服务老师名下。\n\n'
-               + '已转过或被去重跳过的客户不会重复转移。\n\n确定要继续吗？')) return;
+    if (!confirm('⚠️ 全量补转将把该活码下「最近 30 天内添加、未成功转移」的 active 客户转到服务老师名下。\n\n'
+               + '已成功转移的客户不会重复转移；超时/被拒/失败重试的客户可能重新发起（7 天冷却内跳过）。\n\n确定要继续吗？')) return;
     this.disabled = true;
     this.textContent = '补转中...';
     try {

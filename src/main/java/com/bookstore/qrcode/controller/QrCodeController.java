@@ -2196,20 +2196,27 @@ public class QrCodeController {
                           || a.getRole() == QrAgent.AgentRole.dual)
                 .toList();
 
-            // 查找服务老师（含 dual，仅活跃状态）
-            QrAgent serviceTeacher = agents.stream()
-                .filter(a -> a.getRole() == QrAgent.AgentRole.service
-                          || a.getRole() == QrAgent.AgentRole.dual)
-                .findFirst().orElse(null);
-
             if (receptionists.isEmpty()) {
                 result.put("error", "该活码未配置接待员");
                 return result;
             }
-            if (serviceTeacher == null) {
+
+            // 防御性校验：转移目标服务老师必须唯一。多个 service/dual 并存时
+            // findFirst 取法有歧义，可能转错人，宁可拒绝执行也不赌。
+            List<QrAgent> serviceCandidates = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                          || a.getRole() == QrAgent.AgentRole.dual)
+                .toList();
+            if (serviceCandidates.isEmpty()) {
                 result.put("error", "该活码未配置服务老师");
                 return result;
             }
+            if (serviceCandidates.size() > 1) {
+                result.put("error", "该活码配置了 " + serviceCandidates.size()
+                    + " 个服务老师（service/dual），无法确定唯一转移目标，已拒绝执行");
+                return result;
+            }
+            QrAgent serviceTeacher = serviceCandidates.get(0);
 
             // 今天 00:00:00 作为时间下限（手动触发处理当日客户）
             LocalDateTime todayStart = LocalDateTime.now()
@@ -2255,19 +2262,30 @@ public class QrCodeController {
     }
 
     /**
-     * 全量补转：将该活码下所有历史客户（不限添加时间）XADD 到转移流。
+     * 全量补转：将该活码下「未成功转移」的 active 客户（无 pending_confirm/confirmed
+     * 记录，添加时间不早于 {@code since}）XADD 到转移流。
      *
      * <p>POST /qrcodes/{id}/transfer/backfill —— 与 transferTrigger 不同，
-     * 本接口不限今日，而是扫描接待员名下的所有客户。
-     * {@link com.bookstore.qrcode.service.TransferService#initiate} 的去重逻辑
-     * 会自动跳过已存在转移记录的客户。
+     * 本接口扫描接待员名下尚未成功转移的客户，但仅限 {@code since} 之后添加的
+     * active 客户，把补偿窗口控制在最近 30 天（默认）。
+     * 只入队无进行中/已完成转移记录的客户，避免已转移客户重复 XADD 占满单次
+     * 500 条上限导致大活码截断；timeout/rejected/retry_limit/api_failed 等失败态
+     * 仍会入队，由 {@link com.bookstore.qrcode.service.TransferService#initiate}
+     * 的去重与冷却二次把关。
      * </p>
+     *
+     * @param id    活码 ID
+     * @param since 补偿窗口起点日期（yyyy-MM-dd，可选，默认 30 天前）
      */
     @PostMapping("/{id}/transfer/backfill")
     @ResponseBody
-    public Map<String, Object> transferBackfill(@PathVariable Long id) {
+    public Map<String, Object> transferBackfill(@PathVariable Long id,
+                                                @RequestParam(required = false) String since) {
         Map<String, Object> result = new LinkedHashMap<>();
         try {
+            LocalDateTime sinceTime = (since != null && !since.isBlank())
+                ? LocalDate.parse(since).atStartOfDay()
+                : LocalDateTime.now().minusDays(30);
             QrCode qr = qrCodeService.getById(id);
             List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId()).stream()
                 .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
@@ -2278,19 +2296,27 @@ public class QrCodeController {
                           || a.getRole() == QrAgent.AgentRole.dual)
                 .toList();
 
-            QrAgent serviceTeacher = agents.stream()
-                .filter(a -> a.getRole() == QrAgent.AgentRole.service
-                          || a.getRole() == QrAgent.AgentRole.dual)
-                .findFirst().orElse(null);
-
             if (receptionists.isEmpty()) {
                 result.put("error", "该活码未配置接待员");
                 return result;
             }
-            if (serviceTeacher == null) {
+
+            // 防御性校验：转移目标服务老师必须唯一。多个 service/dual 并存时
+            // findFirst 取法有歧义，可能转错人，宁可拒绝执行也不赌。
+            List<QrAgent> serviceCandidates = agents.stream()
+                .filter(a -> a.getRole() == QrAgent.AgentRole.service
+                          || a.getRole() == QrAgent.AgentRole.dual)
+                .toList();
+            if (serviceCandidates.isEmpty()) {
                 result.put("error", "该活码未配置服务老师");
                 return result;
             }
+            if (serviceCandidates.size() > 1) {
+                result.put("error", "该活码配置了 " + serviceCandidates.size()
+                    + " 个服务老师（service/dual），无法确定唯一转移目标，已拒绝执行");
+                return result;
+            }
+            QrAgent serviceTeacher = serviceCandidates.get(0);
 
             int totalTransfers = 0;
             outer:
@@ -2298,9 +2324,9 @@ public class QrCodeController {
                 if (rec.getAgentUserid().equals(serviceTeacher.getAgentUserid())) {
                     continue;
                 }
-                // 不限时间，查该接待员在该学校下的客户（限定 schoolId，防止串活码）
-                List<Customer> customers = customerRepo.findByAddedAgentAndSchoolId(
-                    rec.getAgentUserid(), qr.getSchoolId());
+                // 只取 since 之后添加的 active 客户（限定 schoolId 防止串活码）
+                List<Customer> customers = customerRepo.findWithoutPendingOrConfirmedByAgentAndSchoolId(
+                    rec.getAgentUserid(), qr.getSchoolId(), Customer.CustomerStatus.active, sinceTime);
 
                 for (Customer c : customers) {
                     if (totalTransfers >= TRANSFER_TRIGGER_MAX_BATCH) {
@@ -2655,14 +2681,21 @@ public class QrCodeController {
             List<QrAgent> agents = qrAgentRepo.findByQrCodeId(qr.getId()).stream()
                 .filter(a -> a.getStatus() != QrAgent.AgentStatus.removed)
                 .toList();
-            QrAgent serviceTeacher = agents.stream()
+            // 防御性校验：转移目标服务老师必须唯一，防止 findFirst 歧义转错人。
+            List<QrAgent> serviceCandidates = agents.stream()
                 .filter(a -> a.getRole() == QrAgent.AgentRole.service
                           || a.getRole() == QrAgent.AgentRole.dual)
-                .findFirst().orElse(null);
-            if (serviceTeacher == null) {
+                .toList();
+            if (serviceCandidates.isEmpty()) {
                 result.put("error", "该活码未配置服务老师");
                 return result;
             }
+            if (serviceCandidates.size() > 1) {
+                result.put("error", "该活码配置了 " + serviceCandidates.size()
+                    + " 个服务老师（service/dual），无法确定唯一转移目标，已拒绝执行");
+                return result;
+            }
+            QrAgent serviceTeacher = serviceCandidates.get(0);
 
             LocalDateTime todayStart = LocalDateTime.now()
                 .withHour(0).withMinute(0).withSecond(0).withNano(0);

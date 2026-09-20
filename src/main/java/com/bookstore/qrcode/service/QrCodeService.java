@@ -856,15 +856,35 @@ public class QrCodeService {
         if (!agent.getQrCodeId().equals(qrCodeId)) {
             throw new RuntimeException("联系人不属于该活码");
         }
+        boolean isServiceRole = agent.getRole() == QrAgent.AgentRole.service
+            || agent.getRole() == QrAgent.AgentRole.dual;
         // 服务老师/双角色允许移除，但记录警告日志以便追溯
-        if (agent.getRole() == QrAgent.AgentRole.service
-            || agent.getRole() == QrAgent.AgentRole.dual) {
+        if (isServiceRole) {
             log.warn("服务老师/双角色被移除: qrCodeId={}, agentUserid={}, role={}",
                 qrCodeId, agent.getAgentUserid(), agent.getRole());
         }
         // 软删除：标记为 removed 而非物理删除，保留历史记录
         agent.setStatus(QrAgent.AgentStatus.removed);
         qrAgentRepo.save(agent);
+
+        // 移除服务老师/双角色后，若该活码不再有其他 active 的服务老师/双角色，
+        // 新客户将无法被在职继承转移，需告警提醒管理员补配服务老师
+        if (isServiceRole) {
+            boolean hasRemainingService = qrAgentRepo.findByQrCodeId(qrCodeId).stream()
+                .anyMatch(a -> a.getStatus() != QrAgent.AgentStatus.removed
+                    && (a.getRole() == QrAgent.AgentRole.service
+                        || a.getRole() == QrAgent.AgentRole.dual));
+            if (!hasRemainingService) {
+                QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
+                String schoolName = qr != null ? qr.getSchoolName() : String.valueOf(qrCodeId);
+                alertService.createAlert(agent.getAgentUserid(), "qr_service_removed",
+                    AgentAlert.AlertSeverity.high,
+                    String.format("服务老师 %s 已从活码「%s」移除，且该活码已无其他服务老师，新客户将无法被在职继承转移。",
+                        agent.getAgentUserid(), schoolName),
+                    AgentAlert.AutoAction.none, qrCodeId);
+            }
+        }
+
         log.info("联系人已移除: qrCodeId={}, agentUserid={}", qrCodeId, agent.getAgentUserid());
 
         // 同步企微侧联系人列表，确保企微配置与本地一致

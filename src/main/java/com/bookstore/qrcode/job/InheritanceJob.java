@@ -123,7 +123,7 @@ public class InheritanceJob {
         }
 
         log.info("启动补偿：处理 {} ~ {} 的遗漏转移", compensateStart, compensateEnd);
-        processTransferWindow(compensateStart, compensateEnd, "启动补偿");
+        processTransferWindow(compensateStart, compensateEnd, "启动补偿", true);
     }
 
     // ================================================================
@@ -162,7 +162,7 @@ public class InheritanceJob {
         }
 
         processTransferWindow(windowStart, windowEnd,
-            String.format("白天 %02d:%02d 批次", now.getHour(), now.getMinute()));
+            String.format("白天 %02d:%02d 批次", now.getHour(), now.getMinute()), true);
     }
 
     // ================================================================
@@ -189,7 +189,8 @@ public class InheritanceJob {
             .withHour(dayStartHour).withMinute(0).withSecond(0).withNano(0)
             .minusSeconds(1);
 
-        processTransferWindow(nightStart, nightEnd, "夜间窗口批量");
+        // 夜间批次是全天遗漏的唯一兜底，禁用增量扫描，全量扫描避免漏掉非 dirty 学校的夜间客户
+        processTransferWindow(nightStart, nightEnd, "夜间窗口批量", false);
     }
 
     // ================================================================
@@ -199,12 +200,15 @@ public class InheritanceJob {
     /**
      * 在指定时间窗口内扫描所有活码，将接待员添加的客户 XADD 到转移流。
      *
-     * @param windowStart 窗口起始（含）
-     * @param windowEnd   窗口结束（含，BETWEEN 语义）
-     * @param windowLabel 日志标签
+     * @param windowStart     窗口起始（含）
+     * @param windowEnd       窗口结束（含，BETWEEN 语义）
+     * @param windowLabel     日志标签
+     * @param incrementalScan 是否启用 DIRTY_SCHOOLS 增量扫描优化。
+     *                        夜间批次是全天遗漏的唯一兜底，必须传 {@code false}
+     *                        做全量扫描，否则非 dirty 学校的夜间客户会被漏掉。
      */
     private void processTransferWindow(LocalDateTime windowStart, LocalDateTime windowEnd,
-                                        String windowLabel) {
+                                        String windowLabel, boolean incrementalScan) {
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
         int totalTransfers = 0;
         int skippedNoReceptionist = 0;
@@ -213,21 +217,24 @@ public class InheritanceJob {
         List<String> noReceptionistSchools = new ArrayList<>();
 
         // ---- 增量扫描优化：只处理有新客户添加的学校，减少无效 DB 查询 ----
-        try {
-            Set<String> dirtySchools = redisTemplate.opsForSet().members(DIRTY_SCHOOLS_KEY);
-            if (dirtySchools != null && !dirtySchools.isEmpty()) {
-                int before = activeQrs.size();
-                activeQrs = activeQrs.stream()
-                    .filter(qr -> dirtySchools.contains(qr.getSchoolId()))
-                    .toList();
-                redisTemplate.delete(DIRTY_SCHOOLS_KEY);
-                log.info("增量扫描: {} 个学校有新客户, 活码 {} → {} ({}), 窗口=[{}, {}]",
-                    dirtySchools.size(), before, activeQrs.size(), windowLabel,
-                    windowStart, windowEnd);
+        // 仅用于白天/启动补偿等有后续兜底窗口的批次；夜间批次禁用（全量扫描）。
+        if (incrementalScan) {
+            try {
+                Set<String> dirtySchools = redisTemplate.opsForSet().members(DIRTY_SCHOOLS_KEY);
+                if (dirtySchools != null && !dirtySchools.isEmpty()) {
+                    int before = activeQrs.size();
+                    activeQrs = activeQrs.stream()
+                        .filter(qr -> dirtySchools.contains(qr.getSchoolId()))
+                        .toList();
+                    redisTemplate.delete(DIRTY_SCHOOLS_KEY);
+                    log.info("增量扫描: {} 个学校有新客户, 活码 {} → {} ({}), 窗口=[{}, {}]",
+                        dirtySchools.size(), before, activeQrs.size(), windowLabel,
+                        windowStart, windowEnd);
+                }
+            } catch (Exception e) {
+                // Redis 不可用时降级为全量扫描
+                log.warn("DIRTY_SCHOOLS 读取失败，退回全量扫描: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            // Redis 不可用时降级为全量扫描
-            log.warn("DIRTY_SCHOOLS 读取失败，退回全量扫描: {}", e.getMessage());
         }
 
         for (QrCode qr : activeQrs) {

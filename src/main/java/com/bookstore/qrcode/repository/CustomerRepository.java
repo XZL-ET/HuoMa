@@ -233,6 +233,33 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     List<Customer> findByAddedAgentAndSchoolId(String addedAgent, String schoolId);
 
     /**
+     * 查询指定接待员在指定学校下、指定时间下限之后添加、状态为指定值、且无
+     * 「进行中/已完成」转移记录（pending_confirm/confirmed）的客户，按添加时间升序。
+     * <p>
+     * 用于全量补转：只入队「未成功转移」的客户，避免把已转移客户重复 XADD，
+     * 从而不会让已转移客户占满单次 500 条上限、导致大活码的漏转客户被截断。
+     * timeout / rejected / retry_limit / api_failed 等失败态仍会入队，
+     * 由 {@code TransferService.initiate} 的去重与 7 天冷却二次把关。
+     * </p>
+     *
+     * @param addedAgent 添加该客户的企微员工 userid
+     * @param schoolId   学校 ID（对应活码标识）
+     * @param status     客户状态（补偿仅取 active，排除已删除）
+     * @param since      添加时间下限（含），用于把补偿窗口限定在最近 30 天
+     * @return 满足条件的客户列表，按添加时间升序
+     */
+    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId "
+         + "AND c.status = :status AND c.addTime >= :since "
+         + "AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id "
+         + "AND t.status IN ('pending_confirm', 'confirmed')) "
+         + "ORDER BY c.addTime ASC")
+    List<Customer> findWithoutPendingOrConfirmedByAgentAndSchoolId(
+        @Param("addedAgent") String addedAgent,
+        @Param("schoolId") String schoolId,
+        @Param("status") Customer.CustomerStatus status,
+        @Param("since") LocalDateTime since);
+
+    /**
      * 查询指定接待员在指定学校下、晚于指定时间的客户，按添加时间升序。
      * <p>
      * 用于在职继承手动触发/预览/选择性转移：限定学校防止串活码。
