@@ -968,25 +968,12 @@ public class TagService {
             java.util.Iterator<String> fn = fieldData.fieldNames();
             while (fn.hasNext()) {
                 String fieldName = fn.next();
-                JsonNode valueNode = fieldData.get(fieldName);
-                if (valueNode == null || valueNode.isNull()) continue;
+                String fieldValue = fieldData.get(fieldName).asText();
+                if (fieldValue == null || fieldValue.isBlank()) continue;
 
                 String action = tagMapping.has(fieldName)
                     ? tagMapping.get(fieldName).asText() : null;
                 if (action == null) continue;
-
-                // 多选字段（数组值）逐个打标签，单选/文本字段打单个标签
-                List<String> values = new ArrayList<>();
-                if (valueNode.isArray()) {
-                    valueNode.forEach(v -> {
-                        String s = v.asText();
-                        if (s != null && !s.isBlank()) values.add(s);
-                    });
-                } else {
-                    String s = valueNode.asText();
-                    if (s != null && !s.isBlank()) values.add(s);
-                }
-                if (values.isEmpty()) continue;
 
                 // 支持 "tag" 和 "tag:标签组名" 两种格式
                 //   "tag"           → 默认归入 "学校-{城市}" 标签组（与 autoTag 保持一致）
@@ -999,13 +986,11 @@ public class TagService {
                     } else {
                         groupKeyword = schoolGroupKeyword;
                     }
-                    for (String fieldValue : values) {
-                        Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, groupKeyword);
-                        bindCustomerTag(customer.getId(), tag.getId(), "form");
-                        if (tag.getWecomTagId() != null) {
-                            pendingWecomTagIds.add(tag.getWecomTagId());
-                            appliedTags.add(tag.getName());
-                        }
+                    Tag tag = getOrCreateTag(fieldValue, Tag.TagType.form, null, groupKeyword);
+                    bindCustomerTag(customer.getId(), tag.getId(), "form");
+                    if (tag.getWecomTagId() != null) {
+                        pendingWecomTagIds.add(tag.getWecomTagId());
+                        appliedTags.add(tag.getName());
                     }
                 }
             }

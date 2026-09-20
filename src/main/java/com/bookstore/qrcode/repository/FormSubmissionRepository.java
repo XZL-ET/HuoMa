@@ -8,5 +8,4 @@ public interface FormSubmissionRepository extends JpaRepository<FormSubmission, 
     List<FormSubmission> findByCustomerIdOrderBySubmittedAtDesc(Long customerId);
     boolean existsByCustomerId(Long customerId);
     boolean existsByCustomerIdAndQrCodeId(Long customerId, Long qrCodeId);
-    boolean existsByCustomerIdAndFormTemplateId(Long customerId, Long formTemplateId);
 }
