@@ -53,13 +53,11 @@ public class FormController {
         String fieldsJson = tpl.getFields();
 
         // 图片版模式：注入年级封面图，供前端按选中年级联动展示
-        if (formTemplateService.isImageMode()) {
+        // 县区码活码走三级级联选校，保留县区码 UI，不套用图片版文案/封面
+        if (formTemplateService.isImageMode() && !schoolSelectionService.isCountyCode(qr)) {
             model.addAttribute("imageMode", true);
             model.addAttribute("gradeImagesJson", gradeImagesJson());
-            // 按活码绑定学校的学段过滤年级选项（县区码走三级级联，不适用）
-            if (!schoolSelectionService.isCountyCode(qr)) {
-                fieldsJson = formTemplateService.filterImageGradeOptions(fieldsJson, qr);
-            }
+            fieldsJson = formTemplateService.filterImageGradeOptions(fieldsJson, qr);
         }
 
         model.addAttribute("fieldsJson", fieldsJson);
