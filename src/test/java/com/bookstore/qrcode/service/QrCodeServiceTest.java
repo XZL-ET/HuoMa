@@ -157,6 +157,45 @@ class QrCodeServiceTest {
     }
 
     @Test
+    @DisplayName("updateAgent — 编辑接待员日限后同步全局池为活跃接待员活码最大值")
+    void shouldSyncGlobalPoolDailyMaxOnUpdateAgent() {
+        QrAgent agent = QrAgent.builder()
+                .id(10L).qrCodeId(1L).agentUserid("r1")
+                .role(QrAgent.AgentRole.receptionist)
+                .dailyMax(200)
+                .status(QrAgent.AgentStatus.active)
+                .build();
+        GlobalAgentPool pool = GlobalAgentPool.builder()
+                .agentUserid("r1").dailyMax(150).build();
+        when(qrAgentRepo.findById(10L)).thenReturn(Optional.of(agent));
+        when(qrAgentRepo.findMaxActiveReceptionistDailyMax("r1")).thenReturn(200);
+        when(poolRepo.findByAgentUserid("r1")).thenReturn(Optional.of(pool));
+
+        qrCodeService.updateAgent(1L, 10L, 200, null, null);
+
+        assertThat(pool.getDailyMax()).isEqualTo(200);
+        verify(poolRepo).save(pool);
+    }
+
+    @Test
+    @DisplayName("updateAgent — 无活跃接待员绑定时不改动全局池")
+    void shouldNotTouchGlobalPoolWhenNoActiveReceptionist() {
+        QrAgent agent = QrAgent.builder()
+                .id(10L).qrCodeId(1L).agentUserid("svc1")
+                .role(QrAgent.AgentRole.service)
+                .dailyMax(300)
+                .status(QrAgent.AgentStatus.active)
+                .build();
+        when(qrAgentRepo.findById(10L)).thenReturn(Optional.of(agent));
+        when(qrAgentRepo.findMaxActiveReceptionistDailyMax("svc1")).thenReturn(null);
+
+        qrCodeService.updateAgent(1L, 10L, 300, null, null);
+
+        verify(poolRepo, never()).findByAgentUserid(any());
+        verify(poolRepo, never()).save(any(GlobalAgentPool.class));
+    }
+
+    @Test
     @DisplayName("batchUpdateRotateMode — 批量 JPQL 更新，repo 直接返回行数")
     void shouldBatchUpdateRotateModeWithPartialFailure() {
         when(qrCodeRepo.batchUpdateRotateMode(eq(QrCode.RotateMode.manual), anyList()))

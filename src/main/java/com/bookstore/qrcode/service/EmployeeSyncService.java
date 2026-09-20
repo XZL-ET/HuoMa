@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -53,6 +54,11 @@ public class EmployeeSyncService {
     private final QrAgentRepository qrAgentRepo;
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
+    private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+
+    /** 接待员默认日上限，可通过 app.agent.daily-max-default 配置 */
+    @Value("${app.agent.daily-max-default:150}")
+    private int dailyMaxDefault;
 
     /**
      * 应用启动后回填存量池记录的 departmentId，确保部门匹配立即可用。
@@ -316,7 +322,7 @@ public class EmployeeSyncService {
                 agent.setMeltedCount24h(0);
                 agentRepo.save(agent);
                 if (poolService.isPoolEligible(agent.getUserid())) {
-                    poolService.ensureInPool(agent.getUserid(), 150);
+                    poolService.ensureInPool(agent.getUserid(), dailyMaxDefault);
                 }
                 unblocked++;
                 log.info("自动解封已恢复员工: userid={}, name={}, role={}",
@@ -339,7 +345,7 @@ public class EmployeeSyncService {
      *   <li>巡检发现全局池 standby 不足时自动触发</li>
      * </ul>
      *
-     * <p>新入池员工排在队尾（sortOrder = 当前最大 + 1），日上限默认 100。</p>
+     * <p>新入池员工排在队尾（sortOrder = 当前最大 + 1），日上限默认 150。</p>
      *
      * @return 新增入池的员工数
      */
@@ -370,6 +376,12 @@ public class EmployeeSyncService {
         int backfilled = backfillPoolDepartmentIds();
         if (backfilled > 0) {
             log.info("全局池同步：回填 {} 条记录的 departmentId", backfilled);
+        }
+
+        // 2.5 回填偏小的 daily_max 到角色默认值（存量数据兼容：旧记录可能停留在历史默认值 100）
+        int raisedDailyMax = backfillLowDailyMax();
+        if (raisedDailyMax > 0) {
+            log.info("全局池同步：抬升 {} 条偏小 daily_max 到角色默认值", raisedDailyMax);
         }
 
         // 3. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
@@ -449,7 +461,7 @@ public class EmployeeSyncService {
             Long primaryDeptId = extractPrimaryDeptId(emp.getDepartment());
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
-                .dailyMax(150)
+                .dailyMax(dailyMaxDefault)
                 .sortOrder(maxOrder)
                 .departmentId(primaryDeptId)
                 .status(GlobalAgentPool.PoolStatus.standby)
@@ -568,6 +580,53 @@ public class EmployeeSyncService {
             poolRepo.saveAll(toUpdate);
         }
         return toUpdate.size();
+    }
+
+    /**
+     * 回填偏小的 daily_max 到角色默认值（存量数据兼容）。
+     *
+     * <p>历史员工在"默认值还是 100"的年代入池，字段落库为 100。后来默认值上调，
+     * 但 {@code syncToGlobalPool} / {@code ensureInPool} 只写新增记录、从不回填存量，
+     * 导致接待员日限判定（读 {@code GlobalAgentPool.dailyMax}）长期停留在 100。
+     * 此方法按角色把低于默认值的记录抬升：接待员 → {@link #dailyMaxDefault}，
+     * 服务老师/双角色 → {@link ServiceTeacherDailyMaxService#resolveDefault()}。</p>
+     *
+     * <p>只升不降：仅抬升低于目标值的记录，不覆盖已配置的更高值。</p>
+     *
+     * @return 本次抬升的记录数
+     */
+    int backfillLowDailyMax() {
+        int receptionistDefault = dailyMaxDefault;
+        int serviceDefault = serviceTeacherDailyMaxService.resolveDefault();
+        int threshold = Math.max(receptionistDefault, serviceDefault);
+
+        List<GlobalAgentPool> low = poolRepo.findWithDailyMaxBelow(threshold);
+        if (low.isEmpty()) {
+            return 0;
+        }
+
+        Map<String, Agent.AgentRole> roleMap = agentRepo.findAllById(
+                low.stream().map(GlobalAgentPool::getAgentUserid).toList()).stream()
+            .collect(Collectors.toMap(Agent::getUserid, Agent::getRole, (a, b) -> a));
+
+        int raised = 0;
+        List<GlobalAgentPool> toUpdate = new ArrayList<>();
+        for (GlobalAgentPool p : low) {
+            Agent.AgentRole role = roleMap.get(p.getAgentUserid());
+            if (role == null || p.getDailyMax() == null) {
+                continue;
+            }
+            int target = role == Agent.AgentRole.receptionist ? receptionistDefault : serviceDefault;
+            if (p.getDailyMax() < target) {
+                p.setDailyMax(target);
+                toUpdate.add(p);
+                raised++;
+            }
+        }
+        if (!toUpdate.isEmpty()) {
+            poolRepo.saveAll(toUpdate);
+        }
+        return raised;
     }
 
     /**

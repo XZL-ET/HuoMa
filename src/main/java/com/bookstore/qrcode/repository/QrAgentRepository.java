@@ -223,6 +223,16 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
     Set<String> findUseridsWithActiveReceptionRole(@Param("userids") Collection<String> userids);
 
     /**
+     * 查询指定员工所有活跃接待员绑定的最大 dailyMax。
+     * <p>接待员日限判定读 {@code GlobalAgentPool.dailyMax}，编辑活码日限后
+     * 取该员工活跃接待员活码的最大值同步到全局池。无活跃接待员绑定时返回 {@code null}。</p>
+     */
+    @Query("SELECT MAX(qa.dailyMax) FROM QrAgent qa "
+         + "WHERE qa.agentUserid = :userid AND qa.status = 'active' "
+         + "AND qa.role = 'receptionist'")
+    Integer findMaxActiveReceptionistDailyMax(@Param("userid") String userid);
+
+    /**
      * 查找指定员工中拥有任意活跃角色绑定的 userid 集合。
      */
     @Query("SELECT DISTINCT qa.agentUserid FROM QrAgent qa "

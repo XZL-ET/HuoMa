@@ -1,7 +1,9 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.Employee;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
@@ -16,12 +18,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -42,6 +46,7 @@ class EmployeeSyncServiceTest {
     @Mock private QrAgentRepository qrAgentRepo;
     @Mock private AlertService alertService;
     @Mock private ObjectMapper objectMapper;
+    @Mock private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
 
     @InjectMocks
     private EmployeeSyncService service;
@@ -92,5 +97,39 @@ class EmployeeSyncServiceTest {
 
         verify(agentRepo, never()).batchBlockByUserids(any());
         verify(qrAgentRepo, never()).batchRemoveByAgentUserids(any());
+    }
+
+    @Test
+    @DisplayName("回填偏小 daily_max：接待员抬到 150，服务老师/双角色抬到 300，只升不降")
+    void shouldRaiseLowDailyMaxToRoleDefault() {
+        ReflectionTestUtils.setField(service, "dailyMaxDefault", 150);
+        when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
+
+        GlobalAgentPool receptionist = GlobalAgentPool.builder()
+            .agentUserid("r1").dailyMax(100).build();
+        GlobalAgentPool serviceTeacher = GlobalAgentPool.builder()
+            .agentUserid("s1").dailyMax(100).build();
+        GlobalAgentPool dual = GlobalAgentPool.builder()
+            .agentUserid("d1").dailyMax(100).build();
+        GlobalAgentPool alreadyHigh = GlobalAgentPool.builder()
+            .agentUserid("r2").dailyMax(200).build();
+
+        when(poolRepo.findWithDailyMaxBelow(300))
+            .thenReturn(List.of(receptionist, serviceTeacher, dual, alreadyHigh));
+        when(agentRepo.findAllById(any())).thenReturn(List.of(
+            Agent.builder().userid("r1").role(Agent.AgentRole.receptionist).build(),
+            Agent.builder().userid("s1").role(Agent.AgentRole.service).build(),
+            Agent.builder().userid("d1").role(Agent.AgentRole.dual).build(),
+            Agent.builder().userid("r2").role(Agent.AgentRole.receptionist).build()
+        ));
+
+        int raised = service.backfillLowDailyMax();
+
+        assertThat(raised).isEqualTo(3);
+        assertThat(receptionist.getDailyMax()).isEqualTo(150);
+        assertThat(serviceTeacher.getDailyMax()).isEqualTo(300);
+        assertThat(dual.getDailyMax()).isEqualTo(300);
+        assertThat(alreadyHigh.getDailyMax()).isEqualTo(200);
+        verify(poolRepo).saveAll(any());
     }
 }

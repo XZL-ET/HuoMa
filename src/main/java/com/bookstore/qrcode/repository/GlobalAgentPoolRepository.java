@@ -149,4 +149,8 @@ public interface GlobalAgentPoolRepository
     /** 统计 departmentId 为 NULL 的池记录数 */
     @Query("SELECT COUNT(p) FROM GlobalAgentPool p WHERE p.departmentId IS NULL")
     long countWithNullDepartmentId();
+
+    /** 查询 daily_max 低于指定阈值的池记录（存量日限回填用） */
+    @Query("SELECT p FROM GlobalAgentPool p WHERE p.dailyMax < :threshold")
+    List<GlobalAgentPool> findWithDailyMaxBelow(@Param("threshold") int threshold);
 }

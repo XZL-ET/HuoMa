@@ -776,7 +776,7 @@ public class QrCodeService {
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
         getById(qrCodeId); // 校验活码存在
-        poolService.ensureInPool(agentUserid, 150);
+        poolService.ensureInPool(agentUserid, dailyMaxDefault);
         log.info("全局池员工已添加: userid={}", agentUserid);
     }
 
@@ -970,7 +970,35 @@ public class QrCodeService {
         }
         if (sortOrder != null) agent.setSortOrder(sortOrder);
         qrAgentRepo.save(agent);
+        // 接待员日限判定读全局池（AgentRotationService.checkAndRotate），
+        // 编辑活码日限后需同步全局池为该员工活跃接待员活码的最大值，否则改动对接待员静默无效
+        syncGlobalPoolDailyMax(agent.getAgentUserid());
         log.info("联系人已更新: qrCodeId={}, agentId={}", qrCodeId, agentId);
+    }
+
+    /**
+     * 同步全局池日限：取指定员工所有活跃接待员活码的最大 dailyMax 写入 {@link GlobalAgentPool}。
+     *
+     * <p>接待员的实际日限由全局池 {@code dailyMax} 决定（跨活码合计），
+     * 而活码编辑页改的是 {@code qr_agent.dailyMax}。二者原本互不同步，
+     * 导致在活码里改接待员日限对实际接待上限静默无效。此方法在编辑后重算同步。</p>
+     *
+     * <p>取最大值：员工可能在多个活码担任接待员，全局上限取各活码上限的最大值。
+     * 无活跃接待员绑定时保持全局池现状（该员工可能已转为纯服务老师，其日限由 serviceDailyMax 控制）。</p>
+     */
+    private void syncGlobalPoolDailyMax(String userid) {
+        Integer maxDailyMax = qrAgentRepo.findMaxActiveReceptionistDailyMax(userid);
+        if (maxDailyMax == null || maxDailyMax <= 0) {
+            return;
+        }
+        poolRepo.findByAgentUserid(userid).ifPresent(pool -> {
+            if (!maxDailyMax.equals(pool.getDailyMax())) {
+                pool.setDailyMax(maxDailyMax);
+                poolRepo.save(pool);
+                log.info("同步全局池日限: userid={}, dailyMax={}（取活跃接待员活码最大值）",
+                    userid, maxDailyMax);
+            }
+        });
     }
 
     // ==================== 后备池管理（续） ====================
