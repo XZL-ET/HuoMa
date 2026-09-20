@@ -164,9 +164,9 @@ class FormTemplateVersionServiceTest {
     }
 
     @Test
-    void resolveImageGradeOptions_幼儿园分类_返回全部12年级() {
+    void resolveImageGradeOptions_幼儿园分类_返回小班中班大班() {
         assertThat(service.resolveImageGradeOptions(saveQrWithCategory("幼儿园")))
-                .isEqualTo(FormTemplateService.GRADE_OPTIONS);
+                .containsExactly("小班", "中班", "大班");
     }
 
     @Test
