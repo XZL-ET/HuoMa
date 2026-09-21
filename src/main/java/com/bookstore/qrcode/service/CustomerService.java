@@ -57,6 +57,7 @@ public class CustomerService {
     private final MessageGuardService messageGuardService;
     private final ObjectMapper objectMapper;
     private final EntityManager entityManager;
+    private final CustomerRelationService customerRelationService;
 
     /**
      * 从企微回调创建或更新客户。
@@ -112,6 +113,7 @@ public class CustomerService {
                 log.info("重新激活已删除客户: external={}", externalUserId);
             }
             customerRepo.save(existing);
+            upsertRelation(existing.getId(), userId, qrCodeId, schoolId);
             return existing.getId();
         }
 
@@ -138,6 +140,7 @@ public class CustomerService {
                         retry.setSchoolId(schoolId);
                     }
                     customerRepo.save(retry);
+                    upsertRelation(retry.getId(), userId, qrCodeId, schoolId);
                     return retry.getId();
                 }
             }
@@ -196,6 +199,7 @@ public class CustomerService {
                     externalUserId, customer.getId(), e);
             }
 
+            upsertRelation(customer.getId(), userId, qrCodeId, schoolId);
             return customer.getId();
 
         } catch (DataIntegrityViolationException e) {
@@ -212,11 +216,23 @@ public class CustomerService {
                     retry.setSchoolId(schoolId);
                 }
                 customerRepo.save(retry);
+                upsertRelation(retry.getId(), userId, qrCodeId, schoolId);
                 return retry.getId();
             }
             // 极端情况：唯一键冲突但查不到记录 → 可能是 DB 异常
             log.error("[ALERT] 并发插入冲突后仍查不到客户: external={}", externalUserId);
             throw new RuntimeException("并发插入异常: " + externalUserId, e);
+        }
+    }
+
+    /**
+     * 挂关系写：仅当 state 非空且能反查到活码（{@code qrCodeId != null}）时才 upsert。
+     * state 为空（内部转移）时 {@code qrCodeId == null}，不写来源（由 Task 4 转移确认钩子负责）。
+     * 与 customer 写同一事务，来源字段 COALESCE（见 {@link CustomerRelationService#upsertActive}）。
+     */
+    private void upsertRelation(Long customerId, String userId, Long qrCodeId, String schoolId) {
+        if (qrCodeId != null && userId != null) {
+            customerRelationService.upsertActive(customerId, userId, qrCodeId, schoolId, LocalDateTime.now());
         }
     }
 

@@ -37,6 +37,7 @@ class CustomerServiceTest {
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private MessageGuardService messageGuardService;
     @Mock private EntityManager entityManager;
+    @Mock private CustomerRelationService customerRelationService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
