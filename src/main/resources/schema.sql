@@ -1024,3 +1024,24 @@ CREATE TABLE IF NOT EXISTS customer_deletion_event (
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
     INDEX idx_deletion_direction_time (direction, deleted_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户删除关系事件表';
+
+-- ============================================
+-- customer_relation：客户-员工关系表（镜像企微 follow_user）
+-- ============================================
+CREATE TABLE IF NOT EXISTS customer_relation (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT NOT NULL COMMENT '客户ID（customer.id）',
+    employee_userid VARCHAR(100) NOT NULL COMMENT '添加该客户的员工userid（= follow_user 元素）',
+    qr_code_id BIGINT COMMENT '来源活码ID（增量回调精确；全量同步从 customer 近似）',
+    school_id VARCHAR(50) COMMENT '来源学校ID（增量回调精确；全量同步从 customer 近似）',
+    add_time DATETIME COMMENT '该员工添加该客户的时间',
+    status ENUM('active','removed') NOT NULL DEFAULT 'active',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_customer_employee (customer_id, employee_userid),
+    INDEX idx_employee (employee_userid),
+    INDEX idx_qr (qr_code_id),
+    INDEX idx_school (school_id),
+    INDEX idx_status (status),
+    FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户-员工关系表（镜像企微follow_user）';

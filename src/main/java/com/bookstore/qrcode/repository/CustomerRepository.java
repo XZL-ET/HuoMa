@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.CustomerRelation;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -311,6 +312,26 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
         @Param("schoolId") String schoolId,
         @Param("start") LocalDateTime start,
         @Param("end") LocalDateTime end);
+
+    /**
+     * 在职继承定位：按 (接待员, 活码) 查窗口内、status=active、且无「该活码下进行中/已完成」转移记录的客户。
+     * 多校客户各自命中其扫码的活码；NOT EXISTS 按 (customer_id, qr_code_id) 排除，
+     * qr_code_id IS NULL 的历史转移记录降级为仅按 customer_id 判定（保守防重复转移）。
+     */
+    @Query("SELECT c FROM Customer c, CustomerRelation cr "
+        + "WHERE cr.customerId = c.id "
+        + "AND cr.employeeUserid = :employeeUserid "
+        + "AND cr.qrCodeId = :qrCodeId "
+        + "AND cr.status = 'active' "
+        + "AND cr.addTime >= :start AND cr.addTime < :end "
+        + "AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id "
+        + "AND (t.qrCodeId = :qrCodeId OR t.qrCodeId IS NULL) "
+        + "AND t.status IN ('pending_confirm', 'confirmed', 'api_failed')) "
+        + "ORDER BY cr.addTime ASC")
+    List<Customer> findForInheritance(@Param("employeeUserid") String employeeUserid,
+                                      @Param("qrCodeId") Long qrCodeId,
+                                      @Param("start") LocalDateTime start,
+                                      @Param("end") LocalDateTime end);
 
     /**
      * 分页查询需要数据修复的客户（名称缺失、unionid 缺失或头像缺失）。

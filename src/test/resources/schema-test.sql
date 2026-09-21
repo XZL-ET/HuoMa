@@ -467,3 +467,23 @@ CREATE TABLE IF NOT EXISTS customer_deletion_event (
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_deletion_direction_time ON customer_deletion_event (direction, deleted_at);
+
+-- customer_relation：客户-员工关系表
+CREATE TABLE IF NOT EXISTS customer_relation (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT NOT NULL,
+    employee_userid VARCHAR(100) NOT NULL,
+    qr_code_id BIGINT,
+    school_id VARCHAR(50),
+    add_time TIMESTAMP,
+    status VARCHAR(20) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active','removed')),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_customer_employee UNIQUE (customer_id, employee_userid),
+    FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_cr_employee ON customer_relation (employee_userid);
+CREATE INDEX IF NOT EXISTS idx_cr_qr ON customer_relation (qr_code_id);
+CREATE INDEX IF NOT EXISTS idx_cr_school ON customer_relation (school_id);
+CREATE INDEX IF NOT EXISTS idx_cr_status ON customer_relation (status);
