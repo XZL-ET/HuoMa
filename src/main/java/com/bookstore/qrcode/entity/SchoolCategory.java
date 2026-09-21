@@ -40,6 +40,9 @@ public class SchoolCategory {
     @Column(name = "default_form_template_id")
     private Long defaultFormTemplateId;
 
+    @Column(name = "grade_stages", length = 100)
+    private String gradeStages;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

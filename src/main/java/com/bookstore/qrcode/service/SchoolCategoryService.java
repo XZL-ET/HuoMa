@@ -40,7 +40,8 @@ public class SchoolCategoryService {
 
     @Transactional
     public SchoolCategory create(String name, Integer sortOrder,
-                                  String defaultWelcomeText, Long defaultFormTemplateId) {
+                                  String defaultWelcomeText, Long defaultFormTemplateId,
+                                  String gradeStages) {
         if (categoryRepo.existsByName(name)) {
             throw new RuntimeException("分类名称已存在: " + name);
         }
@@ -50,12 +51,14 @@ public class SchoolCategoryService {
             .defaultWelcomeText(defaultWelcomeText != null && defaultWelcomeText.isBlank()
                 ? null : defaultWelcomeText)
             .defaultFormTemplateId(defaultFormTemplateId)
+            .gradeStages(gradeStages != null && gradeStages.isBlank() ? null : gradeStages)
             .build());
     }
 
     @Transactional
     public SchoolCategory update(Long id, String name, Integer sortOrder,
-                                  String defaultWelcomeText, Long defaultFormTemplateId) {
+                                  String defaultWelcomeText, Long defaultFormTemplateId,
+                                  String gradeStages) {
         SchoolCategory c = getById(id);
         if (name != null && !name.equals(c.getName()) && categoryRepo.existsByName(name)) {
             throw new RuntimeException("分类名称已存在: " + name);
@@ -65,6 +68,7 @@ public class SchoolCategoryService {
         if (defaultWelcomeText != null)
             c.setDefaultWelcomeText(defaultWelcomeText.isBlank() ? null : defaultWelcomeText);
         c.setDefaultFormTemplateId(defaultFormTemplateId);  // null = 清空
+        c.setGradeStages(gradeStages != null && gradeStages.isBlank() ? null : gradeStages);
         return categoryRepo.save(c);
     }
 

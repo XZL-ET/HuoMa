@@ -62,9 +62,11 @@ public class SchoolCategoryController {
                          @RequestParam(required = false, defaultValue = "0") Integer sortOrder,
                          @RequestParam(required = false) String defaultWelcomeText,
                          @RequestParam(required = false) Long defaultFormTemplateId,
+                         @RequestParam(required = false) List<String> gradeStages,
                          RedirectAttributes redirect) {
         try {
-            categoryService.create(name, sortOrder, defaultWelcomeText, defaultFormTemplateId);
+            categoryService.create(name, sortOrder, defaultWelcomeText, defaultFormTemplateId,
+                joinStages(gradeStages));
             redirect.addFlashAttribute("message", "分类创建成功");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -79,9 +81,11 @@ public class SchoolCategoryController {
                          @RequestParam(required = false, defaultValue = "0") Integer sortOrder,
                          @RequestParam(required = false) String defaultWelcomeText,
                          @RequestParam(required = false) Long defaultFormTemplateId,
+                         @RequestParam(required = false) List<String> gradeStages,
                          RedirectAttributes redirect) {
         try {
-            categoryService.update(id, name, sortOrder, defaultWelcomeText, defaultFormTemplateId);
+            categoryService.update(id, name, sortOrder, defaultWelcomeText, defaultFormTemplateId,
+                joinStages(gradeStages));
             redirect.addFlashAttribute("message", "分类已更新");
         } catch (Exception e) {
             redirect.addFlashAttribute("error", e.getMessage());
@@ -113,5 +117,10 @@ public class SchoolCategoryController {
                                             @RequestParam(required = false) Long categoryId) {
         int n = schoolRepo.batchUpdateCategoryId(categoryId, schoolIds);
         return Map.of("ok", true, "count", n);
+    }
+
+    /** 学段 checkbox 组 → 逗号分隔字符串；空选/null → null（表示未配置） */
+    private String joinStages(List<String> gradeStages) {
+        return (gradeStages == null || gradeStages.isEmpty()) ? null : String.join(",", gradeStages);
     }
 }

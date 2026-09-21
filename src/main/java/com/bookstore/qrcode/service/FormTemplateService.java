@@ -21,6 +21,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -146,7 +147,7 @@ public class FormTemplateService {
                 try {
                     String fields = "[{\"name\":\"grade\",\"label\":\"年级\",\"type\":\"select\",\"required\":true,"
                         + "\"options\":[\"一年级\",\"二年级\",\"三年级\",\"四年级\",\"五年级\",\"六年级\","
-                        + "\"初一\",\"初二\",\"初三\",\"高一\",\"高二\",\"高三\"]},"
+                        + "\"七年级\",\"八年级\",\"九年级\",\"高一\",\"高二\",\"高三\"]},"
                         + "{\"name\":\"subject\",\"label\":\"科目（可多选）\",\"type\":\"multiselect\",\"required\":true,"
                         + "\"options\":[\"语文\",\"数学\",\"英语\",\"物理\",\"化学\",\"生物\",\"政治\",\"历史\",\"地理\"]}]";
                     return create(RESEND_TEMPLATE_NAME, "补发表单·送试题模板",
@@ -226,21 +227,25 @@ public class FormTemplateService {
             && qr.getSchoolId().startsWith(SchoolSelectionService.COUNTY_PREFIX);
     }
 
-    /** 图片版支持的学段；未分类学段无对应封面，回退全部年级 */
-    private static final Set<String> IMAGE_STAGES = Set.of("小学", "初中", "高中", "幼儿园");
+    /** 学段展开的固定顺序，保证年级顺序稳定（幼儿园→小学→初中→高中） */
+    private static final List<String> STAGE_ORDER = List.of("幼儿园", "小学", "初中", "高中");
 
     /**
-     * 图片版模式：按活码绑定学校的学段解析年级选项，复用县区码学段→年级映射；
-     * 无学段/学段不在支持范围（幼儿园等）返回全部年级。
+     * 图片版模式：按活码绑定学校分类的 grade_stages（逗号分隔学段）解析年级选项，
+     * 按固定顺序展开成年级；未配置学段/无分类返回全部年级。
      */
     public List<String> resolveImageGradeOptions(QrCode qr) {
         if (qr != null && qr.getSchoolId() != null) {
             School school = schoolRepo.findBySchoolIdAndDeletedFalse(qr.getSchoolId()).orElse(null);
             if (school != null && school.getCategoryId() != null) {
                 SchoolCategory cat = categoryRepo.findById(school.getCategoryId()).orElse(null);
-                if (cat != null && IMAGE_STAGES.contains(cat.getName())) {
-                    List<String> filtered = SchoolSelectionService.GRADE_MAP.get(cat.getName());
-                    if (filtered != null) return filtered;
+                if (cat != null && cat.getGradeStages() != null && !cat.getGradeStages().isBlank()) {
+                    Set<String> stages = new HashSet<>(List.of(cat.getGradeStages().split(",")));
+                    List<String> grades = STAGE_ORDER.stream()
+                        .filter(stages::contains)
+                        .flatMap(s -> SchoolSelectionService.GRADE_MAP.get(s).stream())
+                        .toList();
+                    if (!grades.isEmpty()) return grades;
                 }
             }
         }

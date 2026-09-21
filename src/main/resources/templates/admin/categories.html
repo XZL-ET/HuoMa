@@ -30,6 +30,7 @@
                 <th>名称</th>
                 <th>默认欢迎语</th>
                 <th>默认表单模板</th>
+                <th>学段</th>
                 <th style="width:80px">学校数</th>
                 <th style="width:160px">操作</th>
             </tr>
@@ -49,6 +50,10 @@
                     <span th:unless="${c.defaultFormTemplateId}" class="text-muted">—</span>
                 </td>
                 <td>
+                    <span th:if="${c.gradeStages}" class="text-muted small" th:text="${c.gradeStages}"></span>
+                    <span th:unless="${c.gradeStages}" class="text-muted">—</span>
+                </td>
+                <td>
                     <span class="badge bg-secondary"
                           th:text="${schoolCounts.getOrDefault(c.id, 0)}"></span>
                 </td>
@@ -58,6 +63,7 @@
                             th:data-sort-order="${c.sortOrder}"
                             th:data-welcome-text="${c.defaultWelcomeText}"
                             th:data-form-template-id="${c.defaultFormTemplateId}"
+                            th:data-grade-stages="${c.gradeStages}"
                             data-bs-toggle="modal" data-bs-target="#editModal">
                         ✏️ 编辑
                     </button>
@@ -108,6 +114,26 @@
                                     th:value="${t.id}" th:text="${t.name}"></option>
                         </select>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">年级学段（图片版年级选项）</label>
+                        <div class="form-text mb-1">勾选该分类包含的学段，图片版收集表单按此展示年级；不勾选则显示全部年级</div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="小学" id="createStage1">
+                            <label class="form-check-label" for="createStage1">小学</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="初中" id="createStage2">
+                            <label class="form-check-label" for="createStage2">初中</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="高中" id="createStage3">
+                            <label class="form-check-label" for="createStage3">高中</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="幼儿园" id="createStage4">
+                            <label class="form-check-label" for="createStage4">幼儿园</label>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -151,6 +177,26 @@
                                     th:value="${t.id}" th:text="${t.name}"></option>
                         </select>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">年级学段（图片版年级选项）</label>
+                        <div class="form-text mb-1">勾选该分类包含的学段，图片版收集表单按此展示年级；不勾选则显示全部年级</div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="小学" id="editStage1">
+                            <label class="form-check-label" for="editStage1">小学</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="初中" id="editStage2">
+                            <label class="form-check-label" for="editStage2">初中</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="高中" id="editStage3">
+                            <label class="form-check-label" for="editStage3">高中</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" name="gradeStages" value="幼儿园" id="editStage4">
+                            <label class="form-check-label" for="editStage4">幼儿园</label>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -172,6 +218,11 @@ document.querySelectorAll('.edit-btn').forEach(btn => {
         document.getElementById('editWelcomeText').value = this.getAttribute('data-welcome-text') || '';
         var ftId = this.getAttribute('data-form-template-id');
         document.getElementById('editFormTemplateId').value = ftId || '';
+        var stages = this.getAttribute('data-grade-stages') || '';
+        var selected = stages ? stages.split(',') : [];
+        document.querySelectorAll('#editModal input[name="gradeStages"]').forEach(function(cb) {
+            cb.checked = selected.indexOf(cb.value) >= 0;
+        });
     });
 });
 

@@ -447,6 +447,7 @@ CREATE TABLE IF NOT EXISTS school_category (
     sort_order INT NOT NULL DEFAULT 0,
     default_welcome_text VARCHAR(500),
     default_form_template_id BIGINT,
+    grade_stages VARCHAR(100),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uk_category_name UNIQUE (name)

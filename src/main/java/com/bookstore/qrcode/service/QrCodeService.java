@@ -1476,7 +1476,7 @@ public class QrCodeService {
                 config.put("collect_form", List.of(
                     Map.of("name", "grade", "label", "孩子年级", "type", "select",
                         "options", List.of("一年级","二年级","三年级","四年级","五年级","六年级",
-                            "初一","初二","初三","高一","高二","高三")),
+                            "七年级","八年级","九年级","高一","高二","高三")),
                     Map.of("name", "class", "label", "孩子班级", "type", "select",
                         "options", List.of("1班","2班","3班","4班","5班","6班","7班","8班","9班","10班",
                             "11班","12班","13班","14班","15班","16班","17班","18班","19班","20班")),

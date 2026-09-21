@@ -76,7 +76,7 @@ class WelcomeFormInheritanceIntegrationTest extends BaseIntegrationTest {
     @DisplayName("学校分类 增 → 查 → 改 → 删 全链路")
     void schoolCategoryCrud() {
         // 创建
-        SchoolCategory cat = categoryService.create("重点高中", 1, "欢迎语", null);
+        SchoolCategory cat = categoryService.create("重点高中", 1, "欢迎语", null, null);
         assertThat(cat.getId()).isNotNull();
         assertThat(cat.getName()).isEqualTo("重点高中");
 
@@ -85,7 +85,7 @@ class WelcomeFormInheritanceIntegrationTest extends BaseIntegrationTest {
         assertThat(found.getDefaultWelcomeText()).isEqualTo("欢迎语");
 
         // 更新
-        categoryService.update(cat.getId(), "普通高中", 2, "新欢迎语", null);
+        categoryService.update(cat.getId(), "普通高中", 2, "新欢迎语", null, null);
         assertThat(categoryService.getById(cat.getId()).getName()).isEqualTo("普通高中");
 
         // 删除
@@ -97,8 +97,8 @@ class WelcomeFormInheritanceIntegrationTest extends BaseIntegrationTest {
     @Test
     @DisplayName("学校分类 名称重复检查")
     void schoolCategoryDuplicateName() {
-        categoryService.create("初中", 1, null, null);
-        assertThatThrownBy(() -> categoryService.create("初中", 2, null, null))
+        categoryService.create("初中", 1, null, null, null);
+        assertThatThrownBy(() -> categoryService.create("初中", 2, null, null, null))
             .isInstanceOf(RuntimeException.class)
             .hasMessageContaining("已存在");
         // cleanup

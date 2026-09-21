@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,6 +78,10 @@ public interface SchoolRepository extends JpaRepository<School, Long> {
     /** 按区县 + 分类查未删除学校（县区码：按学段收窄） */
     List<School> findByRegionDistrictAndCategoryIdAndDeletedFalseOrderBySchoolName(
             String regionDistrict, Long categoryId);
+
+    /** 按区县 + 多个分类查未删除学校（县区码：学段匹配复合分类） */
+    List<School> findByRegionDistrictAndCategoryIdInAndDeletedFalseOrderBySchoolName(
+            String regionDistrict, Collection<Long> categoryIds);
 
     /** 按区县查未分类（categoryId 为 null）的未删除学校 */
     List<School> findByRegionDistrictAndCategoryIdIsNullAndDeletedFalseOrderBySchoolName(

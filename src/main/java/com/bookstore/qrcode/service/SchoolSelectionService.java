@@ -55,14 +55,23 @@ public class SchoolSelectionService {
             schools = schoolRepo
                 .findByRegionDistrictAndCategoryIdIsNullAndDeletedFalseOrderBySchoolName(district);
         } else {
-            Long categoryId = categoryRepo.findByName(categoryName)
-                .map(SchoolCategory::getId).orElse(null);
-            if (categoryId == null) {
-                log.warn("学段未找到对应分类: category={}", categoryName);
+            // 学段 → 学校：按分类 grade_stages 是否包含该学段匹配（含九年一贯制等复合分类）；
+            // grade_stages 为空时退回按分类名精确匹配（兼容未配置学段的老分类）
+            List<Long> categoryIds = categoryRepo.findAll().stream()
+                .filter(c -> {
+                    if (c.getGradeStages() != null && !c.getGradeStages().isBlank()) {
+                        return List.of(c.getGradeStages().split(",")).contains(categoryName);
+                    }
+                    return categoryName.equals(c.getName());
+                })
+                .map(SchoolCategory::getId)
+                .toList();
+            if (categoryIds.isEmpty()) {
+                log.warn("学段无匹配分类: stage={}", categoryName);
                 return List.of();
             }
             schools = schoolRepo
-                .findByRegionDistrictAndCategoryIdAndDeletedFalseOrderBySchoolName(district, categoryId);
+                .findByRegionDistrictAndCategoryIdInAndDeletedFalseOrderBySchoolName(district, categoryIds);
         }
         return schools.stream()
             .map(s -> new SchoolOption(s.getSchoolId(), s.getSchoolName()))

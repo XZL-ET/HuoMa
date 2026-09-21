@@ -82,6 +82,33 @@ class SchoolSelectionServiceTest extends BaseIntegrationTest {
     }
 
     @Test
+    void 复合分类学校出现在多个学段下() {
+        SchoolCategory composite = categoryRepo.save(SchoolCategory.builder()
+            .name("九年一贯制").sortOrder(5).gradeStages("小学,初中").build());
+        schoolRepo.save(School.builder().schoolId("c1").schoolName("白银实验学校")
+            .regionCity("白银市").regionDistrict("白银区").categoryId(composite.getId()).deleted(false).build());
+
+        assertThat(service.listSchools(countyQr.getId(), "小学"))
+            .extracting(SchoolSelectionService.SchoolOption::schoolName)
+            .containsExactly("白银实验学校");
+        assertThat(service.listSchools(countyQr.getId(), "初中"))
+            .extracting(SchoolSelectionService.SchoolOption::schoolName)
+            .containsExactly("白银实验学校");
+    }
+
+    @Test
+    void 中专学校出现在高中学段下() {
+        SchoolCategory zhongzhuan = categoryRepo.save(SchoolCategory.builder()
+            .name("中等专业学校").sortOrder(6).gradeStages("高中").build());
+        schoolRepo.save(School.builder().schoolId("zz1").schoolName("白银职教中心")
+            .regionCity("白银市").regionDistrict("白银区").categoryId(zhongzhuan.getId()).deleted(false).build());
+
+        assertThat(service.listSchools(countyQr.getId(), "高中"))
+            .extracting(SchoolSelectionService.SchoolOption::schoolName)
+            .containsExactly("白银职教中心");
+    }
+
+    @Test
     void 按学段返回年级枚举() {
         assertThat(service.listGrades("小学"))
             .containsExactly("一年级", "二年级", "三年级", "四年级", "五年级", "六年级");

@@ -914,6 +914,31 @@ SET @stmt = (SELECT IF(
     'SELECT 1'));
 PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- school_category: grade_stages 列（学段列表，逗号分隔，空/NULL=图片版兜底全部年级）
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'school_category' AND COLUMN_NAME = 'grade_stages') = 0,
+    'ALTER TABLE school_category ADD COLUMN grade_stages VARCHAR(100) COMMENT ''学段列表（逗号分隔，如 小学,初中），空=兜底全部年级''',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 回填现有分类的学段（幂等：仅当 grade_stages 为空时回填，不覆盖运营后续修改）
+UPDATE school_category SET grade_stages='小学'       WHERE name='小学'       AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='初中'       WHERE name='初中'       AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='高中'       WHERE name='高中'       AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='幼儿园'     WHERE name='幼儿园'     AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='小学,初中'     WHERE name='九年一贯制'   AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='初中,高中'     WHERE name='完全中学'    AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='小学,初中,高中' WHERE name='十二年制'    AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='幼儿园,小学'   WHERE name='幼小'       AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='幼儿园,小学,初中' WHERE name='幼小初'  AND (grade_stages IS NULL OR grade_stages='');
+UPDATE school_category SET grade_stages='高中'       WHERE name='中等专业学校' AND (grade_stages IS NULL OR grade_stages='');
+
+-- 统一年级命名：初一/初二/初三 → 七年级/八年级/九年级（与图片版/县区码一致，避免标签分裂）
+UPDATE form_template
+SET fields = REPLACE(REPLACE(REPLACE(fields, '初一', '七年级'), '初二', '八年级'), '初三', '九年级')
+WHERE fields LIKE '%初一%' OR fields LIKE '%初二%' OR fields LIKE '%初三%';
+
 -- ============================================
 -- 数据修复（幂等 — 每次启动执行，填补 V4/V6 未被 Flyway 覆盖的缺口）
 -- ============================================
