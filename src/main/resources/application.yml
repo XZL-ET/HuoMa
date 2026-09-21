@@ -38,6 +38,14 @@ upload:
   card-pic-dir: ${UPLOAD_CARD_PIC_DIR:./data/uploads/card-pics}   # 表单模板卡片图片上传目录
   grade-cover-dir: ${UPLOAD_GRADE_COVER_DIR:./data/uploads/grade-covers}   # 年级语文课本封面图上传目录
 
+# 对象存储：阿里云 OSS（配置齐全则封面图/卡片图走 OSS，否则回退本地磁盘）
+oss:
+  endpoint: ${OSS_ENDPOINT:}                      # 如 oss-cn-hangzhou.aliyuncs.com
+  access-key-id: ${OSS_ACCESS_KEY_ID:}
+  access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+  bucket: ${OSS_BUCKET:}                          # 公共读 bucket
+  public-base-url: ${OSS_PUBLIC_BASE_URL:}        # 可选；缺省 = https://{bucket}.{endpoint}
+
 # Actuator 健康检查（供 K8s 探针 / 负载均衡器使用）
 management:
   endpoints:

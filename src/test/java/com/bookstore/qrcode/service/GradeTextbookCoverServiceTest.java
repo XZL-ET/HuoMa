@@ -21,20 +21,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @DataJpaTest
 @ActiveProfiles("test")
-@Import(GradeTextbookCoverService.class)
+@Import({GradeTextbookCoverService.class, FileStorageService.class})
 @Sql(scripts = "classpath:schema-test.sql")
 @DisplayName("GradeTextbookCoverService 年级课本封面")
 class GradeTextbookCoverServiceTest {
 
     @Autowired private GradeTextbookCoverService service;
     @Autowired private GradeTextbookCoverRepository repo;
+    @Autowired private FileStorageService fileStorageService;
 
     @TempDir
     Path tempDir;
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(service, "gradeCoverDir", tempDir.toString());
+        ReflectionTestUtils.setField(fileStorageService, "gradeCoverDir", tempDir.toString());
     }
 
     @Test

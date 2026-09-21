@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.LoginSuccessHandler;
 import com.bookstore.qrcode.config.SecurityConfig;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
+import com.bookstore.qrcode.service.FileStorageService;
 import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.GradeTextbookCoverService;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +32,7 @@ class FormTemplateControllerWebTest {
     @MockBean private FormTemplateService templateService;
     @MockBean private SystemConfigRepository systemConfigRepo;
     @MockBean private GradeTextbookCoverService gradeTextbookCoverService;
+    @MockBean private FileStorageService fileStorageService;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
     @MockBean private LoginSuccessHandler loginSuccessHandler;
     @MockBean private EmployeeRepository employeeRepo;

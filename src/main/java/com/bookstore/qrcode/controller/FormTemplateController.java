@@ -2,24 +2,20 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.entity.SystemConfig;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
+import com.bookstore.qrcode.service.FileStorageService;
 import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.GradeTextbookCoverService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
 
 @Slf4j
 @Controller
@@ -31,66 +27,7 @@ public class FormTemplateController {
     private final SystemConfigRepository systemConfigRepo;
     private final GradeTextbookCoverService gradeTextbookCoverService;
     private final ObjectMapper objectMapper;
-
-    @Value("${upload.card-pic-dir:./data/uploads/card-pics}")
-    private String cardPicDir;
-
-    @Value("${upload.grade-cover-dir:./data/uploads/grade-covers}")
-    private String gradeCoverDir;
-
-    private static final Set<String> ALLOWED_EXT = Set.of("png", "jpg", "jpeg", "gif", "webp");
-
-    /** 保存上传的卡片图片，返回访问路径 */
-    private String saveCardPic(MultipartFile file) {
-        if (file == null || file.isEmpty()) return null;
-        try {
-            Path dir = Path.of(cardPicDir).toAbsolutePath().normalize();
-            Files.createDirectories(dir);
-            String origName = file.getOriginalFilename();
-            String ext = "";
-            if (origName != null && origName.contains(".")) {
-                ext = origName.substring(origName.lastIndexOf('.'));
-            }
-            String extKey = ext.length() > 1 ? ext.substring(1).toLowerCase() : "";
-            if (!ALLOWED_EXT.contains(extKey)) {
-                throw new RuntimeException("不支持的图片格式: " + ext);
-            }
-            String filename = UUID.randomUUID().toString().substring(0, 8) + ext;
-            Path target = dir.resolve(filename);
-            file.transferTo(target.toFile());
-            log.info("Card pic saved: {}", target);
-            return "/uploads/card-pics/" + filename;
-        } catch (Exception e) {
-            log.error("Failed to save card pic", e);
-            throw new RuntimeException("图片上传失败: " + e.getMessage());
-        }
-    }
-
-    /** 保存上传的年级课本封面图，返回访问路径。 */
-    private String saveGradeCover(MultipartFile file) {
-        if (file == null || file.isEmpty()) return null;
-        try {
-            Path dir = Path.of(gradeCoverDir).toAbsolutePath().normalize();
-            Files.createDirectories(dir);
-            String origName = file.getOriginalFilename();
-            String ext = "";
-            if (origName != null && origName.contains(".")) {
-                ext = origName.substring(origName.lastIndexOf('.'));
-            }
-            String extKey = ext.length() > 1 ? ext.substring(1).toLowerCase() : "";
-            if (!ALLOWED_EXT.contains(extKey)) {
-                throw new RuntimeException("不支持的图片格式: " + ext);
-            }
-            String filename = UUID.randomUUID().toString().substring(0, 8) + ext;
-            Path target = dir.resolve(filename);
-            file.transferTo(target.toFile());
-            log.info("Grade cover saved: {}", target);
-            return "/uploads/grade-covers/" + filename;
-        } catch (Exception e) {
-            log.error("Failed to save grade cover", e);
-            throw new RuntimeException("图片上传失败: " + e.getMessage());
-        }
-    }
+    private final FileStorageService fileStorageService;
 
     private String currentVersion() {
         SystemConfig cfg = systemConfigRepo.findById(FormTemplateService.VERSION_CONFIG_KEY).orElse(null);
@@ -142,7 +79,7 @@ public class FormTemplateController {
                          @RequestParam(required = false) String remarkTemplate,
                          RedirectAttributes redirect) {
         try {
-            String cardPicUrl = saveCardPic(cardPicFile);
+            String cardPicUrl = fileStorageService.store(cardPicFile, "card-pics");
             templateService.create(name, description, subtitle, cardTitle, cardDesc, cardPicUrl,
                 fields, tagMapping, remarkTemplate);
             redirect.addFlashAttribute("message", "模板创建成功");
@@ -171,7 +108,7 @@ public class FormTemplateController {
                          @RequestParam(required = false) String remarkTemplate,
                          RedirectAttributes redirect) {
         try {
-            String newPicUrl = saveCardPic(cardPicFile);
+            String newPicUrl = fileStorageService.store(cardPicFile, "card-pics");
             // 新上传的图片优先；未上传则保留原有图片
             String cardPicUrl = (newPicUrl != null) ? newPicUrl : existingCardPicUrl;
             templateService.update(id, name, description, subtitle, cardTitle, cardDesc, cardPicUrl,
@@ -222,7 +159,7 @@ public class FormTemplateController {
                                                 @RequestParam MultipartFile file) {
         Map<String, Object> result = new LinkedHashMap<>();
         try {
-            String url = saveGradeCover(file);
+            String url = fileStorageService.store(file, "grade-covers");
             gradeTextbookCoverService.save(grade, url);
             result.put("success", true);
             result.put("url", url);
