@@ -3,12 +3,14 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.CustomerRelation;
 import com.bookstore.qrcode.entity.CustomerRelation.RelationStatus;
 import com.bookstore.qrcode.repository.CustomerRelationRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -22,6 +24,7 @@ import static org.mockito.Mockito.*;
 class CustomerRelationServiceTest {
 
     @Mock private CustomerRelationRepository relationRepo;
+    @Mock private EntityManager entityManager;
     @InjectMocks private CustomerRelationService service;
 
     @Test
@@ -52,6 +55,31 @@ class CustomerRelationServiceTest {
         assertThat(existing.getQrCodeId()).isEqualTo(10L);   // 未被 null 覆盖
         assertThat(existing.getSchoolId()).isEqualTo("SCHOOL-1");
         verify(relationRepo).save(existing);
+    }
+
+    @Test
+    @DisplayName("upsertActive — 并发插入冲突（唯一键）时重查更新，不向上抛异常")
+    void upsertRecoversFromConcurrentInsertConflict() {
+        LocalDateTime now = LocalDateTime.now();
+        CustomerRelation winner = CustomerRelation.builder()
+                .id(99L).customerId(1L).employeeUserid("recA")
+                .status(RelationStatus.active).build(); // 赢家来源字段为 null，需 COALESCE 回填
+
+        when(relationRepo.findByCustomerIdAndEmployeeUserid(1L, "recA"))
+                .thenReturn(Optional.empty())          // 并发下首次查空 → 走 INSERT
+                .thenReturn(Optional.of(winner));       // 冲突后重查 → 拿到赢家
+        doThrow(new DataIntegrityViolationException("dup uk_customer_employee"))
+                .doReturn(winner)
+                .when(relationRepo).save(any(CustomerRelation.class));
+
+        service.upsertActive(1L, "recA", 10L, "SCHOOL-1", now);
+
+        assertThat(winner.getQrCodeId()).isEqualTo(10L);      // 恢复路径 COALESCE 回填来源
+        assertThat(winner.getSchoolId()).isEqualTo("SCHOOL-1");
+        assertThat(winner.getAddTime()).isEqualTo(now);
+        assertThat(winner.getStatus()).isEqualTo(RelationStatus.active);
+        verify(relationRepo, times(2)).save(any(CustomerRelation.class));
+        verify(entityManager, never()).clear();   // 绝不能 clear 整个上下文（会丢失外层 customer UPDATE）
     }
 
     @Test
