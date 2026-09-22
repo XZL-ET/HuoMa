@@ -3,7 +3,6 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.CustomerRelation;
 import com.bookstore.qrcode.entity.CustomerRelation.RelationStatus;
 import com.bookstore.qrcode.repository.CustomerRelationRepository;
-import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,7 +15,9 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,21 +25,19 @@ import static org.mockito.Mockito.*;
 class CustomerRelationServiceTest {
 
     @Mock private CustomerRelationRepository relationRepo;
-    @Mock private EntityManager entityManager;
+    @Mock private CustomerRelationInsertService insertService;
     @InjectMocks private CustomerRelationService service;
 
     @Test
-    @DisplayName("upsertActive — 新关系写入来源字段")
+    @DisplayName("upsertActive — 新关系走独立事务插入，来源字段直接写入")
     void upsertNewRelationWritesSource() {
         when(relationRepo.findByCustomerIdAndEmployeeUserid(1L, "recA")).thenReturn(Optional.empty());
         LocalDateTime now = LocalDateTime.now();
 
         service.upsertActive(1L, "recA", 10L, "SCHOOL-1", now);
 
-        verify(relationRepo).save(argThat(r -> r.getQrCodeId() == 10L
-                && "SCHOOL-1".equals(r.getSchoolId())
-                && r.getAddTime().equals(now)
-                && r.getStatus() == RelationStatus.active));
+        verify(insertService).insertActive(eq(1L), eq("recA"), eq(10L), eq("SCHOOL-1"), eq(now));
+        verify(relationRepo, never()).save(any(CustomerRelation.class));
     }
 
     @Test
@@ -55,6 +54,7 @@ class CustomerRelationServiceTest {
         assertThat(existing.getQrCodeId()).isEqualTo(10L);   // 未被 null 覆盖
         assertThat(existing.getSchoolId()).isEqualTo("SCHOOL-1");
         verify(relationRepo).save(existing);
+        verify(insertService, never()).insertActive(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -69,8 +69,7 @@ class CustomerRelationServiceTest {
                 .thenReturn(Optional.empty())          // 并发下首次查空 → 走 INSERT
                 .thenReturn(Optional.of(winner));       // 冲突后重查 → 拿到赢家
         doThrow(new DataIntegrityViolationException("dup uk_customer_employee"))
-                .doReturn(winner)
-                .when(relationRepo).save(any(CustomerRelation.class));
+                .when(insertService).insertActive(eq(1L), eq("recA"), eq(10L), eq("SCHOOL-1"), eq(now));
 
         service.upsertActive(1L, "recA", 10L, "SCHOOL-1", now);
 
@@ -78,27 +77,22 @@ class CustomerRelationServiceTest {
         assertThat(winner.getSchoolId()).isEqualTo("SCHOOL-1");
         assertThat(winner.getAddTime()).isEqualTo(now);
         assertThat(winner.getStatus()).isEqualTo(RelationStatus.active);
-        verify(relationRepo, times(2)).save(any(CustomerRelation.class));
-        verify(entityManager, never()).clear();   // 绝不能 clear 整个上下文（会丢失外层 customer UPDATE）
+        verify(relationRepo).save(winner);
     }
 
     @Test
-    @DisplayName("upsertActive — 新建实体(id=null)冲突时不 detach（detach 空 id 会抛 IllegalStateException）")
-    void upsertConflictOnNewEntitySkipsDetach() {
-        CustomerRelation winner = CustomerRelation.builder()
-                .id(99L).customerId(1L).employeeUserid("recA")
-                .status(RelationStatus.active).build();
+    @DisplayName("upsertActive — 冲突后重查仍查不到（非并发冲突）时原样抛出")
+    void upsertRethrowsWhenWinnerMissing() {
         when(relationRepo.findByCustomerIdAndEmployeeUserid(1L, "recA"))
-                .thenReturn(Optional.empty())
-                .thenReturn(Optional.of(winner));
+                .thenReturn(Optional.empty())          // 首次查空
+                .thenReturn(Optional.empty());          // 冲突后重查仍空
         doThrow(new DataIntegrityViolationException("dup uk_customer_employee"))
-                .doReturn(winner)
-                .when(relationRepo).save(any(CustomerRelation.class));
+                .when(insertService).insertActive(eq(1L), eq("recA"), any(), any(), any());
 
-        service.upsertActive(1L, "recA", 10L, "SCHOOL-1", LocalDateTime.now());
+        assertThatThrownBy(() -> service.upsertActive(1L, "recA", 10L, "SCHOOL-1", LocalDateTime.now()))
+                .isInstanceOf(DataIntegrityViolationException.class);
 
-        verify(entityManager, never()).detach(any());   // 新建实体 id=null，绝不能 detach
-        verify(entityManager, never()).clear();
+        verify(relationRepo, never()).save(any(CustomerRelation.class));
     }
 
     @Test

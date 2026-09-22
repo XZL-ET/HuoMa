@@ -8,7 +8,6 @@ import com.bookstore.qrcode.wecom.WecomApiException;
 import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -56,7 +55,7 @@ public class CustomerService {
     private final StringRedisTemplate redisTemplate;
     private final MessageGuardService messageGuardService;
     private final ObjectMapper objectMapper;
-    private final EntityManager entityManager;
+    private final CustomerInsertService customerInsertService;
     private final CustomerRelationService customerRelationService;
 
     /**
@@ -171,18 +170,7 @@ public class CustomerService {
             });
 
         try {
-            Customer customer = Customer.builder()
-                .externalUserid(externalUserId)
-                .name("未知")            // 占位，DataFillWorker 异步补全
-                .type(1)
-                .addedAgent(userId)
-                .currentAgent(userId)
-                .sourceQrId(qrCodeId)
-                .schoolId(schoolId)
-                .status(Customer.CustomerStatus.active)
-                .addTime(LocalDateTime.now())
-                .build();
-            customer = customerRepo.save(customer);
+            Customer customer = customerInsertService.insertNew(externalUserId, userId, qrCodeId, schoolId);
 
             // 发布数据补全事件 → DataFillWorker 异步消费
             try {
@@ -203,10 +191,9 @@ public class CustomerService {
             return customer.getId();
 
         } catch (DataIntegrityViolationException e) {
-            // 并发插入冲突 → 清除 Hibernate Session 污染（防止 session 被标记为 rollback-only）
-            entityManager.clear();
+            // 并发插入冲突：REQUIRES_NEW 事务已独立回滚，外层事务未被标 rollback-only，无需 clear()
             // 此时赢家已提交，查库必然能查到 → 更新而非插入
-            log.warn("客户并发插入冲突，清除 Session 后查库更新: external={}", externalUserId);
+            log.warn("客户并发插入冲突，重查后更新: external={}", externalUserId);
             Customer retry = customerRepo.findByExternalUserid(externalUserId).orElse(null);
             if (retry != null) {
                 retry.setCurrentAgent(userId);

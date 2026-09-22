@@ -8,7 +8,6 @@ import com.bookstore.qrcode.wecom.WecomPermanentException;
 import com.bookstore.qrcode.wecom.WecomTransientException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,7 +35,7 @@ class CustomerServiceTest {
     @Mock private WecomApiClient wecomApiClient;
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private MessageGuardService messageGuardService;
-    @Mock private EntityManager entityManager;
+    @Mock private CustomerInsertService customerInsertService;
     @Mock private CustomerRelationService customerRelationService;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 

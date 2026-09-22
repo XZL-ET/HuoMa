@@ -7,15 +7,21 @@ import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.config.ObjectMapperTestConfig;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.when;
 
 @DataJpaTest
 @ActiveProfiles("test")
@@ -25,8 +31,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FormTemplateServiceTest {
 
     @Autowired private FormTemplateService service;
+    @MockBean private FormTemplateInsertService insertService;
     @Autowired private FormTemplateRepository templateRepo;
     @Autowired private SystemConfigRepository systemConfigRepo;
+
+    @BeforeEach
+    void stubInsertToDelegateToRepo() {
+        // @DataJpaTest 下让 mock 委托真实 save，避免 REQUIRES_NEW 独立提交污染测试事务
+        when(insertService.insert(any(FormTemplate.class)))
+            .thenAnswer(inv -> templateRepo.save(inv.getArgument(0)));
+    }
 
     @Test
     void ensureCountyTemplate_幂等_两次调用返回同一条记录() {
@@ -52,6 +66,18 @@ class FormTemplateServiceTest {
         assertThat(got.getId()).isEqualTo(existing.getId());
         assertThat(templateRepo.findAll().stream()
                 .filter(t -> "县区码默认模板".equals(t.getName())).count()).isEqualTo(1);
+    }
+
+    @Test
+    void ensureCountyTemplate_并发插入冲突时复用已有() {
+        FormTemplate winner = templateRepo.saveAndFlush(FormTemplate.builder()
+                .name("县区码默认模板").fields("[]").tagMapping("{}").build());
+        doThrow(new DataIntegrityViolationException("dup uk_form_template_name"))
+                .when(insertService).insert(any(FormTemplate.class));
+
+        FormTemplate got = service.ensureCountyTemplate();
+
+        assertThat(got.getId()).isEqualTo(winner.getId());
     }
 
     @Test

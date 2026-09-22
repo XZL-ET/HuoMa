@@ -166,9 +166,11 @@ CREATE TABLE IF NOT EXISTS tag (
     type VARCHAR(20) NOT NULL DEFAULT 'manual'
         CHECK (type IN ('system','form','manual')),
     parent_id BIGINT,
+    group_keyword VARCHAR(100) NOT NULL DEFAULT '',
     wecom_tag_id VARCHAR(50),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (parent_id) REFERENCES tag(id)
+    FOREIGN KEY (parent_id) REFERENCES tag(id),
+    CONSTRAINT uk_tag_name_group UNIQUE (name, group_keyword)
 );
 CREATE INDEX IF NOT EXISTS idx_tag_type ON tag (type);
 

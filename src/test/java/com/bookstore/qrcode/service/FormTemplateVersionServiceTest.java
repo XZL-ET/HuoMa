@@ -3,15 +3,19 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.config.ObjectMapperTestConfig;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 @DataJpaTest
 @ActiveProfiles("test")
@@ -21,12 +25,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FormTemplateVersionServiceTest {
 
     @Autowired private FormTemplateService service;
+    @MockBean private FormTemplateInsertService insertService;
     @Autowired private FormTemplateRepository templateRepo;
     @Autowired private QrCodeRepository qrCodeRepo;
     @Autowired private QrCodeGroupRepository groupRepo;
     @Autowired private SchoolRepository schoolRepo;
     @Autowired private SchoolCategoryRepository categoryRepo;
     @Autowired private SystemConfigRepository configRepo;
+
+    @BeforeEach
+    void stubInsertToDelegateToRepo() {
+        // @DataJpaTest 下让 mock 委托真实 save，避免 REQUIRES_NEW 独立提交污染测试事务
+        when(insertService.insert(any(FormTemplate.class)))
+            .thenAnswer(inv -> templateRepo.save(inv.getArgument(0)));
+    }
 
     private QrCode saveQr() {
         return qrCodeRepo.save(QrCode.builder()

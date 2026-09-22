@@ -42,6 +42,8 @@ public class TagService {
 
     private final TagRepository tagRepo;
     private final CustomerTagRepository customerTagRepo;
+    private final TagInsertService tagInsertService;
+    private final CustomerTagInsertService customerTagInsertService;
     private final CustomerRepository customerRepo;
     private final QrCodeRepository qrCodeRepo;
     private final FormTemplateRepository formTemplateRepo;
@@ -251,15 +253,10 @@ public class TagService {
                 tag = existing;
             } else {
                 // 先保存本地记录，再创建企微标签（防止企微创建成功但 DB 保存失败导致孤儿标签）
-                Tag newTag = Tag.builder()
-                    .name(name)
-                    .type(type)
-                    .parentId(parentId)
-                    .groupKeyword(gk)
-                    .wecomTagId(null)  // 先留空，企微创建成功后再回填
-                    .build();
+                // 插入走 REQUIRES_NEW 独立事务：并发撞唯一键时该事务单独回滚，不毒化调用方事务，
+                // 下方 catch 里的重查复用才真正生效（见 TagInsertService）。
                 try {
-                    tag = tagRepo.save(newTag);
+                    tag = tagInsertService.insertNew(name, type, parentId, gk);
                 } catch (org.springframework.dao.DataIntegrityViolationException e) {
                     // 并发创建保护（JVM 同步块 + DB 唯一约束双重保险）：
                     // 多实例部署时另一个实例可能已抢先创建同名+同组标签
@@ -578,12 +575,9 @@ public class TagService {
             return;
         }
         try {
-            CustomerTag ct = CustomerTag.builder()
-                .customerId(customerId)
-                .tagId(tagId)
-                .source(CustomerTag.TagSource.valueOf(source))
-                .build();
-            customerTagRepo.save(ct);
+            // 插入走 REQUIRES_NEW 独立事务：即使 existsBy 前置检查漏过的极端并发撞唯一键，
+            // 也只回滚该独立事务，不毒化外层打标事务（见 CustomerTagInsertService）
+            customerTagInsertService.insert(customerId, tagId, source);
         } catch (Exception ignored) {
             // 极端并发下仍可能冲突（check-then-act 竞态），忽略
         }

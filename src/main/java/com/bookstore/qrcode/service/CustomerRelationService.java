@@ -3,7 +3,6 @@ package com.bookstore.qrcode.service;
 import com.bookstore.qrcode.entity.CustomerRelation;
 import com.bookstore.qrcode.entity.CustomerRelation.RelationStatus;
 import com.bookstore.qrcode.repository.CustomerRelationRepository;
-import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -18,36 +17,34 @@ import java.time.LocalDateTime;
 public class CustomerRelationService {
 
     private final CustomerRelationRepository relationRepo;
-    private final EntityManager entityManager;
+    private final CustomerRelationInsertService insertService;
 
     /**
      * upsert active 关系。来源字段（qr_code_id/school_id/add_time）仅在现有值为 null 时写入，
      * 绝不覆盖增量回调已写的精确值（COALESCE 语义，spec §4.4 铁律 1）。
      *
      * <p>唯一键 (customer_id, employee_userid) 使关系写天然幂等。但「先 findBy 再 save」在
-     * 并发回调（加好友回调双触发）下会双双查空、双双 INSERT，后者触发
-     * {@link DataIntegrityViolationException}。这里捕获冲突后重查更新（spec §4.4 铁律 3），
-     * 并且只 detach 失败的那条关系，绝不清空整个持久化上下文——否则会 detach 外层事务里
-     * 已 {@code save} 的 customer，静默丢失其 UPDATE。
+     * 并发回调（加好友回调双触发）下会双双查空、双双 INSERT。为避免仓库 {@code save} 的
+     * {@code @Transactional} 把共享事务标成 rollback-only（使补写静默回滚），插入走
+     * {@link CustomerRelationInsertService#insertActive} 的 {@code REQUIRES_NEW} 独立事务：
+     * 冲突时该事务单独回滚，外层事务不受污染，再重查赢家回填（spec §4.4 铁律 3）。
      */
     @Transactional
     public void upsertActive(Long customerId, String employeeUserid,
                              Long qrCodeId, String schoolId, LocalDateTime addTime) {
         CustomerRelation rel = relationRepo.findByCustomerIdAndEmployeeUserid(customerId, employeeUserid)
-            .orElseGet(() -> CustomerRelation.builder()
-                .customerId(customerId).employeeUserid(employeeUserid)
-                .status(RelationStatus.active).build());
-        applySource(rel, qrCodeId, schoolId, addTime);
-        try {
+            .orElse(null);
+        if (rel != null) {
+            applySource(rel, qrCodeId, schoolId, addTime);
             relationRepo.save(rel);
+            return;
+        }
+
+        try {
+            insertService.insertActive(customerId, employeeUserid, qrCodeId, schoolId, addTime);
         } catch (DataIntegrityViolationException e) {
-            // 并发插入冲突：另一线程已写入同一 (customer_id, employee_userid)。
-            // 只 detach 失败的这条关系，保留外层事务里 pending 的 customer UPDATE（绝不 clear()）。
-            // 仅当 rel 已持久化（id 非空）才 detach：新建实体 INSERT 失败时 id 仍为 null，
-            // detach(null-id) 会抛 IllegalStateException（Hibernate 无法生成 EntityKey）。
-            if (rel.getId() != null) {
-                entityManager.detach(rel);
-            }
+            // 并发插入冲突：REQUIRES_NEW 事务已独立回滚，外层事务未被标 rollback-only。
+            // 赢家已提交，READ_COMMITTED 下重查可见 → 更新而非插入。
             log.warn("关系并发插入冲突，重查后更新: customerId={}, employee={}", customerId, employeeUserid);
             CustomerRelation winner = relationRepo.findByCustomerIdAndEmployeeUserid(customerId, employeeUserid)
                 .orElse(null);

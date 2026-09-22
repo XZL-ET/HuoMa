@@ -32,6 +32,7 @@ import java.util.Set;
 public class FormTemplateService {
 
     private final FormTemplateRepository templateRepo;
+    private final FormTemplateInsertService insertService;
     private final QrCodeRepository qrCodeRepo;
     private final QrCodeGroupRepository groupRepo;
     private final SchoolCategoryRepository categoryRepo;
@@ -109,7 +110,9 @@ public class FormTemplateService {
     public FormTemplate create(String name, String description, String subtitle,
                                 String cardTitle, String cardDesc, String cardPicUrl,
                                 String fields, String tagMapping, String remarkTemplate) {
-        return templateRepo.save(FormTemplate.builder()
+        // 插入走 REQUIRES_NEW 独立事务：并发撞唯一键时该事务单独回滚，不毒化 ensure 方法的外层事务，
+        // 使 ensure 里 catch DataIntegrityViolationException 后的重查复用真正生效（见 FormTemplateInsertService）。
+        return insertService.insert(FormTemplate.builder()
             .name(name).description(description).subtitle(subtitle)
             .cardTitle(cardTitle).cardDesc(cardDesc).cardPicUrl(cardPicUrl)
             .fields(fields).tagMapping(tagMapping).remarkTemplate(remarkTemplate).build());
