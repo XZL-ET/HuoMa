@@ -31,6 +31,17 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     List<CustomerTransfer> findByCustomerId(Long customerId);
 
     /**
+     * 查询活码 ID 为空的历史转移记录。
+     * <p>
+     * 用于 {@code CustomerTransferQrBackfillService} 一次性回填迁移：
+     * 早期转移记录未写入 qr_code_id，需据 customer.school_id 反查活码后补齐。
+     * </p>
+     *
+     * @return qr_code_id 为 NULL 的转移记录列表
+     */
+    List<CustomerTransfer> findByQrCodeIdIsNull();
+
+    /**
      * 根据活码 ID 分页查询转移记录，按转移时间倒序排列。
      *
      * @param qrCodeId 活码 ID

@@ -487,3 +487,6 @@ CREATE INDEX IF NOT EXISTS idx_cr_employee ON customer_relation (employee_userid
 CREATE INDEX IF NOT EXISTS idx_cr_qr ON customer_relation (qr_code_id);
 CREATE INDEX IF NOT EXISTS idx_cr_school ON customer_relation (school_id);
 CREATE INDEX IF NOT EXISTS idx_cr_status ON customer_relation (status);
+
+-- customer_transfer：复合索引 (customer_id, qr_code_id)
+CREATE INDEX IF NOT EXISTS idx_transfer_customer_qr ON customer_transfer (customer_id, qr_code_id);

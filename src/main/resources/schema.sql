@@ -1045,3 +1045,15 @@ CREATE TABLE IF NOT EXISTS customer_relation (
     INDEX idx_status (status),
     FOREIGN KEY (customer_id) REFERENCES customer(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户-员工关系表（镜像企微follow_user）';
+
+-- ============================================
+-- customer_transfer：复合索引 (customer_id, qr_code_id)
+-- 服务去重维度切换（Task 6）后按 (customer_id, qr_code_id) 定位转移记录，
+-- 动态 SQL 实现幂等创建（MySQL 8.0 不支持 CREATE INDEX IF NOT EXISTS）。
+-- ============================================
+SET @stmt = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'customer_transfer' AND INDEX_NAME = 'idx_transfer_customer_qr') = 0,
+    'CREATE INDEX idx_transfer_customer_qr ON customer_transfer (customer_id, qr_code_id)',
+    'SELECT 1'));
+PREPARE stmt FROM @stmt; EXECUTE stmt; DEALLOCATE PREPARE stmt;
