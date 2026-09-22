@@ -1,5 +1,7 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.FormTemplate;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -64,5 +66,31 @@ class TagServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(
                 () -> tagService.getOrCreateTag("北京", Tag.TagType.system, null, "市州"))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("tagFromForm — 客户已删除时跳过打标")
+    void tagFromForm_skipsDeletedCustomer() {
+        when(customerRepo.findByExternalUserid("wmXXX"))
+            .thenReturn(Optional.of(Customer.builder()
+                .externalUserid("wmXXX").status(Customer.CustomerStatus.deleted).build()));
+
+        tagService.tagFromForm("wmXXX", "user1", "一年级", "1班", null);
+
+        verify(tagRepo, never()).findFirstByNameAndGroupKeyword(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("applyFormTags — 客户已删除时跳过打标")
+    void applyFormTags_skipsDeletedCustomer() {
+        when(formTemplateRepo.findById(1L))
+            .thenReturn(Optional.of(FormTemplate.builder().id(1L).fields("[]").tagMapping("{}").build()));
+        when(customerRepo.findByExternalUserid("wmXXX"))
+            .thenReturn(Optional.of(Customer.builder()
+                .externalUserid("wmXXX").status(Customer.CustomerStatus.deleted).build()));
+
+        tagService.applyFormTags("wmXXX", "user1", 1L, 10L, "{}", "测试学校");
+
+        verify(tagRepo, never()).findFirstByNameAndGroupKeyword(anyString(), anyString());
     }
 }

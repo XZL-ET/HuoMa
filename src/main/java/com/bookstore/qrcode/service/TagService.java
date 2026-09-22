@@ -894,8 +894,8 @@ public class TagService {
         try {
             Customer customer = customerRepo.findByExternalUserid(externalUserId)
                 .orElse(null);
-            // 客户不存在时跳过（可能是回调异常或数据尚未同步）
-            if (customer == null) return;
+            // 客户不存在或已删除时跳过（可能是回调异常、数据尚未同步，或已离职删除）
+            if (customer == null || customer.getStatus() == Customer.CustomerStatus.deleted) return;
 
             // 收集年级和班级标签，批量同步到企微（避免并发 45035 冲突）
             java.util.List<String> batchIds = new java.util.ArrayList<>();
@@ -930,7 +930,10 @@ public class TagService {
             if (tpl == null) { log.warn("表单模板不存在: {}", formTemplateId); return; }
 
             Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
-            if (customer == null) { log.warn("客户不存在: {}", externalUserId); return; }
+            if (customer == null || customer.getStatus() == Customer.CustomerStatus.deleted) {
+                log.warn("客户不存在或已删除: {}", externalUserId);
+                return;
+            }
 
             // 解析城市名，确保表单打的学校标签和 autoTag 打的学区分入同一个 "学校-{城市}" 企微标签组
             String schoolGroupKeyword = "学校"; // fallback
