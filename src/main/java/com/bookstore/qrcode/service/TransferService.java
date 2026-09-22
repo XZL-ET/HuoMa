@@ -49,6 +49,7 @@ public class TransferService {
     private final QrAgentRepository qrAgentRepo;
     private final QrCodeRepository qrCodeRepo;
     private final CustomerRepository customerRepo;
+    private final CustomerRelationService customerRelationService;
     private final CustomerTagRepository customerTagRepo;
     private final FormSubmissionRepository formSubmissionRepo;
     private final EmployeeRepository employeeRepo;
@@ -559,7 +560,27 @@ public class TransferService {
         customerRepo.findById(t.getCustomerId()).ifPresent(c -> {
             c.setCurrentAgent(t.getToUserid());
             customerRepo.save(c);
+            try {
+                applyTransferConfirmedRelations(t);
+            } catch (Exception e) {
+                log.warn("转移确认关系维护失败（由全量同步兜底）: transferId={}, err={}", t.getId(), e.getMessage());
+            }
         });
+    }
+
+    /**
+     * 转移确认后的关系维护：from 置 removed + to upsert active。
+     * <p>来源：qr_code_id 取自 transfer 记录，school_id 经活码反查；add_time = 确认时间。
+     * best-effort（非事务）：失败由 CustomerSyncService 全量同步对账兜底。</p>
+     */
+    void applyTransferConfirmedRelations(CustomerTransfer t) {
+        Long qrCodeId = t.getQrCodeId();
+        String schoolId = qrCodeId != null
+            ? qrCodeRepo.findById(qrCodeId).map(QrCode::getSchoolId).orElse(null)
+            : null;
+        customerRelationService.applyTransferConfirmed(
+            t.getCustomerId(), t.getFromUserid(), t.getToUserid(),
+            qrCodeId, schoolId, LocalDateTime.now());
     }
 
     /**
