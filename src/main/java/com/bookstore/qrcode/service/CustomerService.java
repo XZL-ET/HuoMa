@@ -226,12 +226,13 @@ public class CustomerService {
     }
 
     /**
-     * 挂关系写：仅当 state 非空且能反查到活码（{@code qrCodeId != null}）时才 upsert。
-     * state 为空（内部转移）时 {@code qrCodeId == null}，不写来源（由 Task 4 转移确认钩子负责）。
-     * 与 customer 写同一事务，来源字段 COALESCE（见 {@link CustomerRelationService#upsertActive}）。
+     * 挂关系写：只要有 userId 就 upsert（确保 (customer, userId) 关系 active）。
+     * state 为空（内部转移）时 {@code qrCodeId == null}，仍 upsert 关系但来源传 null
+     * （COALESCE 语义绝不覆盖已有精确来源，见 {@link CustomerRelationService#upsertActive}）。
+     * 与 customer 写同一事务。
      */
     private void upsertRelation(Long customerId, String userId, Long qrCodeId, String schoolId) {
-        if (qrCodeId != null && userId != null) {
+        if (userId != null) {
             customerRelationService.upsertActive(customerId, userId, qrCodeId, schoolId, LocalDateTime.now());
         }
     }

@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -87,5 +88,30 @@ class CustomerSyncServiceTest {
 
         verify(relationService, never()).upsertActive(any(), any(), any(), any(), any());
         verify(relationService, never()).markRemoved(any(), any());
+    }
+
+    @Test
+    @DisplayName("非稀疏客户按 customer 近似回填来源字段")
+    void backfillSourceFromCustomer() throws Exception {
+        JsonNode userList = objectMapper.readTree("""
+            {"userlist":[{"userid":"emp1","name":"甲","status":1}]}
+            """);
+        JsonNode list = objectMapper.readTree("""
+            {"errcode":0,"external_userid":["wm-1"]}
+            """);
+        when(wecomApi.getUserList()).thenReturn(userList);
+        when(wecomApi.getExternalContactList("emp1")).thenReturn(list);
+        Customer c = Customer.builder().id(1L).externalUserid("wm-1")
+                .sourceQrId(10L).schoolId("SCHOOL-1")
+                .addTime(java.time.LocalDateTime.of(2026, 9, 1, 10, 0))
+                .build();
+        when(customerRepo.findByExternalUseridIn(anyList())).thenReturn(List.of(c));
+        when(relationRepo.findByEmployeeUseridAndStatus("emp1", RelationStatus.active))
+                .thenReturn(List.of());
+
+        syncService.syncOnce();
+
+        verify(relationService).upsertActive(1L, "emp1", 10L, "SCHOOL-1",
+                java.time.LocalDateTime.of(2026, 9, 1, 10, 0));
     }
 }

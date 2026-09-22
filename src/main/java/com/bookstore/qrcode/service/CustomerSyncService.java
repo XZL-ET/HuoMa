@@ -80,22 +80,24 @@ public class CustomerSyncService {
             return;
         }
 
-        // external_userid → customer.id 批量反查
-        Map<String, Long> idByExternal = new HashMap<>();
+        // external_userid → Customer 批量反查（来源字段近似回填需完整实体）
+        Map<String, Customer> customerByExternal = new HashMap<>();
         if (!snapshotExternalUserids.isEmpty()) {
             for (Customer c : customerRepo.findByExternalUseridIn(snapshotExternalUserids)) {
-                idByExternal.put(c.getExternalUserid(), c.getId());
+                customerByExternal.put(c.getExternalUserid(), c);
             }
         }
 
-        // upsert 快照中的关系（来源字段 COALESCE；稀疏 customer 由调用方补建后这里再 upsert）
+        // upsert 快照中的关系（来源字段 COALESCE；稀疏 customer 无来源，传 null）
         for (String externalUserid : snapshotExternalUserids) {
-            Long customerId = idByExternal.get(externalUserid);
-            if (customerId == null) {
-                customerId = backfillSparseCustomer(externalUserid);
-                if (customerId == null) continue;
+            Customer c = customerByExternal.get(externalUserid);
+            if (c == null) {
+                Long backfilledId = backfillSparseCustomer(externalUserid);
+                if (backfilledId == null) continue;
+                relationService.upsertActive(backfilledId, userid, null, null, null);
+                continue;
             }
-            relationService.upsertActive(customerId, userid, null, null, null);
+            relationService.upsertActive(c.getId(), userid, c.getSourceQrId(), c.getSchoolId(), c.getAddTime());
         }
 
         // removed 对账：该员工名下 active 且 updated_at < T0、又不在快照里 → 置 removed

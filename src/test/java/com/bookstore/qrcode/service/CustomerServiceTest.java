@@ -185,6 +185,24 @@ class CustomerServiceTest {
     }
 
     @Test
+    @DisplayName("upsertFromCallback — state 为空（内部转移）仍 upsert 关系（无来源）")
+    void upsertRelationWhenStateEmpty() {
+        Customer existing = Customer.builder()
+                .id(1L).externalUserid("wm-1").currentAgent("svcA")
+                .status(Customer.CustomerStatus.active).build();
+        when(customerRepo.findByExternalUserid("wm-1")).thenReturn(Optional.of(existing));
+
+        customerService.upsertFromCallback("wm-1", "svcA", null);
+
+        verify(customerRelationService).upsertActive(
+                org.mockito.ArgumentMatchers.eq(1L),
+                org.mockito.ArgumentMatchers.eq("svcA"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class));
+    }
+
+    @Test
     @DisplayName("getById — 按 ID 查询客户")
     void shouldGetById() {
         Customer customer = Customer.builder().id(1L).name("测试客户").build();
