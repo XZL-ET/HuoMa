@@ -121,7 +121,6 @@ public class CustomerSyncService {
             .name("未知")
             .type(1)
             .status(Customer.CustomerStatus.active)
-            .addTime(LocalDateTime.now())
             .build();
         try {
             c = customerRepo.save(c);

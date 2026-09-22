@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -19,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
@@ -113,5 +115,33 @@ class CustomerSyncServiceTest {
 
         verify(relationService).upsertActive(1L, "emp1", 10L, "SCHOOL-1",
                 java.time.LocalDateTime.of(2026, 9, 1, 10, 0));
+    }
+
+    @Test
+    @DisplayName("稀疏补建不设置 add_time，避免污染当日新增统计")
+    void sparseBackfillLeavesAddTimeNull() throws Exception {
+        JsonNode userList = objectMapper.readTree("""
+            {"userlist":[{"userid":"emp1","name":"甲","status":1}]}
+            """);
+        JsonNode list = objectMapper.readTree("""
+            {"errcode":0,"external_userid":["wm-missing"]}
+            """);
+        when(wecomApi.getUserList()).thenReturn(userList);
+        when(wecomApi.getExternalContactList("emp1")).thenReturn(list);
+        when(customerRepo.findByExternalUseridIn(anyList())).thenReturn(List.of());
+        when(customerRepo.save(any(Customer.class)))
+                .thenAnswer(inv -> {
+                    Customer c = inv.getArgument(0);
+                    c.setId(99L);
+                    return c;
+                });
+        when(relationRepo.findByEmployeeUseridAndStatus("emp1", RelationStatus.active))
+                .thenReturn(List.of());
+
+        syncService.syncOnce();
+
+        ArgumentCaptor<Customer> captor = ArgumentCaptor.forClass(Customer.class);
+        verify(customerRepo).save(captor.capture());
+        assertNull(captor.getValue().getAddTime());
     }
 }
