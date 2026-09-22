@@ -127,8 +127,15 @@ public class TransferService {
             return;
         }
 
-        // ---- Redis 分布式锁：防止同一客户并发发起重复继承 ----
-        String lockKey = "lock:transfer:" + customerId;
+        // 先反查活码（纯读，无副作用），锁键需要 qr.getId()
+        QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
+        if (qr == null) {
+            log.warn("继承发起跳过: 找不到对应活码, state={}, customerId={}", state, customerId);
+            return;
+        }
+
+        // ---- Redis 分布式锁：按 (customer, qr) 维度，防止同一客户同一学校并发重复继承 ----
+        String lockKey = "lock:transfer:" + customerId + ":" + qr.getId();
         Boolean locked = redisTemplate.opsForValue()
             .setIfAbsent(lockKey, "1", Duration.ofSeconds(120));
         if (!Boolean.TRUE.equals(locked)) {
@@ -159,24 +166,17 @@ public class TransferService {
         List<CustomerTransfer.TransferStatus> dedupStatuses = List.of(
             CustomerTransfer.TransferStatus.pending_confirm,
             CustomerTransfer.TransferStatus.confirmed);
-        if (transferRepo.existsByCustomerIdAndStatusIn(customerId, dedupStatuses)) {
-            log.info("客户 {} 已有进行中/已完成继承记录，跳过", customerId);
+        if (transferRepo.existsByCustomerIdAndQrCodeIdAndStatusIn(customerId, qr.getId(), dedupStatuses)) {
+            log.info("客户 {} 活码 {} 已有进行中/已完成继承记录，跳过", customerId, qr.getId());
             return;
         }
 
         // ---- 冷却期：7 天内 timeout/rejected/retry_limit 的客户不重转 ----
         // 防止僵尸客户陷入 "发起 → 超时 → 再发起" 的死循环，浪费 API 配额
-        if (transferRepo.existsRecentTerminalByCustomerId(customerId,
+        if (transferRepo.existsRecentTerminalByCustomerIdAndQrCodeId(customerId, qr.getId(),
                 LocalDateTime.now().minus(TRANSFER_COOLDOWN))) {
-            log.info("客户 {} 在冷却期内（{} 天内有 terminal 记录），跳过",
-                customerId, TRANSFER_COOLDOWN.toDays());
-            return;
-        }
-
-        // 根据 state（schoolId）查找活码，无对应活码则跳过
-        QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
-        if (qr == null) {
-            log.warn("继承发起跳过: 找不到对应活码, state={}, customerId={}", state, customerId);
+            log.info("客户 {} 活码 {} 在冷却期内（{} 天内有 terminal 记录），跳过",
+                customerId, qr.getId(), TRANSFER_COOLDOWN.toDays());
             return;
         }
 
@@ -681,7 +681,7 @@ public class TransferService {
 
         for (CustomerTransfer t : failed) {
             // ---- Redis 分布式锁：防止同客户两条 api_failed 记录并发重试 ----
-            String retryLockKey = "lock:transfer:" + t.getCustomerId();
+            String retryLockKey = "lock:transfer:" + t.getCustomerId() + ":" + t.getQrCodeId();
             Boolean retryLocked = redisTemplate.opsForValue()
                 .setIfAbsent(retryLockKey, "1", Duration.ofSeconds(120));
             if (!Boolean.TRUE.equals(retryLocked)) {
@@ -690,7 +690,7 @@ public class TransferService {
             }
             try {
                 // 去重：检查是否已有进行中/已完成的转移（可能在 api_failed 期间由其他路径发起）
-                if (transferRepo.existsByCustomerIdAndStatusIn(t.getCustomerId(),
+                if (transferRepo.existsByCustomerIdAndQrCodeIdAndStatusIn(t.getCustomerId(), t.getQrCodeId(),
                         List.of(CustomerTransfer.TransferStatus.pending_confirm,
                                 CustomerTransfer.TransferStatus.confirmed))) {
                     t.setStatus(CustomerTransfer.TransferStatus.retry_limit);

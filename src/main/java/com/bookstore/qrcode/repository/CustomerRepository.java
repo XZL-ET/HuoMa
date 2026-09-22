@@ -289,31 +289,6 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
         String addedAgent, String schoolId, LocalDateTime start, LocalDateTime end);
 
     /**
-     * 查询指定接待员在指定学校下、指定时间区间内<b>且无进行中/已完成转移记录</b>的客户，按添加时间升序。
-     * <p>
-     * 时间区间为左闭右开（{@code addTime >= start AND addTime < end}），
-     * 确保相邻批次窗口不重叠，避免同一边界客户被重复入队。
-     * </p>
-     * <p>
-     * 用于在职继承定时任务：排除 pending_confirm / confirmed / api_failed 状态的客户，
-     * 仅 timeout / rejected / retry_limit 的客户允许重新入队发起转移。
-     * api_failed 的重试由 {@code TransferService.retryFailedTransfers()} 独立控制，不经过 Stream。
-     * </p>
-     *
-     * @param addedAgent 添加该客户的企微员工 userid
-     * @param schoolId   学校 ID（对应活码标识）
-     * @param start      添加时间下限（含）
-     * @param end        添加时间上限（不含）
-     * @return 无进行中/已完成转移记录的客户列表，按添加时间升序排列
-     */
-    @Query("SELECT c FROM Customer c WHERE c.addedAgent = :addedAgent AND c.schoolId = :schoolId AND c.addTime >= :start AND c.addTime < :end AND NOT EXISTS (SELECT t FROM CustomerTransfer t WHERE t.customerId = c.id AND t.status IN ('pending_confirm', 'confirmed', 'api_failed'))")
-    List<Customer> findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
-        @Param("addedAgent") String addedAgent,
-        @Param("schoolId") String schoolId,
-        @Param("start") LocalDateTime start,
-        @Param("end") LocalDateTime end);
-
-    /**
      * 在职继承定位：按 (接待员, 活码) 查窗口内、status=active、且无「该活码下进行中/已完成」转移记录的客户。
      * 多校客户各自命中其扫码的活码；NOT EXISTS 按 (customer_id, qr_code_id) 排除，
      * qr_code_id IS NULL 的历史转移记录降级为仅按 customer_id 判定（保守防重复转移）。

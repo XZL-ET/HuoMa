@@ -297,14 +297,13 @@ public class InheritanceJob {
                         continue; // 跳过自己转自己（dual 角色）
                     }
                     // 使用过滤查询，排除已有进行中/已完成转移记录的客户，避免反复入队
-                    List<Customer> customers = customerRepo
-                        .findWithoutTransferByAgentAndSchoolIdAndAddTimeBetween(
-                            rec.getAgentUserid(), qr.getSchoolId(), windowStart, windowEnd);
+                    List<Customer> customers = customerRepo.findForInheritance(
+                        rec.getAgentUserid(), qr.getId(), windowStart, windowEnd);
 
                     for (Customer c : customers) {
                         // Redis 去重：防止 1h 宽窗口导致同一客户被多批次 XADD
                         // SETNX TTL 2h，过期后允许重新入队
-                        String dedupKey = "transfer:queued:" + c.getId();
+                        String dedupKey = "transfer:queued:" + c.getId() + ":" + qr.getId();
                         try {
                             Boolean alreadyQueued = redisTemplate.opsForValue()
                                 .setIfAbsent(dedupKey, "1", Duration.ofHours(2));

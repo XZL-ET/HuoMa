@@ -122,17 +122,22 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
             LocalDateTime start, LocalDateTime end, CustomerTransfer.TransferStatus status);
 
     /**
-     * 判断指定客户是否存在处于给定状态集合中的转移记录。
+     * 判断指定客户+活码是否存在给定状态集合的转移记录。
      * <p>
      * 用于在职继承去重：在发起新转移前检查该客户是否已有
      * pending_confirm 或 confirmed 的记录，避免重复转移。
+     * qr_code_id IS NULL 的历史行降级为仅按 customer_id 判定（保守防重复）。
      * </p>
      *
      * @param customerId 客户 ID
+     * @param qrCodeId   活码 ID
      * @param statuses   状态集合
      * @return true 如果存在匹配记录
      */
-    boolean existsByCustomerIdAndStatusIn(Long customerId, List<CustomerTransfer.TransferStatus> statuses);
+    @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND (t.qrCodeId = :qrCodeId OR t.qrCodeId IS NULL) AND t.status IN :statuses")
+    boolean existsByCustomerIdAndQrCodeIdAndStatusIn(@Param("customerId") Long customerId,
+                                                     @Param("qrCodeId") Long qrCodeId,
+                                                     @Param("statuses") List<CustomerTransfer.TransferStatus> statuses);
 
     /**
      * 统计指定活码下所有转移记录总数。
@@ -248,11 +253,14 @@ public interface CustomerTransferRepository extends JpaRepository<CustomerTransf
     void deleteAllByIdIn(@Param("ids") List<Long> ids);
 
     /**
-     * 判断指定客户是否存在最近 N 天内的 terminal 转移记录
+     * 判断指定客户+活码是否存在最近 N 天内的 terminal 转移记录
      * （timeout / rejected / retry_limit），用于冷却期检查。
+     * qr_code_id IS NULL 的历史行降级为仅按 customer_id 判定（保守防重复）。
      */
-    @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt >= :since")
-    boolean existsRecentTerminalByCustomerId(@Param("customerId") Long customerId, @Param("since") LocalDateTime since);
+    @Query("SELECT COUNT(t) > 0 FROM CustomerTransfer t WHERE t.customerId = :customerId AND (t.qrCodeId = :qrCodeId OR t.qrCodeId IS NULL) AND t.status IN ('timeout', 'rejected', 'retry_limit') AND t.updatedAt >= :since")
+    boolean existsRecentTerminalByCustomerIdAndQrCodeId(@Param("customerId") Long customerId,
+                                                        @Param("qrCodeId") Long qrCodeId,
+                                                        @Param("since") LocalDateTime since);
 
     /**
      * 按活码汇总指定加人时间范围内的转移结果（转接记录列表页一级视图）。
