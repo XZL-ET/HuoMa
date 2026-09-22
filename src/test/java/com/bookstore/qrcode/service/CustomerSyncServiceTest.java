@@ -70,4 +70,22 @@ class CustomerSyncServiceTest {
 
         verify(relationService).markRemoved(1L, "emp1");
     }
+
+    @Test
+    @DisplayName("成功但响应缺少 external_userid 字段 → 整员工跳过，不误标 removed")
+    void malformedSuccessSkipsEntireEmployee() throws Exception {
+        JsonNode userList = objectMapper.readTree("""
+            {"userlist":[{"userid":"emp1","name":"甲","status":1}]}
+            """);
+        JsonNode malformed = objectMapper.readTree("""
+            {"errcode":0}
+            """);
+        when(wecomApi.getUserList()).thenReturn(userList);
+        when(wecomApi.getExternalContactList("emp1")).thenReturn(malformed);
+
+        syncService.syncOnce();
+
+        verify(relationService, never()).upsertActive(any(), any(), any(), any(), any());
+        verify(relationService, never()).markRemoved(any(), any());
+    }
 }

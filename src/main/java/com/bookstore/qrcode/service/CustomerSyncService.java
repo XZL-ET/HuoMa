@@ -67,11 +67,13 @@ public class CustomerSyncService {
         List<String> snapshotExternalUserids;
         try {
             JsonNode list = wecomApi.getExternalContactList(userid);
-            snapshotExternalUserids = new ArrayList<>();
-            JsonNode arr = list != null && list.has("external_userid") ? list.get("external_userid") : null;
-            if (arr != null && arr.isArray()) {
-                for (JsonNode e : arr) snapshotExternalUserids.add(e.asText());
+            // 铁律：成功但响应格式异常（缺失/非数组 external_userid）同样整员工跳过，绝不当空列表处理
+            if (list == null || !list.has("external_userid") || !list.get("external_userid").isArray()) {
+                log.warn("客户列表响应格式异常（缺少 external_userid 数组），整员工跳过（留待下轮）: userid={}", userid);
+                return;
             }
+            snapshotExternalUserids = new ArrayList<>();
+            for (JsonNode e : list.get("external_userid")) snapshotExternalUserids.add(e.asText());
         } catch (Exception e) {
             // 铁律：单员工 API 失败整体跳过，绝不当空列表处理
             log.warn("客户列表拉取失败，整员工跳过（留待下轮）: userid={}, err={}", userid, e.getMessage());
