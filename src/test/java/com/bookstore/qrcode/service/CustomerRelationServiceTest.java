@@ -83,6 +83,25 @@ class CustomerRelationServiceTest {
     }
 
     @Test
+    @DisplayName("upsertActive — 新建实体(id=null)冲突时不 detach（detach 空 id 会抛 IllegalStateException）")
+    void upsertConflictOnNewEntitySkipsDetach() {
+        CustomerRelation winner = CustomerRelation.builder()
+                .id(99L).customerId(1L).employeeUserid("recA")
+                .status(RelationStatus.active).build();
+        when(relationRepo.findByCustomerIdAndEmployeeUserid(1L, "recA"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
+        doThrow(new DataIntegrityViolationException("dup uk_customer_employee"))
+                .doReturn(winner)
+                .when(relationRepo).save(any(CustomerRelation.class));
+
+        service.upsertActive(1L, "recA", 10L, "SCHOOL-1", LocalDateTime.now());
+
+        verify(entityManager, never()).detach(any());   // 新建实体 id=null，绝不能 detach
+        verify(entityManager, never()).clear();
+    }
+
+    @Test
     @DisplayName("markRemoved — 存在才置 removed")
     void markRemovedExisting() {
         CustomerRelation existing = CustomerRelation.builder()

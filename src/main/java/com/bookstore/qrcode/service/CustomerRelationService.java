@@ -43,7 +43,11 @@ public class CustomerRelationService {
         } catch (DataIntegrityViolationException e) {
             // 并发插入冲突：另一线程已写入同一 (customer_id, employee_userid)。
             // 只 detach 失败的这条关系，保留外层事务里 pending 的 customer UPDATE（绝不 clear()）。
-            entityManager.detach(rel);
+            // 仅当 rel 已持久化（id 非空）才 detach：新建实体 INSERT 失败时 id 仍为 null，
+            // detach(null-id) 会抛 IllegalStateException（Hibernate 无法生成 EntityKey）。
+            if (rel.getId() != null) {
+                entityManager.detach(rel);
+            }
             log.warn("关系并发插入冲突，重查后更新: customerId={}, employee={}", customerId, employeeUserid);
             CustomerRelation winner = relationRepo.findByCustomerIdAndEmployeeUserid(customerId, employeeUserid)
                 .orElse(null);
