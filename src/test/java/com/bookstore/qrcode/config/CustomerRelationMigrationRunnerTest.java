@@ -8,6 +8,7 @@ import org.mockito.InOrder;
 
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -42,5 +43,20 @@ class CustomerRelationMigrationRunnerTest {
         InOrder order = inOrder(backfill, sync);
         order.verify(backfill).backfill();
         order.verify(sync).syncOnce();
+    }
+
+    @Test
+    @DisplayName("迁移失败不抛异常、不阻断启动")
+    void migrationFailureDoesNotBlockStartup() throws Exception {
+        CustomerTransferQrBackfillService backfill = mock(CustomerTransferQrBackfillService.class);
+        CustomerSyncService sync = mock(CustomerSyncService.class);
+        when(backfill.backfill()).thenThrow(new RuntimeException("db down"));
+        when(sync.syncOnce()).thenReturn(1);
+        CustomerRelationMigrationRunner runner =
+                new CustomerRelationMigrationRunner(backfill, sync, true);
+
+        runner.run(null); // 不应抛出异常
+
+        verify(sync).syncOnce(); // 回填失败后仍继续全量同步
     }
 }

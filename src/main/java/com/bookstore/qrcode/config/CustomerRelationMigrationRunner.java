@@ -38,9 +38,17 @@ public class CustomerRelationMigrationRunner implements ApplicationRunner {
         if (!enabled) {
             return;
         }
-        int filled = backfillService.backfill();
-        log.info("customer_transfer.qr_code_id 回填完成: {} 行", filled);
-        int employees = syncService.syncOnce();
-        log.info("customer_relation 全量同步完成: {} 员工", employees);
+        try {
+            int filled = backfillService.backfill();
+            log.info("customer_transfer.qr_code_id 回填完成: {} 行", filled);
+        } catch (Exception e) {
+            log.error("customer_transfer.qr_code_id 回填失败（可重试，不阻断启动）", e);
+        }
+        try {
+            int employees = syncService.syncOnce();
+            log.info("customer_relation 全量同步完成: {} 员工", employees);
+        } catch (Exception e) {
+            log.error("customer_relation 全量同步失败（可重试，不阻断启动）", e);
+        }
     }
 }
