@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.service.*;
 import com.bookstore.qrcode.wecom.*;
+import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -72,6 +73,8 @@ public class CallbackWorker {
     private final WecomApiClient wecomApi;
     private final QrCodeRepository qrCodeRepo;
     private final CustomerDeletionService deletionService;
+    private final CustomerRelationService customerRelationService;
+    private final CustomerRepository customerRepo;
 
     private volatile boolean running = true;
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
@@ -323,6 +326,18 @@ public class CallbackWorker {
             deletionService.recordAgentDeletedCustomer(event);
         } else if ("del_follow_user".equals(changeType)) {
             deletionService.recordCustomerDeletedAgent(event);
+            // 客户删员工：解除该员工与客户的关系（关系表置 removed）。
+            // 独立 try-catch：失败不回滚日报记录，也不阻断消费主链路。
+            try {
+                String externalUserId = event.has("external_userid") ? event.get("external_userid").asText() : null;
+                String userId = event.has("userid") ? event.get("userid").asText() : null;
+                if (externalUserId != null && userId != null) {
+                    customerRepo.findByExternalUserid(externalUserId)
+                        .ifPresent(c -> customerRelationService.markRemoved(c.getId(), userId));
+                }
+            } catch (Exception e) {
+                log.warn("del_follow_user 关系置 removed 失败（不影响日报）: {}", e.getMessage());
+            }
         } else if ("transfer_fail".equals(changeType)) {
             alertService.handleTransferFail(event);
         }

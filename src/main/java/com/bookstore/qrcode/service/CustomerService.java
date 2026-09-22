@@ -261,6 +261,13 @@ public class CustomerService {
         Customer customer = customerRepo.findByExternalUserid(externalUserId).orElse(null);
         if (customer == null) return;
 
+        // 员工删客户：解除该员工与客户的关系（关系表置 removed）。userId 为空则跳过（全量同步兜底）。
+        String userId = event.has("userid") && !event.get("userid").isNull()
+            ? event.get("userid").asText() : null;
+        if (userId != null) {
+            customerRelationService.markRemoved(customer.getId(), userId);
+        }
+
         JsonNode followUser;
         try {
             followUser = wecomApi.getExternalContact(externalUserId).get("follow_user");

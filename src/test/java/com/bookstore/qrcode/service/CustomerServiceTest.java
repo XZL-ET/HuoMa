@@ -67,6 +67,27 @@ class CustomerServiceTest {
     }
 
     @Test
+    @DisplayName("handleDelete — 删除事件同时将对应员工关系置 removed")
+    void shouldMarkRelationRemovedOnDelete() throws Exception {
+        Customer customer = Customer.builder()
+                .id(1L).externalUserid("wm-abc123")
+                .currentAgent("agent1").status(Customer.CustomerStatus.active).build();
+        JsonNode detail = objectMapper.readTree("""
+            {"errcode":0,"follow_user":[{"userid":"agent2"}]}
+            """);
+        when(customerRepo.findByExternalUserid("wm-abc123")).thenReturn(Optional.of(customer));
+        when(wecomApiClient.getExternalContact("wm-abc123")).thenReturn(detail);
+
+        JsonNode event = objectMapper.readTree("""
+            {"external_userid":"wm-abc123","userid":"agent1"}
+            """);
+
+        customerService.handleDelete(event);
+
+        verify(customerRelationService).markRemoved(1L, "agent1");
+    }
+
+    @Test
     @DisplayName("handleDelete — follow_user 为空时标记为已删除")
     void shouldMarkDeletedWhenFollowUserEmpty() throws Exception {
         Customer customer = Customer.builder()
