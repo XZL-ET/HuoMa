@@ -36,6 +36,15 @@ class TagServiceTest {
         ]}
         """;
 
+    /** 生产事故现场：区名与市名同名（张掖市/张掖市），且"县区|张掖市"的本地 ID 已过期。 */
+    private static final String CORP_TAG_LIST_ZHANGYE = """
+        {"tag_group":[
+          {"group_id":"g_city","group_name":"市州","tag":[{"id":"t_city","name":"张掖市"}]},
+          {"group_id":"g_dist","group_name":"县区","tag":[{"id":"t_dist_new","name":"张掖市"}]},
+          {"group_id":"g_school","group_name":"学校-张掖市","tag":[{"id":"t_school","name":"金安苑学校"}]}
+        ]}
+        """;
+
     @Mock private TagRepository tagRepo;
     @Mock private CustomerTagRepository customerTagRepo;
     @Mock private TagInsertService tagInsertService;
@@ -91,12 +100,16 @@ class TagServiceTest {
         when(tagRepo.findFirstByNameAndGroupKeyword("北京一中", "学校-北京市"))
             .thenReturn(Optional.of(local));
         when(wecomApi.getCorpTagList()).thenReturn(REAL_MAPPER.readTree(CORP_TAG_LIST));
+        when(tagInsertService.updateWecomTagId(7L, "t_school")).thenReturn(wecomBoundTag(
+            7L, "北京一中", "学校-北京市", "t_school"));
 
         Tag result = tagService.getOrCreateTag("北京一中", Tag.TagType.system, null, "学校-北京市");
 
         assertThat(result.getWecomTagId())
             .as("必须取 学校-北京市 组内的 ID，而不是企微返回顺序里的第二个同名标签")
             .isEqualTo("t_school");
+        verify(tagInsertService).updateWecomTagId(7L, "t_school");
+        verify(tagRepo, never()).save(any());
     }
 
     @Test
@@ -107,12 +120,62 @@ class TagServiceTest {
         when(tagRepo.findFirstByNameAndGroupKeyword("北京一中", "不存在的组"))
             .thenReturn(Optional.of(local));
         when(wecomApi.getCorpTagList()).thenReturn(REAL_MAPPER.readTree(CORP_TAG_LIST));
+        when(tagInsertService.updateWecomTagId(8L, "t_school")).thenReturn(wecomBoundTag(
+            8L, "北京一中", "不存在的组", "t_school"));
 
         Tag result = tagService.getOrCreateTag("北京一中", Tag.TagType.system, null, "不存在的组");
 
         assertThat(result.getWecomTagId())
             .as("回退到原有全局按名查找，行为与改动前一致")
             .isEqualTo("t_school");
+    }
+
+    @Test
+    @DisplayName("getOrCreateTag — wecomTagId 过期时经独立事务写入器更新，不在外层事务写 tag 行")
+    void repairsStaleWecomTagIdOutsideCallerTransaction() throws Exception {
+        // 生产事故（张掖市/甘州区）：本地 "县区|张掖市" 存的是旧 ID，企微侧已是新 ID
+        Tag stale = Tag.builder().id(2894L).name("张掖市").groupKeyword("县区")
+            .type(Tag.TagType.system).wecomTagId("old_id").build();
+        when(tagRepo.findFirstByNameAndGroupKeyword("张掖市", "县区")).thenReturn(Optional.of(stale));
+        when(wecomApi.getCorpTagList()).thenReturn(REAL_MAPPER.readTree(CORP_TAG_LIST_ZHANGYE));
+        when(tagInsertService.updateWecomTagId(2894L, "t_dist_new"))
+            .thenReturn(wecomBoundTag(2894L, "张掖市", "县区", "t_dist_new"));
+
+        Tag result = tagService.getOrCreateTag("张掖市", Tag.TagType.system, null, "县区");
+
+        assertThat(result.getWecomTagId()).isEqualTo("t_dist_new");
+        verify(tagInsertService).updateWecomTagId(2894L, "t_dist_new");
+        verify(tagRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("autoTag — tag 行修复不落在外层事务，customer_tag 外键插入不再被 X 锁挡住")
+    void autoTag_repairsTagOutsideOuterTransaction() throws Exception {
+        // 复刻生产现场：活码 张掖市/张掖市（区名=市名），区标签本地 ID 已过期
+        when(qrCodeRepo.findBySchoolId("SCH-ZY")).thenReturn(Optional.of(QrCode.builder()
+            .schoolId("SCH-ZY").schoolName("金安苑学校")
+            .regionCity("张掖市").regionDistrict("张掖市")
+            .build()));
+        when(customerRepo.findByExternalUserid("wmZY")).thenReturn(Optional.of(Customer.builder()
+            .id(38234L).externalUserid("wmZY").status(Customer.CustomerStatus.active).build()));
+        when(tagRepo.findFirstByNameAndGroupKeyword("张掖市", "市州"))
+            .thenReturn(Optional.of(wecomBoundTag(598L, "张掖市", "市州", "t_city")));
+        when(tagRepo.findFirstByNameAndGroupKeyword("张掖市", "县区"))
+            .thenReturn(Optional.of(Tag.builder().id(2894L).name("张掖市").groupKeyword("县区")
+                .type(Tag.TagType.system).wecomTagId("old_id").build()));
+        when(tagRepo.findFirstByNameAndGroupKeyword("金安苑学校", "学校-张掖市"))
+            .thenReturn(Optional.of(wecomBoundTag(1142L, "金安苑学校", "学校-张掖市", "t_school")));
+        when(wecomApi.getCorpTagList()).thenReturn(REAL_MAPPER.readTree(CORP_TAG_LIST_ZHANGYE));
+        when(tagInsertService.updateWecomTagId(2894L, "t_dist_new"))
+            .thenReturn(wecomBoundTag(2894L, "张掖市", "县区", "t_dist_new"));
+
+        tagService.autoTag("wmZY", "user1", "SCH-ZY");
+
+        // 核心不变式：外层事务里没有任何 tag 行的 save（否则客户标签插入的外键检查会等锁到 30s 超时）
+        verify(tagRepo, never()).save(any());
+        verify(customerTagInsertService).insert(38234L, 2894L, "system");
+        verify(wecomApi).markTag(eq("wmZY"), eq("user1"),
+            argThat(ids -> ids.containsAll(java.util.List.of("t_city", "t_dist_new", "t_school"))));
     }
 
     @Test

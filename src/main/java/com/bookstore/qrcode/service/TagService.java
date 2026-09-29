@@ -114,6 +114,9 @@ public class TagService {
                 schoolTag.getName(), schoolTag.getId(), schoolTag.getWecomTagId());
 
             // ===== 先写本地关联，再调企微 API（DB 先落盘，API 失败不影响本地一致性）=====
+            // 前提：上面三个 getOrCreateTag 对 tag 行的修复都已在独立事务里提交完，
+            // 本事务对 tag 行没有任何未提交的写 —— 否则这里插 customer_tag 的外键检查
+            // 会在另一个连接上等那把 X 锁，直到 30s 事务超时。
             bindCustomerTag(customer.getId(), cityTag.getId(), "system");
             bindCustomerTag(customer.getId(), districtTag.getId(), "system");
             bindCustomerTag(customer.getId(), schoolTag.getId(), "system");
@@ -266,13 +269,18 @@ public class TagService {
      * <p>根据标签名称在本地数据库中查找，若存在则直接返回（如发现缺少企微ID则补同步）；
      * 若不存在则在企微创建对应标签，并持久化到本地数据库。</p>
      *
+     * <p><b>事务边界：</b>本方法不加 {@code @Transactional} —— 所有落库动作都走
+     * {@link TagInsertService} 的独立已提交事务，企微接口调用则在 DB 事务之外。
+     * 调用方（如 {@link #autoTag}）的事务里绝不能留下未提交的 tag 行写入：
+     * {@link #bindCustomerTag} 的插入在另一个连接上做外键检查，需要父行 tag(id) 的 S 锁，
+     * 与外层未提交的 X 锁互等就是 30s 事务超时（见 {@link TagInsertService#updateWecomTagId}）。
+     *
      * @param name         标签名称（如"北京市"、"海淀区"、"XX学校"）
      * @param type         标签类型，见 {@link Tag.TagType#system} 和 {@link Tag.TagType#form}
      * @param parentId     上级标签ID，用于构建标签层级（市 → 区 → 学校），可为 null
      * @param groupKeyword 企微标签组关键词，用于归入正确的分组（如 "学校"、"市"、"区"）
      * @return 已持久化的标签实体（含企微标签ID）
      */
-    @Transactional
     public Tag getOrCreateTag(String name, Tag.TagType type, Long parentId, String groupKeyword) {
         // normalize: null/blank → ""，与非空值在唯一约束下各自独立
         final String gk = (groupKeyword != null && !groupKeyword.isBlank()) ? groupKeyword : "";
@@ -305,10 +313,12 @@ public class TagService {
         }
 
         // ===== Phase 2: 同步到企业微信（在锁外执行，避免网络 I/O 阻塞其他线程）=====
+        // 落库一律走独立已提交事务，禁止在本方法里 tagRepo.save(tag)：改动内存里的
+        // 受管实体会让调用方事务在后续自动 flush 时对 tag 行加未提交的 X 锁。
         String storedId = tag.getWecomTagId();
         if (storedId == null || storedId.isBlank()) {
             // 缺少企微 ID：新创建的标签 或 之前同步失败的标签 → 补同步
-            syncExistingTagToWecom(tag, gk);
+            tag = syncExistingTagToWecom(tag, gk);
         } else {
             // 校验本地 wecomTagId 在企微当前 Corp 下是否仍有效
             // （Corp ID 切换或标签被删除后，旧 ID 会变成无效的僵尸 ID）
@@ -317,12 +327,14 @@ public class TagService {
                 // 当前 Corp 企微标签列表中完全找不到该名称 → 需要完整重同步
                 log.warn("标签在当前 Corp 企微列表中未找到，触发重同步: name={}, gk={}, oldWecomTagId={}",
                     name, gk, storedId);
-                syncExistingTagToWecom(tag, gk);
+                tag = syncExistingTagToWecom(tag, gk);
             } else if (!currentWecomId.equals(storedId)) {
                 log.warn("标签 wecomTagId 已过期，更新: name={}, gk={}, old={}, new={}",
                     name, gk, storedId, currentWecomId);
-                tag.setWecomTagId(currentWecomId);
-                tagRepo.save(tag);
+                Tag updated = tagInsertService.updateWecomTagId(tag.getId(), currentWecomId);
+                if (updated != null) {
+                    tag = updated;
+                }
             }
         }
         return tag;
@@ -605,33 +617,40 @@ public class TagService {
      * 处理策略：
      * <ol>
      *   <li>先从企微标签列表中按名称查找匹配的标签</li>
-     *   <li>若找到则直接补填 wecomTagId</li>
-     *   <li>若未找到，则在企微创建该标签并获取 wecomTagId</li>
+     *   <li>若找到则以独立事务补填 wecomTagId</li>
+     *   <li>若未找到，则在企微创建该标签获取 wecomTagId 后，同样以独立事务补填</li>
      * </ol>
+     *
+     * <p><b>企微调用在 DB 事务之外，本地落库走独立已提交事务</b>：企微侧的创建没有回滚接口，
+     * 本地若挂在调用方事务上等提交，调用方一旦回滚（如网络抖动触发重试）本地就永远补不上
+     * 这个 ID，下一轮又走一遍重同步、企微侧再撞一次 40071，形成自我维持的循环。
      *
      * @param tag          需要补同步的标签实体（调用方保证 name 非空）
      * @param groupKeyword 标签组关键词（用于归入正确的企微标签组）
+     * @return 补填后的标签实体；补同步失败时原样返回入参
      */
-    private void syncExistingTagToWecom(Tag tag, String groupKeyword) {
+    private Tag syncExistingTagToWecom(Tag tag, String groupKeyword) {
         try {
             // 策略一：从企微标签列表中按名称匹配，避免重复创建。
             // 限定在 groupKeyword 对应的组内查找，避免同名标签存在多个组时补填到错误的组
             String wecomId = findWecomTagId(wecomApi.getCorpTagList(), tag.getName(), groupKeyword);
-            if (wecomId != null) {
-                tag.setWecomTagId(wecomId);
-                tagRepo.save(tag);
-                log.info("标签已补同步: name={}, wecomTagId={}, keyword={}",
-                    tag.getName(), wecomId, groupKeyword);
-                return;
+            if (wecomId == null) {
+                // 策略二：企微上不存在该名称的标签，执行创建
+                wecomId = createWecomTag(tag.getName(), groupKeyword);
             }
-            // 策略二：企微上不存在该名称的标签，执行创建
-            String wecomTagId = createWecomTag(tag.getName(), groupKeyword);
-            if (wecomTagId != null) {
-                tag.setWecomTagId(wecomTagId);
-                tagRepo.save(tag);
+            if (wecomId == null) {
+                return tag;
             }
+            Tag updated = tagInsertService.updateWecomTagId(tag.getId(), wecomId);
+            if (updated == null) {
+                return tag;
+            }
+            log.info("标签已补同步: name={}, wecomTagId={}, keyword={}",
+                tag.getName(), wecomId, groupKeyword);
+            return updated;
         } catch (Exception e) {
             log.error("补同步标签失败: name={}", tag.getName(), e);
+            return tag;
         }
     }
 
