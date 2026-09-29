@@ -78,6 +78,17 @@ public class RedisConfig {
     @Value("${app.redis-stream.dlq-maxlen:10000}")
     public void setDlqStreamMaxlen(long val) { RedisConfig.DLQ_STREAM_MAXLEN = val; }
 
+    /** 死信自动重放计数 Key 前缀。完整 Key: dlq:replay:{streamKey}:{logicalId} */
+    public static final String DLQ_REPLAY_KEY_PREFIX = "dlq:replay:";
+    /**
+     * 单条死信自动重放次数上限。超过后留在 DLQ 等人工介入，避免
+     * 「重放 → 失败 → 再入 DLQ」随 PatrolWorker 每 30 分钟无限循环。
+     * 手动重放不受此限（会重置计数）。
+     */
+    public static final int DLQ_MAX_AUTO_REPLAYS = 5;
+    /** 自动重放计数 TTL：远长于重试计数，确保跨多次重放周期仍能累计 */
+    public static final long DLQ_REPLAY_TTL_SECONDS = 7L * 24 * 3600;
+
     // ==================== 消息去重 Key 前缀常量 ====================
 
     /** 回调去重 Key 前缀。完整 Key: callback:dedup:{msgId}，TTL 300s */

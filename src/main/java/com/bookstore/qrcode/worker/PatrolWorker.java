@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -56,6 +57,7 @@ public class PatrolWorker {
     private final OperationLogRepository operationLogRepo;
     private final CustomerTransferRepository transferRepo;
     private final QrCodeService qrCodeService;
+    private final LeakMetrics leakMetrics;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
@@ -67,6 +69,34 @@ public class PatrolWorker {
 
     /** 上次异常员工告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
     private static volatile long lastAnomalyAlertTime = 0L;
+
+    /** 上次「死信达自动重放上限」告警时间戳 — 限流：每小时最多一次。static 理由同上 */
+    private static volatile long lastDlqExhaustedAlertTime = 0L;
+
+    /**
+     * 上次真正告警时看到的漏处理计数，即增量告警的基线（计数值是进程内累计值，重启归零，不能直接判阈值）。
+     * 只在告警时推进、限流期间保持不动，被压住的增量才能累积到下一次告警里。
+     */
+    private static final Map<String, Long> lastLeakCounters = new ConcurrentHashMap<>();
+
+    /**
+     * 各漏处理计数的告警阈值，比的是「两次巡检之间的增量」。
+     * 「整条流程被跳过 / 消息被丢弃」类每出现一次都值得知道，阈值给 1；
+     * 量大的跳过类与永久失败类给更高阈值，避免正常波动刷告警。
+     */
+    private static final Map<String, Long> LEAK_ALERT_THRESHOLDS = Map.of(
+        "tag_skip_missing_qrcode", 1L,
+        "tag_skip_no_wecom_tag_id", 5L,
+        "tag_permanent_failure", 10L,
+        "zombie_pending_dropped", 1L,
+        "tag_consumer_restarted", 1L,
+        "callback_consumer_restarted", 1L);
+
+    /** 各计数的告警限流时间戳 — 每个计数每小时最多告警一次。static 理由同上 */
+    private static final Map<String, Long> lastLeakAlertAt = new ConcurrentHashMap<>();
+
+    /** 漏处理计数告警限流窗口 */
+    private static final long LEAK_ALERT_THROTTLE_MS = 3600_000L;
 
     /**
      * 每 5 分钟执行一次的主巡检入口。
@@ -108,21 +138,40 @@ public class PatrolWorker {
         // 3. 统计今日异常
         countTodayAlerts();
 
-        // 4. 死信队列自动重放（每 30 分钟最多重放一次，防消息永久堆积）
+        // 4. 死信队列自动重放（每 30 分钟一轮，防消息永久堆积）
+        // 走自动重放语义：单条消息累计重放达 RedisConfig.DLQ_MAX_AUTO_REPLAYS 次后
+        // 保留在 DLQ 等人工介入，避免确定性失败的消息被无限重放、空耗企微配额
         try {
-            long dlq = messageGuardService.dlqSize();
-            if (dlq > 0 && System.currentTimeMillis() - lastDlqReplayTime > 30 * 60 * 1000L) {
-                int replayed = messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY);
-                if (replayed > 0) {
-                    log.info("死信队列自动重放: {} 条", replayed);
-                    lastDlqReplayTime = System.currentTimeMillis();
+            long now = System.currentTimeMillis();
+            if (now - lastDlqReplayTime > 30 * 60 * 1000L) {
+                // 不管 DLQ 是否为空都跑一轮：空 DLQ 时这一轮只做「回收已失效的重放计数」，
+                // 否则计数 Key 会残留到 7 天 TTL 到期，把后续同内容消息的重放额度提前吃掉
+                lastDlqReplayTime = now;
+                MessageGuardService.ReplaySummary summary =
+                    messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true);
+                if (summary.replayed() > 0) {
+                    log.info("死信队列自动重放: {} 条", summary.replayed());
                 }
-            } else if (dlq > 0) {
-                log.debug("死信队列积压: {} 条（距上次重放 {} 秒，跳过）",
-                    dlq, (System.currentTimeMillis() - lastDlqReplayTime) / 1000);
+                if (summary.exhausted() > 0) {
+                    log.warn("死信队列 {} 条已达自动重放上限，等待人工处理", summary.exhausted());
+                    alertDlqReplayExhausted(summary.exhausted());
+                }
+            } else {
+                long dlq = messageGuardService.dlqSize();
+                if (dlq > 0) {
+                    log.debug("死信队列积压: {} 条（距上次重放 {} 秒，跳过）",
+                        dlq, (System.currentTimeMillis() - lastDlqReplayTime) / 1000);
+                }
             }
         } catch (Exception e) {
             log.debug("DLQ 重放跳过: {}", e.getMessage());
+        }
+
+        // 4.5 静默漏处理计数增量告警 —— 这些路径只记日志/只累加计数，没有告警就等于没有信号
+        try {
+            alertOnSilentLeaks();
+        } catch (Exception e) {
+            log.error("漏处理计数告警异常", e);
         }
 
         // 5. 清理旧转移记录（每天执行一次，约 03:xx 批次）
@@ -133,6 +182,64 @@ public class PatrolWorker {
         }
 
         log.debug("定时巡检完成");
+    }
+
+    /**
+     * 死信「已达自动重放上限」告警 —— 这类消息不会再被自动重放，只能人工排查后手动重放。
+     *
+     * <p>与 {@code TransferMonitorWorker} 的 DLQ 积压告警互补：那个告警说明「DLQ 有东西」，
+     * 这个告警说明「有东西已经放弃自动重放，等的是人」。限流：每小时最多一次。</p>
+     */
+    private void alertDlqReplayExhausted(int exhausted) {
+        long now = System.currentTimeMillis();
+        if (now - lastDlqExhaustedAlertTime < 3600_000L) return;
+        lastDlqExhaustedAlertTime = now;
+        alertService.createAlert(null, "dlq_replay_exhausted",
+            AgentAlert.AlertSeverity.high,
+            String.format("死信队列 %d 条消息已达自动重放 %d 次上限，不再自动重放。"
+                    + "这类消息通常是确定性失败（如客户关系已失效、参数错误），"
+                    + "需排查根因后调 POST /api/health/dlq/replay 手动重放",
+                exhausted, RedisConfig.DLQ_MAX_AUTO_REPLAYS),
+            AgentAlert.AutoAction.none, null);
+    }
+
+    /**
+     * 静默漏处理计数的增量告警。
+     *
+     * <p>这些计数原先只写日志或什么都不写（见 {@link LeakMetrics}），没有告警就等于没有信号，
+     * 尤其 {@code tag_skip_missing_qrcode}（整个自动打标被前置跳过，本地与企微两侧都没有标签）。
+     * 计数值是「本次启动以来」的累计值、重启归零，所以只能比两次巡检之间的增量。</p>
+     */
+    private void alertOnSilentLeaks() {
+        Map<String, Object> snapshot = leakMetrics.snapshot();
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, Long> threshold : LEAK_ALERT_THRESHOLDS.entrySet()) {
+            String name = threshold.getKey();
+            Object raw = snapshot.get(name);
+            if (!(raw instanceof Number num)) continue;
+            long current = num.longValue();
+            Long previous = lastLeakCounters.get(name);
+            // 没有基线（首次巡检）或计数回退（进程重启后归零）时不告警，只重建基线
+            if (previous == null || current < previous) {
+                lastLeakCounters.put(name, current);
+                continue;
+            }
+            long delta = current - previous;
+            if (delta < threshold.getValue()) continue;
+
+            Long lastAlert = lastLeakAlertAt.get(name);
+            // 限流期间基线不动：否则这一小时里涨的量会被并进「上次已报出的值」而永远消失
+            if (lastAlert != null && now - lastAlert < LEAK_ALERT_THROTTLE_MS) continue;
+            lastLeakAlertAt.put(name, now);
+            // 基线语义是「上次真正报出去的值」，只在告警时推进，让被限流压住的增量累积到下一次
+            lastLeakCounters.put(name, current);
+            log.error("漏处理计数告警: {} 本次巡检新增 {} 次（本次启动以来累计 {}）", name, delta, current);
+            alertService.createAlert(null, "leak_" + name, AgentAlert.AlertSeverity.high,
+                String.format("漏处理计数 %s 本次巡检新增 %d 次（本次启动以来累计 %d）。"
+                        + "该计数对应「本该打标却没打上」或「消息被丢弃」，请查 /api/health/streams 与相关日志",
+                    name, delta, current),
+                AgentAlert.AutoAction.none, null);
+        }
     }
 
     /**

@@ -75,6 +75,7 @@ public class CallbackWorker {
     private final CustomerDeletionService deletionService;
     private final CustomerRelationService customerRelationService;
     private final CustomerRepository customerRepo;
+    private final LeakMetrics leakMetrics;
 
     private volatile boolean running = true;
     /** 回调消费线程数，可通过 app.worker.callback.threads 配置 */
@@ -94,11 +95,44 @@ public class CallbackWorker {
         for (int i = 1; i <= consumerThreads; i++) {
             final int threadId = i;
             final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
-            callbackExecutor.execute(() -> consumeLoop(consumerName, threadId));
+            callbackExecutor.execute(() -> runConsumerWithRestart(consumerName, threadId));
         }
         log.info("CallbackWorker 已启动 {} 个消费线程, Stream={}, Group={}",
             consumerThreads, RedisConfig.CALLBACK_STREAM_KEY,
             RedisConfig.CALLBACK_CONSUMER_GROUP);
+    }
+
+    /**
+     * 消费线程监督循环 —— 保证只要进程活着，回调消费就不会静默停摆。
+     *
+     * <p>{@link #consumeLoop} 只应在关闭（{@code running=false}）时返回。一旦它提前返回
+     * （被中断、或抛出不在 {@code catch (Exception)} 覆盖范围内的 {@link Throwable}），
+     * 该线程原本就此消亡且无从恢复：{@link #start()} 只在启动时提交一次任务，
+     * 4 个线程逐个死掉后整个客户入库链路无人消费，表现为 callback Stream 只涨不消，
+     * 且没有任何消费者存在 —— PEL 也不会有积压，靠积压告警发现不了。</p>
+     *
+     * <p>这里记数（{@code leak_metrics.callback_consumer_restarted}）、打 ERROR 日志并重建消费循环。</p>
+     */
+    private void runConsumerWithRestart(String consumerName, int threadId) {
+        while (running) {
+            try {
+                consumeLoop(consumerName, threadId);
+            } catch (Throwable t) {
+                log.error("CallbackWorker-{} 消费循环异常终止，将重建", threadId, t);
+            }
+            if (!running) break;
+            leakMetrics.callbackConsumerRestarted();
+            log.error("CallbackWorker-{} 消费循环意外退出，1s 后重建", threadId);
+            // 中断是意外事件而非关闭信号（关闭时上面已 break），清除标志以免重建后
+            // 立即再次因中断而退出；同时 sleep 防止重建变成忙循环
+            Thread.interrupted();
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /**

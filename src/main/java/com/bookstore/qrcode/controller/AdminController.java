@@ -69,7 +69,7 @@ public class AdminController {
             ? stream : RedisConfig.TRANSFER_STREAM_KEY;
         int replayed;
         if (all) {
-            replayed = messageGuardService.replayAllDlq(defaultTarget);
+            replayed = messageGuardService.replayAllDlq(defaultTarget).replayed();
         } else {
             replayed = messageGuardService.replayDlq(defaultTarget);
         }

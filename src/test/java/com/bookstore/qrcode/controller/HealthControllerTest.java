@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.SecurityConfig;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,6 +23,7 @@ class HealthControllerTest {
     private MockMvc mockMvc;
     private StringRedisTemplate redisTemplate;
     private MessageGuardService messageGuardService;
+    private final LeakMetrics leakMetrics = new LeakMetrics();
 
     @BeforeEach
     void setUp() {
@@ -29,7 +31,8 @@ class HealthControllerTest {
         messageGuardService = mock(MessageGuardService.class);
         GlobalAgentPoolRepository poolRepo = mock(GlobalAgentPoolRepository.class);
 
-        HealthController controller = new HealthController(redisTemplate, poolRepo, messageGuardService);
+        HealthController controller = new HealthController(redisTemplate, poolRepo, messageGuardService,
+            leakMetrics);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -48,5 +51,20 @@ class HealthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.dlq_length").value(0))
                 .andExpect(jsonPath("$.redis_alive").value(true));
+    }
+
+    @Test
+    @DisplayName("GET /api/health/streams — 暴露静默漏处理计数，运维才拿得到增量")
+    void shouldExposeLeakMetrics() throws Exception {
+        leakMetrics.tagSkipMissingQrCode();
+        leakMetrics.tagConsumerRestarted();
+        leakMetrics.tagPermanentFailure(84061);
+
+        mockMvc.perform(get("/api/health/streams"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.leak_metrics.tag_skip_missing_qrcode").value(1))
+                .andExpect(jsonPath("$.leak_metrics.tag_consumer_restarted").value(1))
+                .andExpect(jsonPath("$.leak_metrics.tag_permanent_failure").value(1))
+                .andExpect(jsonPath("$.leak_metrics.tag_permanent_failure_by_errcode['84061']").value(1));
     }
 }

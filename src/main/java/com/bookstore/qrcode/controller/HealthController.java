@@ -3,6 +3,7 @@ package com.bookstore.qrcode.controller;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
+import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.connection.stream.PendingMessagesSummary;
@@ -28,6 +29,7 @@ public class HealthController {
     private final StringRedisTemplate redisTemplate;
     private final GlobalAgentPoolRepository poolRepo;
     private final MessageGuardService messageGuardService;
+    private final LeakMetrics leakMetrics;
 
     @GetMapping("/api/health/streams")
     public Map<String, Object> streamHealth() {
@@ -50,6 +52,9 @@ public class HealthController {
 
         // DLQ
         h.put("dlq_length", messageGuardService.dlqSize());
+
+        // 静默漏处理计数（进程内累计，重启归零；告警请比对两次采集的增量）
+        h.put("leak_metrics", leakMetrics.snapshot());
 
         // 全局池
         try {

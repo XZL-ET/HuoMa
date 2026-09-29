@@ -25,6 +25,13 @@ spring:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 6
+  # @Scheduled 默认只用 1 个线程，所有定时任务串行。PatrolWorker 每分钟的 PEL 回收、
+  # 每 5 分钟的巡检、以及最多 1000 条 Redis 往返的 DLQ 重放只要有一个卡住，
+  # StreamBacklogMonitor 这类「发现不健康」的巡检就跟着不跑 —— 越不健康越不巡检。
+  task:
+    scheduling:
+      pool:
+        size: 4
 
 server:
   forward-headers-strategy: native   # 信任 ALB/Nginx 透传的 X-Forwarded-Proto，生成 https 链接
@@ -78,9 +85,15 @@ app:
       threads: ${DATAFILL_THREADS:4}
   redis-stream:
     callback-maxlen: ${CALLBACK_STREAM_MAXLEN:50000}
-    tag-maxlen: ${TAG_STREAM_MAXLEN:50000}
+    # 打标失败重试依赖「消息仍在 Stream 里」，缓冲须覆盖企微故障恢复时长。
+    # 50k 在 ~20-40 msg/s 下仅够 20-40 分钟；生产实测单条约 221B，200k 只多占约 33MB
+    # （Redis 用量 115MB/2GiB，且 stream 无 TTL 不参与 volatile-lru 淘汰）。
+    tag-maxlen: ${TAG_STREAM_MAXLEN:200000}
     datafill-maxlen: ${DATAFILL_STREAM_MAXLEN:50000}
     dlq-maxlen: ${DLQ_STREAM_MAXLEN:10000}
+    # Stream 消费巡检的 PEL 未 ACK 告警阈值。带 _retry_at 的退避消息到期前故意不 ACK，
+    # callback 流按 50 条/批 × 4 线程算，一次全网退避就能顶到 200 —— 偏低会偏噪，按实测上调
+    pending-backlog-threshold: ${PENDING_BACKLOG_THRESHOLD:200}
   wecom:
     root-department-id: ${WECOM_ROOT_DEPT_ID:1}
   agent:

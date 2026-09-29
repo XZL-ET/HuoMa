@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.*;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -17,9 +19,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 消息可靠性守护服务 —— 去重 / 重试计数 / 死信队列 / PEL 回收 / DLQ 重放。
@@ -51,6 +55,7 @@ import java.util.Map;
 public class MessageGuardService {
 
     private final StringRedisTemplate redisTemplate;
+    private final LeakMetrics leakMetrics;
 
     private static final int MAX_RETRIES = 3;
     private static final int DEDUP_TTL_SECONDS = 300;
@@ -249,8 +254,12 @@ public class MessageGuardService {
                             RecordId.of(msgId));
                     } catch (NullPointerException npe) {
                         // 消息体已被 stream 清理（如 MAXLEN/MINID 裁剪），
-                        // 但 PEL 条目还在 — 直接 ACK 删除僵尸 pending
-                        log.warn("PEL 僵尸消息（body 已删除）: stream={}, msgId={}, idle={}ms — 自动 ACK",
+                        // 但 PEL 条目还在 — 直接 ACK 删除僵尸 pending。
+                        // 这是真正的丢消息：该消息永远不会被处理，故用 ERROR + 计数，
+                        // 使「trim 砍掉未消费消息」这件事在监控里可见。
+                        leakMetrics.zombiePendingDropped();
+                        log.error("PEL 僵尸消息（body 已被 Stream 裁剪），消息永久丢失: "
+                            + "stream={}, msgId={}, idle={}ms — 自动 ACK",
                             streamKey, msgId, idle);
                         ackSafely(streamKey, consumerGroup, msgId);
                         continue;
@@ -379,6 +388,22 @@ public class MessageGuardService {
         }
     }
 
+    /** 单轮自动重放条数上限：一次性把 DLQ 全部灌回各 Stream 会瞬间压垮下游消费与企微 API */
+    private static final int MAX_REPLAY_PER_PASS = 1000;
+
+    /** DLQ 扫描上限相对 {@code DLQ_STREAM_MAXLEN} 的余量（XTRIM 是近似裁剪，实际长度可能略超） */
+    private static final long SCAN_SLACK = 1000L;
+
+    /**
+     * 一轮 DLQ 重放的结果。
+     *
+     * @param replayed  本轮实际重放并移出 DLQ 的条数
+     * @param exhausted 已达自动重放上限、留在 DLQ 等人工处理的条数（本轮额度用尽后仍如实统计，
+     *                  调用方据此告警，不能因为「这轮没轮到重放」就被略过）
+     * @param deferred  因本轮额度用尽而推迟到下一轮的条数（非零表示 DLQ 还没排空）
+     */
+    public record ReplaySummary(int replayed, int exhausted, int deferred) {}
+
     /**
      * 将 DLQ 中的所有消息重放到指定 Stream，然后逐条删除（防丢消息）。
      *
@@ -388,16 +413,44 @@ public class MessageGuardService {
      * 而非截断整个 Stream，避免因 count 限制丢消息。</p>
      *
      * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
-     * @return 重放的消息数量
+     * @return 本轮重放结果
      */
-    public int replayAllDlq(String targetStreamKey) {
-        int count = 0;
-        try {
-            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
-                .read(StreamReadOptions.empty().count(1000),
-                    StreamOffset.fromStart(RedisConfig.DLQ_STREAM_KEY));
+    public ReplaySummary replayAllDlq(String targetStreamKey) {
+        return replayAllDlq(targetStreamKey, false);
+    }
 
-            if (records != null && !records.isEmpty()) {
+    /**
+     * 全量重放的实现，区分「自动重放」与「人工重放」两种语义。
+     *
+     * <p>{@code autoReplay=true}（{@code PatrolWorker} 周期性调用）时套用
+     * {@link RedisConfig#DLQ_MAX_AUTO_REPLAYS} 上限，达限的消息留在 DLQ 等人工介入，
+     * 避免「重放 → 失败 → 再入 DLQ」每 30 分钟无限循环、持续空耗企微 API 配额。
+     * 计数绑定在 {@code dlq:replay:{target}:{logicalId}} 这一独立 Key 上，而非消息字段 ——
+     * 消息体里的字段会被反复写回 Stream，而现有的 DLQ 元数据剥离逻辑并不认识它的存在。</p>
+     *
+     * <p>{@code autoReplay=false}（管理端点人工触发）时不受上限约束，并重置该消息的
+     * 自动重放计数，让它重新获得完整的自动重放机会。</p>
+     *
+     * @param targetStreamKey 默认重放目标 Stream
+     * @param autoReplay      是否为周期性自动重放
+     * @return 本轮重放结果
+     */
+    public ReplaySummary replayAllDlq(String targetStreamKey, boolean autoReplay) {
+        int replayed = 0;
+        int exhausted = 0;
+        int deferred = 0;
+        boolean scanComplete = false;
+        Set<String> presentCounters = new HashSet<>();
+        try {
+            // 必须扫完整个 DLQ，不能只读队头若干条：达限消息不删除、会永久占住队头，
+            // 只读队头时它们会把后面所有可恢复的消息全部挡住，自动重放整体静默失效
+            int limit = (int) Math.min(Integer.MAX_VALUE, RedisConfig.DLQ_STREAM_MAXLEN + SCAN_SLACK);
+            List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
+                .read(StreamReadOptions.empty().count(limit),
+                    StreamOffset.fromStart(RedisConfig.DLQ_STREAM_KEY));
+            scanComplete = records == null || records.size() < limit;
+
+            if (records != null) {
                 for (MapRecord<String, Object, Object> r : records) {
                     Map<String, String> fields = toStringMap(r.getValue());
                     // 读取来源 Stream（剥离前），用于自动路由到正确的目标
@@ -411,23 +464,144 @@ public class MessageGuardService {
                     fields.remove("_dlq_last_error");
                     fields.remove("_dlq_time");
                     fields.remove("_retry_at");
-                    // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String logicalId = computeLogicalId(fields);
+                    presentCounters.add(target + ":" + logicalId);
+
+                    // 先判本轮额度、再判达限：额度用尽时不能推进达限计数，
+                    // 否则「本轮没轮到」会被当成「又重放失败一次」，白吃掉消息的重放预算
+                    if (replayed >= MAX_REPLAY_PER_PASS) {
+                        // 额度用尽也要把「已达限」和「本轮没轮到」分开：PatrolWorker 的
+                        // dlq_replay_exhausted 告警只看 exhausted，一律记 deferred 会让这条
+                        // 告警在 DLQ 超过一轮额度时静默。只读判断，不推进计数
+                        if (autoReplay && autoReplayAlreadyExhausted(target, logicalId)) {
+                            exhausted++;
+                        } else {
+                            deferred++;
+                        }
+                        continue;
+                    }
+                    // 自动重放达限：留在 DLQ，不删原消息，等人工介入
+                    if (autoReplay && autoReplayExhausted(target, logicalId)) {
+                        exhausted++;
+                        continue;
+                    }
+                    if (!autoReplay) {
+                        resetAutoReplayCount(target, logicalId);
+                    }
+                    // 重放前清理旧重试计数器，让消息获得全新重试次数
                     String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
-                    // 添加静态标记
-                    fields.put("_dlq_replayed", "true");
                     redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());
-                    count++;
+                    replayed++;
                 }
-                log.info("DLQ 全量重放完成: {} 条 → {}", count, targetStreamKey);
+                if (replayed > 0 || exhausted > 0 || deferred > 0) {
+                    log.info("DLQ 重放完成: 重放 {} 条 → {}，达上限保留 {} 条，本轮额度外顺延 {} 条",
+                        replayed, targetStreamKey, exhausted, deferred);
+                }
+            }
+            // 只有完整扫过 DLQ 才能回收：没扫到的消息不等于「已离开 DLQ」
+            if (autoReplay && scanComplete) {
+                gcReplayCounters(presentCounters);
             }
         } catch (Exception e) {
             log.error("DLQ 全量重放失败: target={}", targetStreamKey, e);
         }
-        return count;
+        return new ReplaySummary(replayed, exhausted, deferred);
+    }
+
+    /**
+     * 回收「消息已离开 DLQ」的自动重放计数 Key。
+     *
+     * <p>不回收的后果：{@code dlq:replay:{target}:{logicalId}} 会一直残留到 TTL（7 天）到期，
+     * 而它记的是「这个内容被重放过几次」。tag 流的 DLQ 字段只有 {@code event}，
+     * 事件体又恰好是 {@code external_userid/userid/state} 三个字段，因此同一客户经同一员工
+     * 扫同一学校的活码每次都会算出同一个 logicalId —— 某条消息用光 5 次额度后（哪怕它后来成功了），
+     * 这位客户之后任何一次新的、本来可恢复的失败都会被直接判为达限，一次自动重放都不给。</p>
+     *
+     * <p>只在本轮完整扫过 DLQ 时调用（见 {@link #replayAllDlq(String, boolean)}），
+     * 否则会把没扫到的消息的计数误删。误删只会让封顶机制少拦几次，方向是安全的。</p>
+     */
+    private void gcReplayCounters(Set<String> presentCounters) {
+        int removed = 0;
+        try (Cursor<String> cursor = redisTemplate.scan(ScanOptions.scanOptions()
+                .match(RedisConfig.DLQ_REPLAY_KEY_PREFIX + "*")
+                .count(500)
+                .build())) {
+            while (cursor.hasNext()) {
+                String key = cursor.next();
+                String suffix = key.substring(RedisConfig.DLQ_REPLAY_KEY_PREFIX.length());
+                if (presentCounters.contains(suffix)) continue;
+                redisTemplate.delete(key);
+                removed++;
+            }
+        } catch (Exception e) {
+            log.warn("自动重放计数 Key 回收失败（不影响本轮重放）", e);
+            return;
+        }
+        if (removed > 0) {
+            log.debug("已回收 {} 个失效的自动重放计数 Key", removed);
+        }
+    }
+
+    /**
+     * 累计一次自动重放并判断是否已达上限。
+     *
+     * <p>Redis 异常时 fail-open 返回 false：宁可多试一次，也不要因计数不可用卡住消息。</p>
+     *
+     * <p>计数与告警只在「刚好越过上限」的那一次产生。达限消息此后每个重放周期都会被再次
+     * 检查到，若每次都记，{@code dlq_replay_exhausted} 会把「1 条卡住」和「1000 条卡住」
+     * 抹平成同一个持续上涨的数字，同时每周期刷出一条重复 WARN。</p>
+     *
+     * <p>计数 Key 的清理见 {@link #gcReplayCounters(Set)}：消息一旦离开 DLQ，
+     * 其 Key 会被回收，后续同内容的新消息重新获得完整的重放额度。</p>
+     */
+    private boolean autoReplayExhausted(String target, String logicalId) {
+        String key = RedisConfig.DLQ_REPLAY_KEY_PREFIX + target + ":" + logicalId;
+        try {
+            Long n = redisTemplate.opsForValue().increment(key);
+            redisTemplate.expire(key, Duration.ofSeconds(RedisConfig.DLQ_REPLAY_TTL_SECONDS));
+            if (n == null || n <= RedisConfig.DLQ_MAX_AUTO_REPLAYS) return false;
+            if (n == RedisConfig.DLQ_MAX_AUTO_REPLAYS + 1L) {
+                leakMetrics.dlqReplayExhausted();
+                log.warn("死信自动重放已达 {} 次上限，保留在 DLQ 等待人工处理: target={}, logicalId={}",
+                    RedisConfig.DLQ_MAX_AUTO_REPLAYS, target, logicalId);
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("死信自动重放计数失败，按未达上限处理: key={}", key, e);
+            return false;
+        }
+    }
+
+    /**
+     * 只读判断该消息是否已达自动重放上限 —— 不推进计数。
+     *
+     * <p>仅在「本轮重放额度已用尽」时使用：那时消息根本没被重放，用
+     * {@link #autoReplayExhausted} 判定会顺带 INCR，等于替这些消息白吃一次重放配额。
+     * 用 get 读当前值，把已达限的消息如实计入 exhausted。</p>
+     *
+     * <p>读失败时 fail-open 返回 false（按未达限处理），与 {@link #autoReplayExhausted}
+     * 的降级方向一致；这里不打日志，避免逐条消息刷屏。</p>
+     */
+    private boolean autoReplayAlreadyExhausted(String target, String logicalId) {
+        String key = RedisConfig.DLQ_REPLAY_KEY_PREFIX + target + ":" + logicalId;
+        try {
+            String n = redisTemplate.opsForValue().get(key);
+            return n != null && Long.parseLong(n) > RedisConfig.DLQ_MAX_AUTO_REPLAYS;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 人工重放时重置自动重放计数，使该消息重新获得完整的自动重放机会。 */
+    private void resetAutoReplayCount(String target, String logicalId) {
+        try {
+            redisTemplate.delete(RedisConfig.DLQ_REPLAY_KEY_PREFIX + target + ":" + logicalId);
+        } catch (Exception e) {
+            log.warn("死信自动重放计数重置失败: target={}, logicalId={}", target, logicalId, e);
+        }
     }
 
     /**
@@ -435,9 +609,12 @@ public class MessageGuardService {
      *
      * <p>每条消息优先使用 {@code _dlq_origin_stream} 元数据字段作为重放目标，
      * 若该字段缺失或为空则回退到 {@code targetStreamKey}。
-     * 重放时保留原始消息的所有字段，添加 _dlq_replayed 标记。
+     * 重放时保留原始消息的所有字段。
      * 一次最多重放 100 条死信，防止一次性压力过大。
      * 使用 XDEL 逐条删除而非截断整个 Stream，避免因 count 限制丢消息。</p>
+     *
+     * <p>这是人工重放入口，不受 {@link RedisConfig#DLQ_MAX_AUTO_REPLAYS} 约束，
+     * 并会重置该消息的自动重放计数。</p>
      *
      * @param targetStreamKey 默认重放目标 Stream（当消息无 _dlq_origin_stream 时使用）
      * @return 重放的消息数量
@@ -467,8 +644,8 @@ public class MessageGuardService {
                     String logicalId = computeLogicalId(fields);
                     String retryKey = RedisConfig.DLQ_RETRY_KEY_PREFIX + target + ":" + logicalId;
                     redisTemplate.delete(retryKey);
-                    // 添加静态标记
-                    fields.put("_dlq_replayed", "true");
+                    // 人工重放：重置自动重放计数，使该消息重新获得完整的自动重放机会
+                    resetAutoReplayCount(target, logicalId);
                     redisTemplate.opsForStream().add(target, fields);
                     // 逐条删除，不丢消息
                     redisTemplate.opsForStream().delete(RedisConfig.DLQ_STREAM_KEY, r.getId());

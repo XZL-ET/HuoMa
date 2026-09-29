@@ -26,7 +26,7 @@ import java.util.*;
  *   <li>支持活码配置的自定义标签，客户扫码后自动打标（{@link #autoTag}）</li>
  *   <li>标签的获取与创建，自动同步到企业微信（{@link #getOrCreateTag}）</li>
  *   <li>标签组缓存机制（DCL 双重检查锁定，{@link #getGroupIdByKeyword}）</li>
- *   <li>收集表单提交后打年级 / 班级标签（{@link #tagFromForm}）</li>
+ *   <li>收集表单提交后按 tag_mapping 打标（{@link #applyFormTags}）</li>
  *   <li>手动为指定客户补打标签（{@link #manualTag}）</li>
  * </ul>
  *
@@ -51,6 +51,7 @@ public class TagService {
     private final WecomApiClient wecomApi;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final AlertService alertService;
+    private final LeakMetrics leakMetrics;
 
     /**
      * 缓存的企微标签组 ID（按 group_name 索引）。
@@ -90,7 +91,8 @@ public class TagService {
             // ===== 根据学校ID反查活码 =====
             QrCode qr = qrCodeRepo.findBySchoolId(state).orElse(null);
             if (qr == null) {
-                log.warn("自动打标失败: 未找到学校ID={} 的活码", state);
+                leakMetrics.tagSkipMissingQrCode();
+                log.error("自动打标失败: 未找到学校ID={} 的活码，本次打标被跳过", state);
                 return;
             }
             log.info("自动打标 活码信息: school={}, city={}, district={}",
@@ -127,6 +129,7 @@ public class TagService {
                     batchTagIds.add(t.getWecomTagId());
                     batchTagNames.add(t.getName());
                 } else {
+                    leakMetrics.tagSkipNoWecomTagId();
                     log.warn("企微打标跳过(无wecomTagId): tag={}", t.getName());
                 }
             }
@@ -141,6 +144,7 @@ public class TagService {
                 } catch (Exception e) {
                     log.error("企微打标失败(永久): tags={}, wecomTagIds={}", batchTagNames, batchTagIds, e);
                     detectAddFailure(userId, externalUserId, state, e);
+                    rethrowUnlessCustomerRelationGone(e);
                 }
             }
 
@@ -177,6 +181,9 @@ public class TagService {
                     if (customTag.getWecomTagId() != null) {
                         customTagIds.add(customTag.getWecomTagId());
                         customTagNames.add(customTag.getName());
+                    } else {
+                        leakMetrics.tagSkipNoWecomTagId();
+                        log.warn("企微打标跳过(无wecomTagId): tag={}", customTag.getName());
                     }
                 }
                 // 一次性批量同步自定义标签到企微（避免并发 45035 冲突）
@@ -191,6 +198,7 @@ public class TagService {
                     } catch (Exception e) {
                         log.error("企微打标失败(永久): tags={}, wecomTagIds={}", customTagNames, customTagIds, e);
                         detectAddFailure(userId, externalUserId, state, e);
+                        rethrowUnlessCustomerRelationGone(e);
                     }
                 }
             }
@@ -226,6 +234,30 @@ public class TagService {
                 || errcode == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
             alertService.handleCustomerApiError(userid, externalUserid, errcode, wae.getErrmsg(), state);
         }
+    }
+
+    /**
+     * 永久失败分流：客户关系已失效的错误码只告警不重试，其余原样抛出。
+     *
+     * <p>25002（客户拒收）、84073（客户删除）、84061（关系不存在）表示客户关系已经不存在，
+     * 重试永远不会成功，累计到阈值后由 {@link AlertService} 暂停员工；对这三类不再抛出，
+     * 保持原有「本地关联保留、只缺企微侧」的语义。
+     *
+     * <p>其余错误码一律抛出。经 {@link #detectAddFailure} 归类的三类之外的错误码原本会被
+     * 静默吞掉，本地与企微两侧都看不到标签，且没有任何信号；抛出后由
+     * {@code TagWorker} 依 {@code classifyWecomError} 判为永久故障，直接进死信队列等待人工处理。
+     */
+    private void rethrowUnlessCustomerRelationGone(Exception e) {
+        if (e instanceof WecomApiException wae) {
+            int errcode = wae.getErrcode();
+            if (errcode == WecomErrorCodes.REJECTED
+                    || errcode == WecomErrorCodes.DELETED_BY_USER
+                    || errcode == WecomErrorCodes.NOT_EXTERNAL_CONTACT) {
+                return;
+            }
+            leakMetrics.tagPermanentFailure(errcode);
+        }
+        throw (e instanceof RuntimeException re) ? re : new RuntimeException(e);
     }
 
     /**
@@ -371,16 +403,34 @@ public class TagService {
      */
     private String matchGroupByKeyword(String keyword) {
         if (cachedGroupIdMap == null) return null;
-        // ① 精确匹配：如 "市州" → 市州组, "学校-白银市" → 学校-白银市组
-        String exact = cachedGroupIdMap.get(keyword);
-        if (exact != null) return exact;
-        // ② 模糊匹配兜底：如 "学校" 匹配到第一个包含"学校"的组
-        // 防御：keyword 为空或 null 时不进行模糊匹配（String.contains(null) 会 NPE）
+        String matched = matchGroupName(cachedGroupIdMap.keySet(), keyword);
+        return matched != null ? cachedGroupIdMap.get(matched) : null;
+    }
+
+    /**
+     * 从候选标签组名中按关键词匹配出组名：先精确匹配，再模糊匹配兜底。
+     *
+     * <p>抽成共用实现，是为了让「缓存里的组」（{@link #matchGroupByKeyword}）和
+     * 「刚拉回来的企微响应里的组」（{@link #findWecomTagId}）用同一套匹配规则，
+     * 否则两处会各自漂移，出现「缓存说在 A 组、按响应查到 B 组」的矛盾。</p>
+     *
+     * <p>精确匹配优先：{@code "学校-白银市"} 只命中对应城市的组，不会因为
+     * {@code contains("市")} 串到其他城市的学校组或市州组。模糊匹配作为兜底：
+     * {@code "学校"} 匹配第一个包含"学校"的组。</p>
+     *
+     * @param groupNames 候选组名（保持企微返回顺序，决定模糊匹配的优先级）
+     * @param keyword    组名关键词，null/空 时不匹配（防御 String.contains(null) 的 NPE）
+     * @return 匹配到的组名，未匹配返回 null
+     */
+    private static String matchGroupName(Collection<String> groupNames, String keyword) {
         if (keyword == null || keyword.isEmpty()) return null;
-        return cachedGroupIdMap.entrySet().stream()
-            .filter(e -> e.getKey().contains(keyword))
-            .map(Map.Entry::getValue)
-            .findFirst().orElse(null);
+        for (String gn : groupNames) {
+            if (gn.equals(keyword)) return gn;
+        }
+        for (String gn : groupNames) {
+            if (gn.contains(keyword)) return gn;
+        }
+        return null;
     }
 
     /**
@@ -440,7 +490,7 @@ public class TagService {
             // 检查企微错误码 40071：标签名已存在（并发创建导致）
             if (e.getErrcode() == 40071) {
                 log.info("企微标签已存在(40071)，从列表查找: name={}", tagName);
-                String existingId = findWecomTagIdByName(tagName);
+                String existingId = findWecomTagIdByName(tagName, groupKeyword);
                 if (existingId != null) {
                     return existingId;
                 }
@@ -450,7 +500,7 @@ public class TagService {
             // 其他错误码
             log.warn("创建企微标签返回非零: name={}, errcode={}, errmsg={}",
                 tagName, e.getErrcode(), e.getErrmsg());
-            String existingId = findWecomTagIdByName(tagName);
+            String existingId = findWecomTagIdByName(tagName, groupKeyword);
             if (existingId != null) return existingId;
             return null;
         }
@@ -479,35 +529,72 @@ public class TagService {
     }
 
     /**
-     * 从企微标签列表中按名称查找标签 ID。
+     * 从企微标签列表中查找标签 ID（自行拉取标签列表）。
      *
-     * @param tagName 标签名称
+     * @param tagName      标签名称
+     * @param groupKeyword 标签组关键词，用于把查找限定在正确的组内；为 null/空 时退化为全局按名查找
      * @return 企微标签 ID，未找到返回 null
      */
-    private String findWecomTagIdByName(String tagName) {
+    private String findWecomTagIdByName(String tagName, String groupKeyword) {
         try {
-            JsonNode resp = wecomApi.getCorpTagList();
-            if (resp.has("tag_group")) {
-                List<String> allNames = new ArrayList<>();
-                for (JsonNode group : resp.get("tag_group")) {
-                    if (group.has("tag")) {
-                        for (JsonNode t : group.get("tag")) {
-                            String name = t.has("name") ? t.get("name").asText().trim() : "";
-                            allNames.add(name);
-                            if (tagName.trim().equals(name)) {
-                                return t.get("id").asText();
-                            }
-                        }
-                    }
-                }
-                // 未匹配到时输出所有企微标签名称，便于排查编码/命名差异
-                log.warn("企微标签列表中未找到 '{}'，当前企微标签: {}", tagName, allNames);
-            } else {
-                log.warn("企微返回无 tag_group，查找标签失败: name={}", tagName);
-            }
+            return findWecomTagId(wecomApi.getCorpTagList(), tagName, groupKeyword);
         } catch (Exception e) {
-            log.warn("查找企微标签失败: name={}", tagName, e);
+            log.warn("查找企微标签失败: name={}, keyword={}", tagName, groupKeyword, e);
+            return null;
         }
+    }
+
+    /**
+     * 在已拉取的企微标签列表响应中查找标签 ID，优先限定在 {@code groupKeyword} 对应的组内。
+     *
+     * <p>标签名在不同标签组下可以重复（如"一年级"同时在"学校-白银市"和"学校-兰州市"两组）。
+     * 不限定组时只能返回企微返回顺序里的第一条，会把客户打进错误的组。因此先按
+     * {@code groupKeyword} 定位组名，再只在该组内按名匹配。</p>
+     *
+     * <p>只有当关键词匹配不到任何组时，才回退到原有的全局按名查找 —— 保证这次改动
+     * 只会纠正「本来能定位到组」的串组问题，不会让原本查得到的标签变成查不到。</p>
+     *
+     * @param resp         企微 {@code get_corp_tag_list} 响应
+     * @param tagName      标签名称
+     * @param groupKeyword 标签组关键词
+     * @return 企微标签 ID，未找到返回 null
+     */
+    private String findWecomTagId(JsonNode resp, String tagName, String groupKeyword) {
+        if (!resp.has("tag_group")) {
+            log.warn("企微返回无 tag_group，查找标签失败: name={}", tagName);
+            return null;
+        }
+        List<JsonNode> groups = new ArrayList<>();
+        List<String> groupNames = new ArrayList<>();
+        for (JsonNode group : resp.get("tag_group")) {
+            groups.add(group);
+            groupNames.add(group.has("group_name") ? group.get("group_name").asText().trim() : "");
+        }
+
+        String matchedGroupName = matchGroupName(groupNames, groupKeyword);
+        if (matchedGroupName == null && groupKeyword != null && !groupKeyword.isBlank()) {
+            // 关键词非空却匹配不到组，说明组名与预期不符（可能是组被改名/删除）
+            log.info("标签组关键词未匹配到企微标签组，回退全局按名查找: keyword={}, name={}",
+                groupKeyword, tagName);
+        }
+
+        final String wantedName = tagName.trim();
+        List<String> searched = new ArrayList<>();
+        for (JsonNode group : groups) {
+            String gn = group.has("group_name") ? group.get("group_name").asText().trim() : "";
+            if (matchedGroupName != null && !matchedGroupName.equals(gn)) continue;
+            if (!group.has("tag")) continue;
+            for (JsonNode t : group.get("tag")) {
+                String name = t.has("name") ? t.get("name").asText().trim() : "";
+                searched.add(gn + "|" + name);
+                if (wantedName.equals(name)) {
+                    return t.get("id").asText();
+                }
+            }
+        }
+        // 未匹配到时输出已查范围，便于排查组定位错误与命名差异
+        log.warn("企微标签列表中未找到 '{}'（组关键词={}，匹配组={}），已查: {}",
+            tagName, groupKeyword, matchedGroupName, searched);
         return null;
     }
 
@@ -527,23 +614,15 @@ public class TagService {
      */
     private void syncExistingTagToWecom(Tag tag, String groupKeyword) {
         try {
-            // 策略一：从企微标签列表中按名称匹配，避免重复创建
-            JsonNode resp = wecomApi.getCorpTagList();
-            if (resp.has("tag_group")) {
-                for (JsonNode group : resp.get("tag_group")) {
-                    if (group.has("tag")) {
-                        for (JsonNode t : group.get("tag")) {
-                            if (tag.getName().equals(t.get("name").asText())) {
-                                // 名称匹配成功，补填企微 ID
-                                String wecomId = t.get("id").asText();
-                                tag.setWecomTagId(wecomId);
-                                tagRepo.save(tag);
-                                log.info("标签已补同步: name={}, wecomTagId={}", tag.getName(), wecomId);
-                                return;
-                            }
-                        }
-                    }
-                }
+            // 策略一：从企微标签列表中按名称匹配，避免重复创建。
+            // 限定在 groupKeyword 对应的组内查找，避免同名标签存在多个组时补填到错误的组
+            String wecomId = findWecomTagId(wecomApi.getCorpTagList(), tag.getName(), groupKeyword);
+            if (wecomId != null) {
+                tag.setWecomTagId(wecomId);
+                tagRepo.save(tag);
+                log.info("标签已补同步: name={}, wecomTagId={}, keyword={}",
+                    tag.getName(), wecomId, groupKeyword);
+                return;
             }
             // 策略二：企微上不存在该名称的标签，执行创建
             String wecomTagId = createWecomTag(tag.getName(), groupKeyword);
@@ -875,50 +954,6 @@ public class TagService {
     }
 
     /**
-     * 根据收集表单回调打年级 / 班级标签。
-     *
-     * <p>当家长提交收集表单（填写年级、班级、孩子姓名等信息）时，根据表单内容为客户打上
-     * 年级标签和班级标签。标签类型标记为 {@link Tag.TagType#form}，来源标记为 "form"。</p>
-     *
-     * <p>典型场景：开学季家长提交信息收集表，系统自动为客户打上"一年级"、"1班"等标签。</p>
-     *
-     * @param externalUserId 企微客户外部用户ID
-     * @param userId         当前接待员工的企微用户ID
-     * @param grade          年级信息（如"一年级"、"二年级"），可为 null
-     * @param className      班级信息（如"1班"、"2班"），可为 null
-     * @param childName      孩子姓名（暂未使用，预留字段）
-     */
-    @Transactional
-    public void tagFromForm(String externalUserId, String userId,
-                             String grade, String className, String childName) {
-        try {
-            Customer customer = customerRepo.findByExternalUserid(externalUserId)
-                .orElse(null);
-            // 客户不存在或已删除时跳过（可能是回调异常、数据尚未同步，或已离职删除）
-            if (customer == null || customer.getStatus() == Customer.CustomerStatus.deleted) return;
-
-            // 收集年级和班级标签，批量同步到企微（避免并发 45035 冲突）
-            java.util.List<String> batchIds = new java.util.ArrayList<>();
-            if (grade != null) {
-                Tag gradeTag = getOrCreateTag(grade, Tag.TagType.form, null, "学校");
-                bindCustomerTag(customer.getId(), gradeTag.getId(), "form");
-                if (gradeTag.getWecomTagId() != null) batchIds.add(gradeTag.getWecomTagId());
-            }
-            if (className != null) {
-                Tag classTag = getOrCreateTag(className, Tag.TagType.form, null, "学校");
-                bindCustomerTag(customer.getId(), classTag.getId(), "form");
-                if (classTag.getWecomTagId() != null) batchIds.add(classTag.getWecomTagId());
-            }
-            if (!batchIds.isEmpty()) {
-                wecomApi.markTag(externalUserId, userId, batchIds);
-            }
-        } catch (Exception e) {
-            // 表单打标是附加操作，异常不应影响主流程
-            log.error("表单打标异常: external={}", externalUserId, e);
-        }
-    }
-
-    /**
      * 表单提交后异步打标+备注（由 TagWorker 消费 form_submit 事件调用）。
      */
     @Transactional
@@ -959,6 +994,9 @@ public class TagService {
                 if (schoolTag.getWecomTagId() != null) {
                     pendingWecomTagIds.add(schoolTag.getWecomTagId());
                     appliedTags.add(schoolTag.getName());
+                } else {
+                    leakMetrics.tagSkipNoWecomTagId();
+                    log.warn("企微打标跳过(无wecomTagId): tag={}", schoolTag.getName());
                 }
             }
 
@@ -988,6 +1026,9 @@ public class TagService {
                     if (tag.getWecomTagId() != null) {
                         pendingWecomTagIds.add(tag.getWecomTagId());
                         appliedTags.add(tag.getName());
+                    } else {
+                        leakMetrics.tagSkipNoWecomTagId();
+                        log.warn("企微打标跳过(无wecomTagId): tag={}", tag.getName());
                     }
                 }
             }
@@ -1019,7 +1060,16 @@ public class TagService {
             log.info("表单打标完成: external={}, tags={}, remark={}", externalUserId, appliedTags, remarkText[0]);
         } catch (Exception e) {
             log.error("表单打标异常: external={}", externalUserId, e);
-            throw new RuntimeException("表单打标失败", e);
+            // 不能把异常包成 RuntimeException：TagWorker 的 classifyWecomError 只看顶层类型，
+            // 包装后永久错误会被判成可重试，白走满重试次数才进 DLQ，且 tag_permanent_failure
+            // 根本统计不到表单这条路径。这里与 autoTag 对齐：
+            if (e instanceof WecomApiException wae) {
+                // 客户关系已失效（25002/84073/84061）不重试 —— 重试永远不会成功，
+                // 保持「本地关联保留、只缺企微侧」的原语义，直接正常返回
+                rethrowUnlessCustomerRelationGone(wae);
+                return;
+            }
+            throw (e instanceof RuntimeException re) ? re : new RuntimeException(e);
         }
     }
 }

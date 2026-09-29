@@ -13,7 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>{@link TagService#getOrCreateTag} 的「先 findFirstByNameAndGroupKeyword 再 save」在并发下会
  * 双双查空、双双 INSERT，后者撞唯一键 {@code uk_tag_name_group (name, group_keyword)} 抛
  * {@link org.springframework.dao.DataIntegrityViolationException}。getOrCreateTag 被 {@code autoTag}、
- * {@code tagFromForm} 等 {@code @Transactional} 方法 self-invocation 调用，运行在调用方事务里；
+ * {@code applyFormTags} 等 {@code @Transactional} 方法 self-invocation 调用，运行在调用方事务里；
  * 若 INSERT 跑在调用方事务，仓库 {@code save} 的 {@code @Transactional} 会把共享事务标成 rollback-only，
  * 使 catch 里的重查复用静默回滚、提交时抛 {@code UnexpectedRollbackException}。
  *

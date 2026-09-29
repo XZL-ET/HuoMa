@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.config.RedisConfig;
+import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.service.MessageGuardService.ErrorAction;
@@ -58,6 +59,7 @@ public class TagWorker {
     private final Executor taskExecutor;
     private final WecomApiClient wecomApi;
     private final com.bookstore.qrcode.service.MessageGuardService messageGuardService;
+    private final LeakMetrics leakMetrics;
 
     private volatile boolean running = true;
     /** 打标并发线程数，可通过 app.worker.tag.threads 配置 */
@@ -69,17 +71,49 @@ public class TagWorker {
     private long tagDelayMs;
 
     /**
-     * 启动 4 个并行打标消费线程。
+     * 启动 {@value #CONSUMER_PREFIX} 消费线程。
      */
     @PostConstruct
     public void start() {
         for (int i = 1; i <= consumerThreads; i++) {
             final int threadId = i;
             final String consumerName = RedisConfig.consumerName(CONSUMER_PREFIX, threadId);
-            taskExecutor.execute(() -> consumeLoop(consumerName, threadId));
+            taskExecutor.execute(() -> runConsumerWithRestart(consumerName, threadId));
         }
         log.info("TagWorker 已启动 {} 个消费线程, Stream={}, Group={}",
             consumerThreads, RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP);
+    }
+
+    /**
+     * 消费线程监督循环 —— 保证只要进程活着，打标消费就不会静默停摆。
+     *
+     * <p>{@link #consumeLoop} 只应在关闭（{@code running=false}）时返回。一旦它提前返回
+     * （被中断、或抛出不在 {@code catch (Exception)} 覆盖范围内的 {@link Throwable}），
+     * 该线程原本就此消亡且无从恢复：{@link #start()} 只在启动时提交一次任务，
+     * 8 个线程逐个死掉后整条打标链路无人消费，表现为 tag Stream 只涨不消。</p>
+     *
+     * <p>这里记数（{@code leak_metrics.tag_consumer_restarted}）、打 ERROR 日志并重建消费循环。</p>
+     */
+    private void runConsumerWithRestart(String consumerName, int threadId) {
+        while (running) {
+            try {
+                consumeLoop(consumerName, threadId);
+            } catch (Throwable t) {
+                log.error("TagWorker-{} 消费循环异常终止，将重建", threadId, t);
+            }
+            if (!running) break;
+            leakMetrics.tagConsumerRestarted();
+            log.error("TagWorker-{} 消费循环意外退出，1s 后重建", threadId);
+            // 中断是意外事件而非关闭信号（关闭时上面已 break），清除标志以免重建后
+            // 立即再次因中断而退出；同时 sleep 防止重建变成忙循环
+            Thread.interrupted();
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /**
