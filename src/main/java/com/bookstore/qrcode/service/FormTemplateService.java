@@ -131,7 +131,7 @@ public class FormTemplateService {
                 try {
                     return create(COUNTY_TEMPLATE_NAME, "县区码默认收集模板",
                         null, null, null, null,
-                        "[]", "{\"grade\":\"tag\",\"class\":\"tag\"}", null);
+                        "[]", "{\"grade\":\"tag:年级\",\"class\":\"tag:班级\"}", null);
                 } catch (DataIntegrityViolationException e) {
                     return templateRepo.findByName(COUNTY_TEMPLATE_NAME)
                         .orElseThrow(() -> new RuntimeException("县区码默认模板创建失败", e));
@@ -155,7 +155,7 @@ public class FormTemplateService {
                         + "\"options\":[\"语文\",\"数学\",\"英语\",\"物理\",\"化学\",\"生物\",\"政治\",\"历史\",\"地理\"]}]";
                     return create(RESEND_TEMPLATE_NAME, "补发表单·送试题模板",
                         "填写年级和科目，免费领本年级试题", null, null, null,
-                        fields, "{\"grade\":\"tag\",\"subject\":\"tag:科目\"}", null);
+                        fields, "{\"grade\":\"tag:年级\",\"subject\":\"tag:科目\"}", null);
                 } catch (DataIntegrityViolationException e) {
                     return templateRepo.findByName(RESEND_TEMPLATE_NAME)
                         .orElseThrow(() -> new RuntimeException("补发表单模板创建失败", e));
@@ -182,7 +182,7 @@ public class FormTemplateService {
                     String fields = objectMapper.writeValueAsString(List.of(gradeField));
                     return create(IMAGE_TEMPLATE_NAME, "图片版·按年级展示语文课本封面",
                         null, null, null, null,
-                        fields, "{\"grade\":\"tag\"}", null);
+                        fields, "{\"grade\":\"tag:年级\"}", null);
                 } catch (DataIntegrityViolationException e) {
                     return templateRepo.findByName(IMAGE_TEMPLATE_NAME)
                         .orElseThrow(() -> new RuntimeException("图片版模板创建失败", e));

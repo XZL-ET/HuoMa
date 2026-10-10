@@ -407,6 +407,24 @@ public class TagService {
     }
 
     /**
+     * 返回企微当前全部标签组名，复用 {@link #getGroupIdByKeyword} 的 10 分钟缓存。
+     * 供后台模板编辑器「指定标签组」的候选提示使用（datalist）。
+     * 缓存为空时触发一次加载；企微查询失败返回空列表——调用方缺候选仍可手输，不影响编辑。
+     */
+    public List<String> listWecomGroupNames() {
+        try {
+            if (cachedGroupIdMap == null) {
+                getGroupIdByKeyword("学校"); // 触发一次加载（与其刷新方式一致）
+            }
+            Map<String, String> map = cachedGroupIdMap;
+            return map == null ? List.of() : new ArrayList<>(map.keySet());
+        } catch (Exception e) {
+            log.warn("获取企微标签组名失败: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * 从缓存中匹配标签组 ID：先精确匹配，再模糊匹配兜底。
      *
      * <p>精确匹配确保 {@code "学校-白银市"} 只命中对应城市的组，

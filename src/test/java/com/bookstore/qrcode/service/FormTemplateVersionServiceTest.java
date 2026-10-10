@@ -65,11 +65,18 @@ class FormTemplateVersionServiceTest {
     }
 
     @Test
+    void ensureResendTemplate_tagMapping_年级进年级组科目进科目组() {
+        FormTemplate t = service.ensureResendTemplate();
+        assertThat(t.getTagMapping())
+                .isEqualTo("{\"grade\":\"tag:年级\",\"subject\":\"tag:科目\"}");
+    }
+
+    @Test
     void ensureImageTemplate_fields含12个年级选项() {
         FormTemplate t = service.ensureImageTemplate();
         assertThat(t.getFields())
                 .contains("一年级").contains("八年级").contains("高三");
-        assertThat(t.getTagMapping()).isEqualTo("{\"grade\":\"tag\"}");
+        assertThat(t.getTagMapping()).isEqualTo("{\"grade\":\"tag:年级\"}");
     }
 
     @Test

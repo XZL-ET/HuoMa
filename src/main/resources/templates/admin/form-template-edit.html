@@ -68,6 +68,8 @@
         <div id="fieldListEmpty" class="text-muted text-center py-3 border rounded mb-3">
             还没有字段，点击「添加字段」开始
         </div>
+        <!-- 企微现存标签组候选（懒加载填充，避免渲染时阻塞在企微 API） -->
+        <datalist id="wecomTagGroups"></datalist>
 
         <!-- ③ 备注模板 -->
         <div class="mb-3">
@@ -123,9 +125,14 @@
                 <label class="form-label small mb-0">映射方式</label>
                 <select class="form-select form-select-sm field-mapping">
                     <option value="none">不映射</option>
-                    <option value="tag">打标签</option>
+                    <option value="tag">打标签·默认组</option>
+                    <option value="tag:group">打标签·指定组</option>
                     <option value="remark">写备注</option>
+                    <option value="other">其它（保留原值）</option>
                 </select>
+                <input type="text" class="form-control form-control-sm field-tag-group mt-1"
+                       list="wecomTagGroups" placeholder="标签组名，如 年级" style="display:none;">
+                <div class="form-text field-mapping-note" style="display:none;"></div>
             </div>
             <div class="col-md-1 d-flex align-items-center pt-3">
                 <button type="button" class="btn btn-outline-danger btn-sm"
@@ -159,7 +166,24 @@
 (function() {
     'use strict';
 
-    var fields = [];  // { key, label, type, required, mapping, options }
+    var fields = [];  // { key, label, type, required, mapping, tagGroup, rawMapping, options }
+
+    // ── 存储值 ↔ 界面状态 ──
+    // 认识的值：none / tag / tag:<组名> / remark。
+    // 不认识的（含空组名的 "tag:"）一律走 other，保存时原样回写——绝不静默丢弃，
+    // 否则「编辑器表达不了的合法值」会被悄悄改写，正是本项目踩过的坑。
+    function parseMapping(v) {
+        if (v === undefined || v === null || v === '' || v === 'none') {
+            return { mapping: 'none', tagGroup: '', rawMapping: '' };
+        }
+        if (v === 'tag' || v === 'remark') {
+            return { mapping: v, tagGroup: '', rawMapping: '' };
+        }
+        if (v.indexOf('tag:') === 0 && v.length > 4) {
+            return { mapping: 'tag:group', tagGroup: v.slice(4), rawMapping: '' };
+        }
+        return { mapping: 'other', tagGroup: '', rawMapping: v };
+    }
 
     // ── 编辑模式：解析已有数据 ──
     var tagMappingObj = {};
@@ -167,12 +191,15 @@
     try {
         var parsed = JSON.parse(_existingFields);
         parsed.forEach(function(f) {
+            var m = parseMapping(tagMappingObj[f.name]);
             fields.push({
                 key: f.name || '',
                 label: f.label || '',
                 type: f.type || 'text',
                 required: f.required !== false,
-                mapping: tagMappingObj[f.name] || 'none',
+                mapping: m.mapping,
+                tagGroup: m.tagGroup,
+                rawMapping: m.rawMapping,
                 options: (f.options || []).join('\n')
             });
         });
@@ -182,6 +209,28 @@
     var fieldList = document.getElementById('fieldList');
     var fieldListEmpty = document.getElementById('fieldListEmpty');
     var template = document.getElementById('fieldCardTemplate');
+
+    // 按映射方式显示/隐藏「组名输入」「原值提示」；other 选项仅在该字段确实不认识时露出
+    function applyMappingExtras(cardEl, f) {
+        var sel = cardEl.querySelector('.field-mapping');
+        var otherOpt = sel.querySelector('option[value="other"]');
+        if (otherOpt) otherOpt.style.display = (f.mapping === 'other') ? '' : 'none';
+
+        var groupInput = cardEl.querySelector('.field-tag-group');
+        var showGroup = (f.mapping === 'tag:group');
+        groupInput.style.display = showGroup ? '' : 'none';
+        groupInput.value = f.tagGroup || '';
+
+        var note = cardEl.querySelector('.field-mapping-note');
+        var text = '';
+        if (showGroup) {
+            text = '留空 = 打进「学校-{所在市}」组，通常不是你想要的';
+        } else if (f.mapping === 'other') {
+            text = '原值：' + (f.rawMapping || '') + '（保存时原样保留）';
+        }
+        note.textContent = text;
+        note.style.display = text ? '' : 'none';
+    }
 
     function render() {
         fieldList.innerHTML = '';
@@ -198,6 +247,7 @@
             card.querySelector('.field-required').checked = f.required;
             card.querySelector('.field-mapping').value = f.mapping;
             card.querySelector('.field-options').value = f.options || '';
+            applyMappingExtras(card.querySelector('.field-card'), f);
 
             // 选项行显示/隐藏
             var optsRow = card.querySelector('.field-options-row');
@@ -222,7 +272,11 @@
             });
             card.querySelector('.field-mapping').addEventListener('change', function() {
                 f.mapping = this.value;
+                applyMappingExtras(this.closest('.field-card'), f);
                 updateRemarkTemplate();
+            });
+            card.querySelector('.field-tag-group').addEventListener('input', function() {
+                f.tagGroup = this.value;
             });
             card.querySelector('.field-options').addEventListener('input', function() {
                 f.options = this.value;
@@ -246,6 +300,8 @@
             type: 'text',
             required: true,
             mapping: 'none',
+            tagGroup: '',
+            rawMapping: '',
             options: ''
         });
         render();
@@ -298,8 +354,28 @@
                 fieldDef.options = opts;
             }
             fieldsJson.push(fieldDef);
-            if (f.mapping !== 'none') {
-                tagMapping[f.key] = f.mapping;
+
+            if (f.mapping === 'tag') {
+                tagMapping[f.key] = 'tag';
+            } else if (f.mapping === 'remark') {
+                tagMapping[f.key] = 'remark';
+            } else if (f.mapping === 'tag:group') {
+                var g = (f.tagGroup || '').trim();
+                if (!g) {
+                    alert('字段「' + f.label + '」选了「指定组」但组名为空。\n留空会退回默认组（学校-{所在市}）——请填组名，或改选「默认组」。');
+                    return false;
+                }
+                if (g.indexOf(':') >= 0) {
+                    alert('字段「' + f.label + '」的组名不能包含冒号「:」');
+                    return false;
+                }
+                tagMapping[f.key] = 'tag:' + g;
+            } else if (f.mapping === 'other') {
+                if (!f.rawMapping) {
+                    alert('字段「' + f.label + '」的映射方式「其它」缺失原值，请改选其它映射方式');
+                    return false;
+                }
+                tagMapping[f.key] = f.rawMapping;
             }
         }
 
@@ -323,6 +399,8 @@
             fields[i].type = card.querySelector('.field-type').value;
             fields[i].required = card.querySelector('.field-required').checked;
             fields[i].mapping = card.querySelector('.field-mapping').value;
+            var groupInput = card.querySelector('.field-tag-group');
+            fields[i].tagGroup = groupInput ? groupInput.value : '';
             fields[i].options = card.querySelector('.field-options').value;
         });
     }
@@ -349,6 +427,20 @@
 
     // ── 初始渲染 ──
     render();
+
+    // ── 企微标签组候选：懒加载，失败静默（输入框仍可手输） ──
+    fetch('/admin/form-templates/wecom-tag-groups', {credentials: 'same-origin'})
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) {
+            if (!d || !d.groups) return;
+            var dl = document.getElementById('wecomTagGroups');
+            d.groups.forEach(function(g) {
+                var opt = document.createElement('option');
+                opt.value = g;
+                dl.appendChild(opt);
+            });
+        })
+        .catch(function() { /* 忽略：缺候选不影响编辑 */ });
 })();
 </script>
 </main>

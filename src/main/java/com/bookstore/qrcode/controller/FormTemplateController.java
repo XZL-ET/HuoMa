@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.service.FileStorageService;
 import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.GradeTextbookCoverService;
+import com.bookstore.qrcode.service.TagService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class FormTemplateController {
     private final FormTemplateService templateService;
     private final SystemConfigRepository systemConfigRepo;
     private final GradeTextbookCoverService gradeTextbookCoverService;
+    private final TagService tagService;
     private final ObjectMapper objectMapper;
     private final FileStorageService fileStorageService;
 
@@ -184,6 +186,15 @@ public class FormTemplateController {
             result.put("success", false);
             result.put("error", e.getMessage());
         }
+        return result;
+    }
+
+    /** 企微当前标签组名，供模板编辑器「指定标签组」候选（datalist）使用。企微不可达时返回空列表。 */
+    @GetMapping("/wecom-tag-groups")
+    @ResponseBody
+    public Map<String, Object> wecomTagGroups() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("groups", tagService.listWecomGroupNames());
         return result;
     }
 }

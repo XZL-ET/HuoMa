@@ -55,7 +55,7 @@ class FormTemplateServiceTest {
     void ensureCountyTemplate_fields与tagMapping正确() {
         FormTemplate t = service.ensureCountyTemplate();
         assertThat(t.getFields()).isEqualTo("[]");
-        assertThat(t.getTagMapping()).isEqualTo("{\"grade\":\"tag\",\"class\":\"tag\"}");
+        assertThat(t.getTagMapping()).isEqualTo("{\"grade\":\"tag:年级\",\"class\":\"tag:班级\"}");
     }
 
     @Test

@@ -257,6 +257,27 @@ class TagServiceTest {
         });
     }
 
+    @Test
+    @DisplayName("listWecomGroupNames — 返回企微全部标签组名，第二次读走缓存不重复请求")
+    void listWecomGroupNamesReturnsAllGroupsFromCache() throws Exception {
+        when(wecomApi.getCorpTagList()).thenReturn(REAL_MAPPER.readTree(CORP_TAG_LIST));
+
+        assertThat(tagService.listWecomGroupNames())
+            .containsExactlyInAnyOrder("市州", "县区", "学校-北京市", "学校-兰州市");
+        assertThat(tagService.listWecomGroupNames())
+            .containsExactlyInAnyOrder("市州", "县区", "学校-北京市", "学校-兰州市");
+
+        verify(wecomApi, times(1)).getCorpTagList();
+    }
+
+    @Test
+    @DisplayName("listWecomGroupNames — 企微查询失败返回空列表，不抛出")
+    void listWecomGroupNamesReturnsEmptyOnApiFailure() {
+        when(wecomApi.getCorpTagList()).thenThrow(new RuntimeException("企微不可达"));
+
+        assertThat(tagService.listWecomGroupNames()).isEmpty();
+    }
+
     private Tag wecomBoundTag(Long id, String name, String groupKeyword, String wecomTagId) {
         return Tag.builder().id(id).name(name).groupKeyword(groupKeyword)
             .type(Tag.TagType.system).wecomTagId(wecomTagId).build();
