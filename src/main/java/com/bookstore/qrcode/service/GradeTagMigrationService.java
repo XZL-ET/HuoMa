@@ -1,13 +1,19 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.entity.Customer;
+import com.bookstore.qrcode.entity.CustomerTag;
+import com.bookstore.qrcode.entity.GradeTagMigrationProgress;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.*;
 
 /**
@@ -154,5 +160,262 @@ public class GradeTagMigrationService {
         log.info("新建 canonical 年级 tag 行: id={}, name={}, wid={}",
             created.getId(), name, target.wecomTagId());
         return created.getId();
+    }
+
+    // ---------------------------------------------------------------- A1
+
+    public static final String JOB_LOCK_KEY = "lock:job:grade-tag-migration";
+    public static final Duration JOB_LOCK_TTL = Duration.ofHours(2);
+
+    /** 分页批大小：一次从 customer_tag 取多少条（本地读，不是 API 调用）。 */
+    private static final int PAGE_SIZE = 500;
+    /** 每 N 次企微 API 调用休眠一次（沿用既有 600/min 限流模式）。 */
+    private static final int API_SLEEP_EVERY = 100;
+    private static final long API_SLEEP_MS = 10_000;
+
+    public record MigrationReport(long rows, long customers, long localOnly, long wecomRelink,
+                                  long wecomMarked, long wecomMarkFailed, long skippedNoAgent,
+                                  long requiresReview, boolean dryRun) {}
+
+    /**
+     * 逐客户对账计数器。做成<b>局部变量</b>贯穿调用，不做成字段 ——
+     * 本服务是单例，字段会被第二次运行或并发触发污染。
+     */
+    private static final class Counters {
+        long rows, customers, localOnly, wecomRelink, wecomMarked, wecomMarkFailed,
+             skippedNoAgent, requiresReview;
+        int apiCalls;
+
+        MigrationReport toReport(boolean dryRun) {
+            return new MigrationReport(rows, customers, localOnly, wecomRelink, wecomMarked,
+                wecomMarkFailed, skippedNoAgent, requiresReview, dryRun);
+        }
+
+        @Override public String toString() {
+            return String.format("rows=%d customers=%d localOnly=%d relink=%d marked=%d "
+                    + "markFailed=%d skipped=%d review=%d apiCalls=%d",
+                rows, customers, localOnly, wecomRelink, wecomMarked, wecomMarkFailed,
+                skippedNoAgent, requiresReview, apiCalls);
+        }
+    }
+
+    /** 从 {@code externalcontact/get} 响应里汇总所有 follow_user 的 tag_id。 */
+    public static List<String> extractWecomTagIds(JsonNode resp) {
+        List<String> out = new ArrayList<>();
+        if (resp == null) return out;
+        for (JsonNode fu : resp.path("follow_user")) {
+            for (JsonNode tg : fu.path("tags")) {
+                String id = tg.path("tag_id").asText(null);
+                if (id != null) out.add(id);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Phase A：逐行分类 → 逐客户对账 → 按 wid 重接本地账目。
+     *
+     * <p>幂等：R2/R3 的 {@code markTag} 是 add（重复 add 已存在标签无副作用），A2 重接线
+     * 若已是 canonical 行则是空操作。因此重跑 = 续跑；{@code grade_tag_migration_progress}
+     * 只用来省时（跳过已处理项）与出报告，不承载正确性。</p>
+     *
+     * <p>{@code dryRun=true} 时：只做 A0 分类并统计，<b>零企微调用、零写库</b>。</p>
+     */
+    public MigrationReport runPhaseA(boolean dryRun) {
+        if (dryRun) {
+            WecomTagIndex index = loadWecomTagIndex();
+            List<GradeTagRow> rows = classifyLocalGradeRows(index);
+            long customers = rows.stream()
+                .mapToLong(r -> customerTagRepo.countByTagIdIn(List.of(r.tagId())))
+                .sum();
+            return new MigrationReport(rows.size(), customers, 0, 0, 0, 0, 0, 0, true);
+        }
+
+        // 先拿锁再读企微：避免双节点同时各扫一遍分类
+        String token = jobGuard.tryAcquire(JOB_LOCK_KEY, JOB_LOCK_TTL);
+        if (token == null) {
+            throw new IllegalStateException("归并 Job 已在另一节点运行，本次跳过");
+        }
+        try {
+            WecomTagIndex index = loadWecomTagIndex();
+            List<GradeTagRow> rows = classifyLocalGradeRows(index);
+            Counters counters = new Counters();
+            Set<String> processed = loadProcessedKeys();
+            for (GradeTagRow r : rows) {
+                processRow(r, index, processed, counters);
+            }
+            log.info("Phase A 完成: {}", counters);
+            return counters.toReport(false);
+        } finally {
+            jobGuard.release(JOB_LOCK_KEY, token);
+        }
+    }
+
+    /** 后台线程跑 Phase A（HTTP 线程不能等 25–40 分钟）。{@code @EnableAsync} 已在应用主类开启。 */
+    @Async("taskExecutor")
+    public void runPhaseAAsync() {
+        try {
+            log.info("Phase A 后台启动");
+            runPhaseA(false);
+        } catch (Exception e) {
+            log.error("Phase A 后台执行失败: {}", e.getMessage(), e);
+        }
+    }
+
+    private Set<String> loadProcessedKeys() {
+        Set<String> keys = new HashSet<>();
+        for (Object[] k : progressRepo.findProcessedKeys()) {
+            keys.add(((Number) k[0]).longValue() + ":" + ((Number) k[1]).longValue());
+        }
+        log.info("续跑：已有 {} 个已处理工作项", keys.size());
+        return keys;
+    }
+
+    /** 处理一条非年级组年级 tag 行下的所有客户（按 ct.id 分页，避免一次拉进内存）。 */
+    private void processRow(GradeTagRow row, WecomTagIndex index, Set<String> processed,
+                            Counters counters) {
+        counters.rows++;
+        Long afterId = -1L;
+        while (true) {
+            List<CustomerTag> batch = customerTagRepo.findByTagIdAndIdGreaterThanOrderByIdAsc(
+                row.tagId(), afterId, PageRequest.of(0, PAGE_SIZE));
+            if (batch.isEmpty()) break;
+            afterId = batch.get(batch.size() - 1).getId();
+
+            List<Long> customerIds = batch.stream().map(CustomerTag::getCustomerId).distinct().toList();
+            Map<Long, Customer> byId = new HashMap<>();
+            customerRepo.findAllById(customerIds).forEach(c -> byId.put(c.getId(), c));
+
+            for (CustomerTag ct : batch) {
+                Customer c = byId.get(ct.getCustomerId());
+                if (c == null) continue;
+                if (processed.contains(c.getId() + ":" + row.tagId())) continue;
+                try {
+                    processCustomer(row, index, c, counters);
+                } catch (Exception e) {
+                    // 单客户失败不炸整批（客户已删会抛 84061 等）
+                    log.error("归并失败: customerId={}, tagRow={}, error={}",
+                        c.getId(), row.tagId(), e.getMessage());
+                    counters.wecomMarkFailed++;
+                    recordProgress(c, row, null, null, "WECOM_MARK_FAILED", true, e.getMessage());
+                }
+            }
+        }
+    }
+
+    private void processCustomer(GradeTagRow row, WecomTagIndex index, Customer c,
+                                 Counters counters) {
+        counters.customers++;
+        if (c.getCurrentAgent() == null || c.getCurrentAgent().isBlank()) {
+            counters.skippedNoAgent++;
+            recordProgress(c, row, null, null, "SKIPPED_NO_AGENT", false, null);
+            return;
+        }
+
+        TargetTag target;
+        String action;
+        boolean review = false;
+
+        if (row.rowClass() == RowClass.R1) {
+            // 客户企微侧已对，零 API 调用
+            target = new TargetTag(row.wecomTagId(), index.wid2name().get(row.wecomTagId()));
+            action = "LOCAL_ONLY";
+        } else {
+            List<String> wecomIds = List.of();
+            if (row.rowClass() == RowClass.R2) {
+                sleepIfNeeded(counters);
+                wecomIds = extractWecomTagIds(wecomApi.getExternalContact(c.getExternalUserid()));
+                counters.apiCalls++;
+            }
+
+            if (index.hasGradeTag(wecomIds)) {
+                // 已带年级组标签（可能因升学而异名）→ 按企微实际 id 重接线，绝不补打
+                String wid = wecomIds.stream().filter(index.gradeWids()::contains)
+                    .findFirst().orElse(null);
+                target = new TargetTag(wid, index.wid2name().get(wid));
+                action = "WECOM_RELINK";
+            } else {
+                // 企微确实没有年级标签 → 只能按本地行名补打；升学可能差一级，标 review
+                target = ensureGradeTagByName(row.name(), index, counters);
+                sleepIfNeeded(counters);
+                wecomApi.markTag(c.getExternalUserid(), c.getCurrentAgent(),
+                    List.of(target.wecomTagId()));
+                counters.apiCalls++;
+                action = "WECOM_MARKED";
+                review = true;
+            }
+        }
+
+        Long canonicalId = resolveCanonicalTagId(target);
+        if (canonicalId != null && !canonicalId.equals(row.tagId())) {
+            customerTagInsertService.rewire(c.getId(), row.tagId(), canonicalId);
+        }
+        switch (action) {
+            case "LOCAL_ONLY" -> counters.localOnly++;
+            case "WECOM_RELINK" -> counters.wecomRelink++;
+            case "WECOM_MARKED" -> counters.wecomMarked++;
+            default -> { }
+        }
+        if (review) counters.requiresReview++;
+        recordProgress(c, row, target.wecomTagId(), canonicalId, action, review, null);
+    }
+
+    /**
+     * 取「年级」组里名叫 {@code name} 的标签；不存在则新建（组已存在则 add 进该组）。
+     *
+     * <p>这是全流程<b>唯一按名字走</b>的路径（R1/R2 已带年级组标签的都按 id）——
+     * 升学改名会让本地名与企微名差一级，因此调用方一律置 {@code requires_review=1}。</p>
+     */
+    private TargetTag ensureGradeTagByName(String name, WecomTagIndex index, Counters counters) {
+        String wid = index.gradeWidByName(name);
+        if (wid != null) return new TargetTag(wid, index.wid2name().get(wid));
+
+        sleepIfNeeded(counters);
+        String groupId = index.groupIdByName().get(GRADE_GROUP);
+        JsonNode created = (groupId != null && !groupId.isBlank())
+            ? wecomApi.addCorpTag(name, groupId)
+            : wecomApi.addCorpTagWithGroup(name, GRADE_GROUP);
+        counters.apiCalls++;
+
+        String newId = created.path("tag_group").path("tag").path(0).path("id").asText(null);
+        if (newId == null || newId.isBlank()) {
+            throw new IllegalStateException("add_corp_tag 未返回新标签 id: " + name);
+        }
+        log.warn("按本地名补建「年级」组标签: name={}, newId={}（本地名可能因升学差一级，请复核）",
+            name, newId);
+        return new TargetTag(newId, name);
+    }
+
+    private void sleepIfNeeded(Counters counters) {
+        if (counters.apiCalls > 0 && counters.apiCalls % API_SLEEP_EVERY == 0) {
+            log.info("归并限频休眠: apiCalls={}", counters.apiCalls);
+            try {
+                Thread.sleep(API_SLEEP_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("归并 Job 被中断", e);
+            }
+        }
+    }
+
+    private void recordProgress(Customer c, GradeTagRow row, String targetWid, Long canonicalId,
+                                String action, boolean requiresReview, String note) {
+        try {
+            progressRepo.save(GradeTagMigrationProgress.builder()
+                .customerId(c.getId())
+                .externalUserid(c.getExternalUserid())
+                .rowClass(row.rowClass().name())
+                .localTagId(row.tagId())
+                .localTagName(row.name())
+                .targetWecomTagId(targetWid)
+                .targetTagId(canonicalId)
+                .action(action)
+                .requiresReview(requiresReview)
+                .note(note == null ? null : note.substring(0, Math.min(note.length(), 255)))
+                .build());
+        } catch (Exception e) {
+            // 进度行只是观测，写失败不影响正确性（重跑会重新处理这一项）
+            log.warn("进度行写入失败: customerId={}, tagRow={}, {}", c.getId(), row.tagId(), e.getMessage());
+        }
     }
 }
