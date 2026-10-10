@@ -426,4 +426,78 @@ public class GradeTagMigrationService {
             log.warn("进度行写入失败: customerId={}, tagRow={}, {}", c.getId(), row.tagId(), e.getMessage());
         }
     }
+
+    // ---------------------------------------------------------------- B
+
+    public record DeletePlanEntry(String wecomTagId, String groupName, String tagName) {}
+
+    /**
+     * 算出企微侧待删清单：组名不是核心组（年级/班级/市州/县区/渠道来源），
+     * 且标签名<b>精确等于</b> 12 个年级名之一。
+     *
+     * <p>必须精确匹配：{@code 学校-*} 组里有 {@code 中班}/{@code 小班}，还有学校名
+     * {@code 舟曲县憨班镇中心小学} —— 用 {@code LIKE '%班%'} 会误删。</p>
+     */
+    public List<DeletePlanEntry> planSchoolGroupGradeDeletions(WecomTagIndex index) {
+        List<DeletePlanEntry> plan = new ArrayList<>();
+        // 直接遍历索引：wid2group/wid2name 已覆盖所有组的所有标签，无需再打一次 get_corp_tag_list
+        for (Map.Entry<String, String> e : index.wid2group().entrySet()) {
+            String wid = e.getKey();
+            String groupName = e.getValue();
+            if (CORE_GROUPS.contains(groupName)) continue;
+            String tagName = index.wid2name().get(wid);
+            if (GRADE_NAMES.contains(tagName)) {
+                plan.add(new DeletePlanEntry(wid, groupName, tagName));
+            }
+        }
+        log.info("Phase B 待删清单: {} 个", plan.size());
+        plan.forEach(p -> log.info("  待删: [{}]{} wid={}", p.groupName(), p.tagName(), p.wecomTagId()));
+        return plan;
+    }
+
+    /** 取清单第一条，用于「先删 1 个实测」。清单为空时返回 null。 */
+    public DeletePlanEntry probeSingleDeletion(WecomTagIndex index) {
+        var plan = planSchoolGroupGradeDeletions(index);
+        return plan.isEmpty() ? null : plan.get(0);
+    }
+
+    /**
+     * 执行删除。调用前必须先跑完 Phase A，否则那些客户在企微就没年级标签了。
+     *
+     * <p>护栏：若本地仍有 {@code customer_tag} 指向这些 wid 对应的 tag 行，直接拒绝 ——
+     * 说明 Phase A 没跑干净。</p>
+     */
+    public int deleteSchoolGroupGradeTags(List<String> wecomTagIds) {
+        if (wecomTagIds == null || wecomTagIds.isEmpty()) return 0;
+
+        List<Long> localRowIds = new ArrayList<>();
+        for (String wid : wecomTagIds) {
+            tagRepo.findFirstByWecomTagIdAndGroupKeyword(wid, GRADE_GROUP).ifPresent(t -> localRowIds.add(t.getId()));
+        }
+        // 也可能指向校园组行（group_keyword 不是年级组）
+        for (var t : tagRepo.findGradeNamedRowsOutsideGradeGroup(GRADE_NAMES)) {
+            if (t.getWecomTagId() != null && wecomTagIds.contains(t.getWecomTagId())) {
+                localRowIds.add(t.getId());
+            }
+        }
+        if (!localRowIds.isEmpty()) {
+            long bound = customerTagRepo.countByTagIdIn(localRowIds);
+            if (bound > 0) {
+                throw new IllegalStateException(
+                    "本地仍有 " + bound + " 条 customer_tag 指向待删的学校组年级标签行，"
+                        + "请先跑完 Phase A 再删企微标签");
+            }
+        }
+
+        int deleted = 0;
+        Counters counters = new Counters();
+        for (String wid : wecomTagIds) {
+            sleepIfNeeded(counters);
+            wecomApi.delCorpTag(List.of(wid));
+            counters.apiCalls++;
+            deleted++;
+            log.info("已删企微学校组年级标签: wid={}（{}/{}）", wid, deleted, wecomTagIds.size());
+        }
+        return deleted;
+    }
 }

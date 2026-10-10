@@ -388,4 +388,46 @@ class GradeTagMigrationServiceTest {
             .save(org.mockito.ArgumentMatchers.argThat(
                 p -> "WECOM_MARK_FAILED".equals(p.getAction())));
     }
+
+    @Test
+    @DisplayName("白名单：只取非核心组里精确等于 12 年级名的标签，排除中班/班级")
+    void plansDeletionExactNamesOnly() throws Exception {
+        when(wecomApi.getCorpTagList()).thenReturn(MAPPER.readTree(CORP_TAG_LIST));
+
+        var plan = service.planSchoolGroupGradeDeletions(service.loadWecomTagIndex());
+
+        assertEquals(2, plan.size());
+        assertTrue(plan.stream().anyMatch(p -> p.wecomTagId().equals("s1")
+            && p.groupName().equals("学校-天水市") && p.tagName().equals("一年级")));
+        assertTrue(plan.stream().anyMatch(p -> p.wecomTagId().equals("s7")));
+        // s2=中班 在「学校-天水市」组里，但不在 12 名白名单内 —— 绝不能进清单
+        assertTrue(plan.stream().noneMatch(p -> p.wecomTagId().equals("s2")));
+        // c1=一班 在「班级」组 —— 组名排除
+        assertTrue(plan.stream().noneMatch(p -> p.wecomTagId().equals("c1")));
+    }
+
+    @Test
+    @DisplayName("删除前护栏：本地仍有 customer_tag 指向待删标签时拒绝执行")
+    void refusesDeletionWhileLocalBindingsRemain() throws Exception {
+        // 本地仍有一条 R2 学校组行指向 s1
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection()))
+            .thenReturn(List.of(row(2127, "一年级", "学校-天水市", "s1")));
+        when(customerTagRepo.countByTagIdIn(List.of(2127L))).thenReturn(5L);
+
+        assertThrows(IllegalStateException.class,
+            () -> service.deleteSchoolGroupGradeTags(List.of("s1")));
+        org.mockito.Mockito.verify(wecomApi, org.mockito.Mockito.never())
+            .delCorpTag(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("本地无残留绑定时：逐个 delCorpTag")
+    void deletesWhenClean() throws Exception {
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection()))
+            .thenReturn(List.of(row(2127, "一年级", "学校-天水市", "s1")));
+        when(customerTagRepo.countByTagIdIn(List.of(2127L))).thenReturn(0L);
+
+        assertEquals(1, service.deleteSchoolGroupGradeTags(List.of("s1")));
+        org.mockito.Mockito.verify(wecomApi).delCorpTag(List.of("s1"));
+    }
 }
