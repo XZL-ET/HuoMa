@@ -34,4 +34,25 @@ public class CustomerTagInsertService {
             .source(CustomerTag.TagSource.valueOf(source))
             .build());
     }
+
+    /**
+     * 把客户的某条年级标签绑定从 fromTagId 重接到 toTagId。
+     *
+     * <p>归并专用。就地 UPDATE 以保留 {@code source} 与 {@code tagged_at}：
+     * {@link com.bookstore.qrcode.service.TransferService#checkFormFilled} 依赖 {@code source=form}，
+     * 删表重建会把它抹成默认值。</p>
+     *
+     * <p>若客户已经绑定了 toTagId（同名重复行导致），直接删掉 fromTagId 那条多余行，
+     * 否则 UPDATE 会撞唯一键 {@code uk_customer_tag (customer_id, tag_id)}。</p>
+     *
+     * @return 是否真的发生了变更；源行已被删除（客户被删）时返回 {@code false}
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean rewire(Long customerId, Long fromTagId, Long toTagId) {
+        if (customerTagRepo.existsByCustomerIdAndTagId(customerId, toTagId)) {
+            customerTagRepo.deleteByCustomerIdAndTagId(customerId, fromTagId);
+            return true;
+        }
+        return customerTagRepo.rewireTag(customerId, fromTagId, toTagId) > 0;
+    }
 }

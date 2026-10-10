@@ -1,7 +1,12 @@
 package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.CustomerTag;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -50,4 +55,16 @@ public interface CustomerTagRepository extends JpaRepository<CustomerTag, Long> 
      * @return true 如果关联已存在
      */
     boolean existsByCustomerIdAndTagId(Long customerId, Long tagId);
+
+    /** 就地改 tag_id，保留 source 与 tagged_at（保 TransferService.checkFormFilled 语义）。 */
+    @Modifying
+    @Query("update CustomerTag ct set ct.tagId = :toTagId "
+        + "where ct.customerId = :customerId and ct.tagId = :fromTagId")
+    int rewireTag(@Param("customerId") Long customerId,
+                  @Param("fromTagId") Long fromTagId,
+                  @Param("toTagId") Long toTagId);
+
+    long countByTagIdIn(Collection<Long> tagIds);
+
+    List<CustomerTag> findByTagIdAndIdGreaterThanOrderByIdAsc(Long tagId, Long afterId, Pageable pageable);
 }
