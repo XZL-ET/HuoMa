@@ -90,4 +90,38 @@ class GradeTagMigrationServiceTest {
             "七年级", "八年级", "九年级", "高一", "高二", "高三"),
             GradeTagMigrationService.GRADE_NAMES);
     }
+
+    @Test
+    @DisplayName("canonical 行已存在（wid 命中年级组行）→ 直接返回该行 id")
+    void resolveCanonicalReturnsExisting() {
+        when(tagRepo.findFirstByWecomTagIdAndGroupKeyword("g7", "年级"))
+            .thenReturn(java.util.Optional.of(
+                Tag.builder().id(1190L).name("七年级").groupKeyword("年级").wecomTagId("g7").build()));
+
+        assertEquals(1190L, service.resolveCanonicalTagId(
+            new GradeTagMigrationService.TargetTag("g7", "七年级")));
+        org.mockito.Mockito.verify(tagInsertService, org.mockito.Mockito.never())
+            .insertNew(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("canonical 行不存在 → 按 target.name() 新建 (名, 年级) 并回填 wid")
+    void resolveCanonicalCreatesWhenMissing() {
+        when(tagRepo.findFirstByWecomTagIdAndGroupKeyword("g9", "年级"))
+            .thenReturn(java.util.Optional.empty());
+        when(tagInsertService.insertNew("八年级", Tag.TagType.manual, null, "年级"))
+            .thenReturn(Tag.builder().id(999L).name("八年级").groupKeyword("年级").build());
+
+        assertEquals(999L, service.resolveCanonicalTagId(
+            new GradeTagMigrationService.TargetTag("g9", "八年级")));
+        org.mockito.Mockito.verify(tagInsertService).updateWecomTagId(999L, "g9");
+    }
+
+    @Test
+    @DisplayName("target 为 null / wid 空白 → 返回 null，不建行")
+    void resolveCanonicalNullForBlank() {
+        assertNull(service.resolveCanonicalTagId(null));
+        assertNull(service.resolveCanonicalTagId(new GradeTagMigrationService.TargetTag("  ", "一年级")));
+    }
 }

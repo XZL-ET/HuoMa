@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.service;
 
+import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -125,5 +126,33 @@ public class GradeTagMigrationService {
             out.stream().filter(r -> r.rowClass() == RowClass.R2).count(),
             out.stream().filter(r -> r.rowClass() == RowClass.R3).count());
         return out;
+    }
+
+    // ---------------------------------------------------------------- A2
+
+    /**
+     * 归并目标：要指向的企微「年级」组标签 id，加上该标签当前的企微名。
+     *
+     * <p>带 name 是为了在 canonical 本地行缺失时能按<b>企微当前名</b>建行 —— 本地旧行名
+     * 可能因升学改名差一级，落库会重新引入名/id 不一致。</p>
+     */
+    public record TargetTag(String wecomTagId, String name) {}
+
+    /**
+     * 求目标对应的本地「年级」组 canonical tag 行 id；不存在则按 {@code target.name()} 新建。
+     *
+     * <p>定位按 {@code wecom_tag_id}（不按名）：升学改名会让本地名差一级。</p>
+     */
+    public Long resolveCanonicalTagId(TargetTag target) {
+        if (target == null || target.wecomTagId() == null || target.wecomTagId().isBlank()) return null;
+        var existing = tagRepo.findFirstByWecomTagIdAndGroupKeyword(target.wecomTagId(), GRADE_GROUP);
+        if (existing.isPresent()) return existing.get().getId();
+
+        String name = target.name() != null ? target.name() : "";
+        Tag created = tagInsertService.insertNew(name, Tag.TagType.manual, null, GRADE_GROUP);
+        tagInsertService.updateWecomTagId(created.getId(), target.wecomTagId());
+        log.info("新建 canonical 年级 tag 行: id={}, name={}, wid={}",
+            created.getId(), name, target.wecomTagId());
+        return created.getId();
     }
 }
