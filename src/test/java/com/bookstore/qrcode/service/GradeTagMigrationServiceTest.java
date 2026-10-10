@@ -330,4 +330,62 @@ class GradeTagMigrationServiceTest {
             .markTag(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
     }
+
+    @Test
+    @DisplayName("重跑已失败项：进度行就地更新为成功，不新增（唯一键 customer_id+local_tag_id）")
+    void retryUpdatesExistingProgressRow() throws Exception {
+        stubSingleRow(CORP_TAG_LIST, 125L, "七年级", "", "DEAD", 13L, "wm3", "ag3");
+        when(tagRepo.findFirstByWecomTagIdAndGroupKeyword("g7", "年级"))
+            .thenReturn(java.util.Optional.of(
+                Tag.builder().id(1190L).name("七年级").groupKeyword("年级").wecomTagId("g7").build()));
+        var existing = com.bookstore.qrcode.entity.GradeTagMigrationProgress.builder()
+            .id(99L).customerId(13L).localTagId(125L).rowClass("R3").action("WECOM_MARK_FAILED").build();
+        when(progressRepo.findByCustomerIdAndLocalTagId(13L, 125L))
+            .thenReturn(java.util.Optional.of(existing));
+
+        service.runPhaseA(false);
+
+        var cap = org.mockito.ArgumentCaptor.forClass(
+            com.bookstore.qrcode.entity.GradeTagMigrationProgress.class);
+        org.mockito.Mockito.verify(progressRepo).save(cap.capture());
+        assertEquals(99L, cap.getValue().getId());               // 复用旧行，不新增
+        assertEquals("WECOM_MARKED", cap.getValue().getAction()); // 就地从失败改为成功
+    }
+
+    @Test
+    @DisplayName("线程被中断：限频休眠中止整轮 Job，不把剩余客户记成失败")
+    void interruptedSleepAbortsJob() throws Exception {
+        when(jobGuard.tryAcquire(org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any())).thenReturn("tok");
+        when(wecomApi.getCorpTagList()).thenReturn(MAPPER.readTree(CORP_TAG_LIST));
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection()))
+            .thenReturn(List.of(row(125L, "七年级", "", "DEAD")));
+        // 101 个客户 > 限频边界(100)：第 101 次 markTag 前会进入 sleepIfNeeded
+        var batch = new java.util.ArrayList<com.bookstore.qrcode.entity.CustomerTag>();
+        var custs = new java.util.ArrayList<com.bookstore.qrcode.entity.Customer>();
+        for (long i = 1; i <= 101; i++) {
+            batch.add(ct(i, i, 125L));
+            custs.add(cust(i, "wm" + i, "ag" + i));
+        }
+        when(customerTagRepo.findByTagIdAndIdGreaterThanOrderByIdAsc(
+                org.mockito.ArgumentMatchers.eq(125L), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+            .thenReturn(batch).thenReturn(List.of());
+        when(customerRepo.findAllById(org.mockito.ArgumentMatchers.any())).thenReturn(custs);
+        when(tagRepo.findFirstByWecomTagIdAndGroupKeyword("g7", "年级"))
+            .thenReturn(java.util.Optional.of(
+                Tag.builder().id(1190L).name("七年级").groupKeyword("年级").wecomTagId("g7").build()));
+
+        try {
+            Thread.currentThread().interrupt();
+            assertThrows(GradeTagMigrationService.JobAbortedException.class,
+                () -> service.runPhaseA(false));
+        } finally {
+            Thread.interrupted();   // 必须清中断标志，避免污染其他用例
+        }
+
+        org.mockito.Mockito.verify(progressRepo, org.mockito.Mockito.never())
+            .save(org.mockito.ArgumentMatchers.argThat(
+                p -> "WECOM_MARK_FAILED".equals(p.getAction())));
+    }
 }

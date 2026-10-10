@@ -199,6 +199,11 @@ public class GradeTagMigrationService {
         }
     }
 
+    /** 归并 Job 被中断的信号：用于跳出逐客户循环做 job 级终止，而不是记成单客户失败。 */
+    static final class JobAbortedException extends RuntimeException {
+        JobAbortedException(String message, Throwable cause) { super(message, cause); }
+    }
+
     /** 从 {@code externalcontact/get} 响应里汇总所有 follow_user 的 tag_id。 */
     public static List<String> extractWecomTagIds(JsonNode resp) {
         List<String> out = new ArrayList<>();
@@ -292,6 +297,8 @@ public class GradeTagMigrationService {
                 if (processed.contains(c.getId() + ":" + row.tagId())) continue;
                 try {
                     processCustomer(row, index, c, counters);
+                } catch (JobAbortedException e) {
+                    throw e;
                 } catch (Exception e) {
                     // 单客户失败不炸整批（客户已删会抛 84061 等）
                     log.error("归并失败: customerId={}, tagRow={}, error={}",
@@ -393,7 +400,7 @@ public class GradeTagMigrationService {
                 Thread.sleep(API_SLEEP_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new IllegalStateException("归并 Job 被中断", e);
+                throw new JobAbortedException("归并 Job 被中断", e);
             }
         }
     }
@@ -401,18 +408,19 @@ public class GradeTagMigrationService {
     private void recordProgress(Customer c, GradeTagRow row, String targetWid, Long canonicalId,
                                 String action, boolean requiresReview, String note) {
         try {
-            progressRepo.save(GradeTagMigrationProgress.builder()
-                .customerId(c.getId())
-                .externalUserid(c.getExternalUserid())
-                .rowClass(row.rowClass().name())
-                .localTagId(row.tagId())
-                .localTagName(row.name())
-                .targetWecomTagId(targetWid)
-                .targetTagId(canonicalId)
-                .action(action)
-                .requiresReview(requiresReview)
-                .note(note == null ? null : note.substring(0, Math.min(note.length(), 255)))
-                .build());
+            GradeTagMigrationProgress entry = progressRepo
+                .findByCustomerIdAndLocalTagId(c.getId(), row.tagId())
+                .orElseGet(() -> GradeTagMigrationProgress.builder()
+                    .customerId(c.getId()).localTagId(row.tagId()).build());
+            entry.setExternalUserid(c.getExternalUserid());
+            entry.setRowClass(row.rowClass().name());
+            entry.setLocalTagName(row.name());
+            entry.setTargetWecomTagId(targetWid);
+            entry.setTargetTagId(canonicalId);
+            entry.setAction(action);
+            entry.setRequiresReview(requiresReview);
+            entry.setNote(note == null ? null : note.substring(0, Math.min(note.length(), 255)));
+            progressRepo.save(entry);
         } catch (Exception e) {
             // 进度行只是观测，写失败不影响正确性（重跑会重新处理这一项）
             log.warn("进度行写入失败: customerId={}, tagRow={}, {}", c.getId(), row.tagId(), e.getMessage());

@@ -44,4 +44,21 @@ class GradeTagMigrationProgressRepositoryTest {
         assertEquals(7L, ((Number) keys.get(0)[0]).longValue());
         assertEquals(200L, ((Number) keys.get(0)[1]).longValue());
     }
+
+    @Test
+    @DisplayName("findProcessedKeys 只含成功终态：失败/跳过项不算已处理，重跑会重试")
+    void processedKeysExcludeFailures() {
+        repo.save(GradeTagMigrationProgress.builder()
+            .customerId(11L).rowClass("R3").localTagId(300L).action("WECOM_MARKED").build());
+        repo.save(GradeTagMigrationProgress.builder()
+            .customerId(12L).rowClass("R3").localTagId(301L).action("WECOM_MARK_FAILED").build());
+        repo.save(GradeTagMigrationProgress.builder()
+            .customerId(13L).rowClass("R2").localTagId(302L).action("SKIPPED_NO_AGENT").build());
+
+        List<Object[]> keys = repo.findProcessedKeys();
+
+        assertEquals(1, keys.size());
+        assertEquals(11L, ((Number) keys.get(0)[0]).longValue());
+        assertEquals(300L, ((Number) keys.get(0)[1]).longValue());
+    }
 }
