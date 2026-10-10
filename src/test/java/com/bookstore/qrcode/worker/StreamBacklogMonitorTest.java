@@ -3,6 +3,7 @@ package com.bookstore.qrcode.worker;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,9 +15,8 @@ import org.springframework.data.redis.connection.stream.StreamInfo;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -36,6 +36,7 @@ class StreamBacklogMonitorTest {
     private StringRedisTemplate redisTemplate;
     private StreamOperations<String, Object, Object> ops;
     private AlertService alertService;
+    private ScheduledJobGuard jobGuard;
     private StreamBacklogMonitor monitor;
 
     @BeforeEach
@@ -46,12 +47,17 @@ class StreamBacklogMonitorTest {
         alertService = mock(AlertService.class);
         when(redisTemplate.opsForStream()).thenReturn(ops);
 
-        // 限流状态是 static 的，同一个 JVM 里会跨用例残留，这里清掉保证用例互不影响
-        Field f = StreamBacklogMonitor.class.getDeclaredField("lastAlertAt");
-        f.setAccessible(true);
-        ((Map<?, ?>) f.get(null)).clear();
+        jobGuard = mock(ScheduledJobGuard.class);
+        // 锁：默认放行，直接执行任务体（真实的跨机互斥另有 ScheduledJobGuardIntegrationTest）
+        when(jobGuard.runExclusive(anyString(), any(Duration.class), any(Runnable.class)))
+            .thenAnswer(inv -> {
+                inv.getArgument(2, Runnable.class).run();
+                return true;
+            });
+        // 限流：默认「窗口内首次」，即允许告警；被限流的用例单独打桩
+        when(jobGuard.firstWithin(anyString(), any(Duration.class))).thenReturn(true);
 
-        monitor = new StreamBacklogMonitor(redisTemplate, alertService);
+        monitor = new StreamBacklogMonitor(redisTemplate, alertService, jobGuard);
 
         // 默认五个流全都健康：最新消息 20 分钟前、已被取走、无 PEL 积压
         String[][] streams = {
@@ -143,16 +149,41 @@ class StreamBacklogMonitorTest {
     }
 
     @Test
-    @DisplayName("同一条流的告警每小时只发一次")
-    void throttlesRepeatedAlerts() {
+    @DisplayName("限流窗口已被占用（guard 判定非首次）→ 不再告警")
+    void skipsAlertWhenWindowAlreadyUsed() {
+        stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
+            20 * MIN, 60 * MIN, 20 * MIN, 0L);
+        when(jobGuard.firstWithin(anyString(), any(Duration.class))).thenReturn(false);
+
+        monitor.checkAll();
+
+        verify(alertService, never()).createAlert(any(), any(), any(), any(), any(), any());
+        // 被限流时并未真的告警，不该去撤销窗口键
+        verify(jobGuard, never()).clearThrottle(anyString());
+    }
+
+    @Test
+    @DisplayName("限流键按「流 + 判据」分开，两种判据互不压制")
+    void throttleKeyIsPerStreamAndSignal() {
         stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
             20 * MIN, 60 * MIN, 20 * MIN, 0L);
 
         monitor.checkAll();
+
+        verify(jobGuard).firstWithin(
+            eq("throttle:alert:callback_stream_backlog:stall"), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("告警落库失败（createAlert 返回 null）→ 撤销限流键，下一轮仍可告警")
+    void clearsThrottleWhenAlertPersistenceFails() {
+        stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
+            20 * MIN, 60 * MIN, 20 * MIN, 0L);
+        when(alertService.createAlert(any(), any(), any(), any(), any(), any())).thenReturn(null);
+
         monitor.checkAll();
 
-        verify(alertService, times(1)).createAlert(any(), eq("callback_stream_backlog"),
-            any(), any(), any(), any());
+        verify(jobGuard).clearThrottle("throttle:alert:callback_stream_backlog:stall");
     }
 
     // ==================== 构造 mock 的小工具 ====================

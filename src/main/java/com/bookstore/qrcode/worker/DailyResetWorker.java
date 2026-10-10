@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -63,6 +65,11 @@ public class DailyResetWorker {
     private final com.bookstore.qrcode.service.AgentRotationService rotationService;
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
+    private final ScheduledJobGuard jobGuard;
+
+    /** 跨机互斥：双机同刻触发会撞 daily_report 唯一键、每天白吃一个自增 ID */
+    private static final String DAILY_RESET_LOCK_KEY = "lock:job:daily-reset";
+    private static final Duration DAILY_RESET_LOCK_TTL = Duration.ofMinutes(30);
     /** 自身代理引用 — 通过 @Lazy 延迟注入，确保 @Transactional 走 AOP 代理 */
     @Lazy
     @org.springframework.beans.factory.annotation.Autowired
@@ -79,10 +86,24 @@ public class DailyResetWorker {
      * @see #generateDailyReport(LocalDate, LocalDate)
      */
     @Scheduled(cron = "0 0 0 * * *")
+    public void resetAndReport() {
+        // 双机 active-active：两机同刻触发会撞 daily_report 唯一键 —— 跨机互斥
+        String token = jobGuard.tryAcquire(DAILY_RESET_LOCK_KEY, DAILY_RESET_LOCK_TTL);
+        if (token == null) {
+            log.debug("每日重置被其他实例执行中，跳过");
+            return;
+        }
+        try {
+            doResetAndReport();
+        } finally {
+            jobGuard.release(DAILY_RESET_LOCK_KEY, token);
+        }
+    }
+
     // 不在此层加 @Transactional：各子步骤独立事务，任一步失败不波及他步。
     // 步骤 1 操作 Redis（非事务资源），若被卷入 DB 事务回滚会连带回滚
     // 步骤 2-3 的 DB 恢复逻辑，导致次日全员仍处于满员状态。
-    public void resetAndReport() {
+    void doResetAndReport() {
         log.info("===== 每日重置 + 日报生成开始 =====");
         LocalDate today = LocalDate.now();
         LocalDate yesterday = today.minusDays(1);

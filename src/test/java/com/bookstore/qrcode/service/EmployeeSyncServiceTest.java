@@ -47,6 +47,7 @@ class EmployeeSyncServiceTest {
     @Mock private AlertService alertService;
     @Mock private ObjectMapper objectMapper;
     @Mock private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    @Mock private ScheduledJobGuard jobGuard;
 
     @InjectMocks
     private EmployeeSyncService service;

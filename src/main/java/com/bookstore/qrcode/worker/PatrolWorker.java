@@ -14,6 +14,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,20 +59,26 @@ public class PatrolWorker {
     private final CustomerTransferRepository transferRepo;
     private final QrCodeService qrCodeService;
     private final LeakMetrics leakMetrics;
+    private final ScheduledJobGuard jobGuard;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
     @Autowired
     private PatrolWorker self;
 
-    /** 上次 DLQ 自动重放时间戳 — 限流：每 30 分钟最多重放一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
-    private static volatile long lastDlqReplayTime = 0L;
+    // ---- 跨实例互斥与限流。双机 active-active，跨机共享 Redis ----
+    // 锁：同一时刻只允许一台执行（见 docs/双机定时任务双跑影响面评估-2026-10-10.md）
+    private static final String PATROL_LOCK_KEY = "lock:job:patrol";
+    private static final Duration PATROL_LOCK_TTL = Duration.ofMinutes(4);
+    private static final String PEL_RECOVERY_LOCK_KEY = "lock:job:pel-recovery";
+    private static final Duration PEL_RECOVERY_LOCK_TTL = Duration.ofSeconds(50);
+    private static final String ANOMALY_HEAL_LOCK_KEY = "lock:job:anomaly-heal";
+    private static final Duration ANOMALY_HEAL_LOCK_TTL = Duration.ofMinutes(30);
 
-    /** 上次异常员工告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
-    private static volatile long lastAnomalyAlertTime = 0L;
-
-    /** 上次「死信达自动重放上限」告警时间戳 — 限流：每小时最多一次。static 理由同上 */
-    private static volatile long lastDlqExhaustedAlertTime = 0L;
+    // 限流：原先靠进程内字段，两机各按自己节拍判，等于失效；改 Redis 键后真正跨机生效
+    private static final String THROTTLE_DLQ_REPLAY = "throttle:job:dlq-replay";
+    private static final String THROTTLE_QR_AGENT_ANOMALY = "throttle:alert:qr_agent_anomaly";
+    private static final String THROTTLE_DLQ_EXHAUSTED = "throttle:alert:dlq_replay_exhausted";
 
     /**
      * 上次真正告警时看到的漏处理计数，即增量告警的基线（计数值是进程内累计值，重启归零，不能直接判阈值）。
@@ -111,77 +118,97 @@ public class PatrolWorker {
     public void patrol() {
         log.debug("定时巡检开始");
 
-        // 0. 池健康扫描 — 提前清理已离职/未激活/已禁用/封号/熔断的员工，
-        //    避免阻塞队首导致后续 takeStandby 遍历浪费
-        self.cleanUnhealthyFromPool();
-
-        // 0.5 企微孤儿 QR 对账扫描
-        try {
-            self.reconcileOrphanQrCodes();
-        } catch (Exception e) {
-            log.error("企微对账扫描异常", e);
-        }
-
-        // 0.6 活码异常员工巡检（仅统计+告警，每小时最多告警一次）
-        try {
-            self.patrolQrAgentAnomalies();
-        } catch (Exception e) {
-            log.error("活码异常员工巡检异常", e);
-        }
-
-        // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
-        checkGlobalPoolLow();
-
-        // 2. 检查全部高负载活码
-        checkOverloadedQrCodes();
-
-        // 3. 统计今日异常
-        countTodayAlerts();
-
-        // 4. 死信队列自动重放（每 30 分钟一轮，防消息永久堆积）
-        // 走自动重放语义：单条消息累计重放达 RedisConfig.DLQ_MAX_AUTO_REPLAYS 次后
-        // 保留在 DLQ 等人工介入，避免确定性失败的消息被无限重放、空耗企微配额
-        try {
-            long now = System.currentTimeMillis();
-            if (now - lastDlqReplayTime > RedisConfig.DLQ_AUTO_REPLAY_INTERVAL_SECONDS * 1000L) {
-                // 不管 DLQ 是否为空都跑一轮：空 DLQ 时这一轮只做「回收已失效的重放计数」，
-                // 否则计数 Key 会残留到 7 天 TTL 到期，把后续同内容消息的重放额度提前吃掉
-                lastDlqReplayTime = now;
-                MessageGuardService.ReplaySummary summary =
-                    messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true);
-                if (summary.replayed() > 0) {
-                    log.info("死信队列自动重放: {} 条", summary.replayed());
-                }
-                if (summary.exhausted() > 0) {
-                    log.warn("死信队列 {} 条已达自动重放上限，等待人工处理", summary.exhausted());
-                    alertDlqReplayExhausted(summary.exhausted());
-                }
-            } else {
-                long dlq = messageGuardService.dlqSize();
-                if (dlq > 0) {
-                    log.debug("死信队列积压: {} 条（距上次重放 {} 秒，跳过）",
-                        dlq, (System.currentTimeMillis() - lastDlqReplayTime) / 1000);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("DLQ 重放跳过: {}", e.getMessage());
-        }
-
-        // 4.5 静默漏处理计数增量告警 —— 这些路径只记日志/只累加计数，没有告警就等于没有信号
+        // 4.5 静默漏处理计数增量告警 —— 计数值是每 JVM 累计值（LeakMetrics，重启归零），
+        //     必须在每个节点各自评估，不能纳入跨机锁；否则非持锁节点的漏处理永远不告警，
+        //     两台基线还会互相覆盖造成误报。故这一段刻意留在锁外。
         try {
             alertOnSilentLeaks();
         } catch (Exception e) {
             log.error("漏处理计数告警异常", e);
         }
 
-        // 5. 清理旧转移记录（每天执行一次，约 03:xx 批次）
+        // 其余巡检都作用于跨机共享状态（DB / 企微 / DLQ / Stream），同一时刻只允许一台执行
+        String token = jobGuard.tryAcquire(PATROL_LOCK_KEY, PATROL_LOCK_TTL);
+        if (token == null) {
+            log.debug("巡检被其他实例执行中，跳过");
+            return;
+        }
         try {
-            self.cleanStaleTransferRecords();
-        } catch (Exception e) {
-            log.error("旧转移记录清理异常", e);
+            // 0. 池健康扫描 — 提前清理已离职/未激活/已禁用/封号/熔断的员工，
+            //    避免阻塞队首导致后续 takeStandby 遍历浪费
+            self.cleanUnhealthyFromPool();
+
+            // 0.5 企微孤儿 QR 对账扫描
+            try {
+                self.reconcileOrphanQrCodes();
+            } catch (Exception e) {
+                log.error("企微对账扫描异常", e);
+            }
+
+            // 0.6 活码异常员工巡检（仅统计+告警，每小时最多告警一次）
+            try {
+                self.patrolQrAgentAnomalies();
+            } catch (Exception e) {
+                log.error("活码异常员工巡检异常", e);
+            }
+
+            // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
+            checkGlobalPoolLow();
+
+            // 2. 检查全部高负载活码
+            checkOverloadedQrCodes();
+
+            // 3. 统计今日异常
+            countTodayAlerts();
+
+            // 4. 死信队列自动重放（跨机节流 30 分钟一轮，防消息永久堆积）
+            autoReplayDlq();
+
+            // 5. 清理旧转移记录（每天执行一次，约 03:xx 批次）
+            try {
+                self.cleanStaleTransferRecords();
+            } catch (Exception e) {
+                log.error("旧转移记录清理异常", e);
+            }
+        } finally {
+            jobGuard.release(PATROL_LOCK_KEY, token);
         }
 
         log.debug("定时巡检完成");
+    }
+
+    /**
+     * 死信队列自动重放 —— 节流键放在 Redis，跨机生效。
+     *
+     * <p>原先靠进程内字段 {@code lastDlqReplayTime} 限频，两台各按自己节拍判定，
+     * 同一批死信会被重放两次、空耗企微配额。走自动重放语义：单条消息累计重放达
+     * {@link RedisConfig#DLQ_MAX_AUTO_REPLAYS} 次后保留在 DLQ 等人工介入。</p>
+     */
+    private void autoReplayDlq() {
+        try {
+            // 不管 DLQ 是否为空都跑一轮：空 DLQ 时这一轮只做「回收已失效的重放计数」，
+            // 否则计数 Key 会残留到 7 天 TTL 到期，把后续同内容消息的重放额度提前吃掉
+            if (!jobGuard.firstWithin(THROTTLE_DLQ_REPLAY,
+                    Duration.ofSeconds(RedisConfig.DLQ_AUTO_REPLAY_INTERVAL_SECONDS))) {
+                long dlq = messageGuardService.dlqSize();
+                if (dlq > 0) {
+                    log.debug("死信队列积压: {} 条（距上次重放不足 {} 秒，跳过）",
+                        dlq, RedisConfig.DLQ_AUTO_REPLAY_INTERVAL_SECONDS);
+                }
+                return;
+            }
+            MessageGuardService.ReplaySummary summary =
+                messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true);
+            if (summary.replayed() > 0) {
+                log.info("死信队列自动重放: {} 条", summary.replayed());
+            }
+            if (summary.exhausted() > 0) {
+                log.warn("死信队列 {} 条已达自动重放上限，等待人工处理", summary.exhausted());
+                alertDlqReplayExhausted(summary.exhausted());
+            }
+        } catch (Exception e) {
+            log.debug("DLQ 重放跳过: {}", e.getMessage());
+        }
     }
 
     /**
@@ -191,9 +218,8 @@ public class PatrolWorker {
      * 这个告警说明「有东西已经放弃自动重放，等的是人」。限流：每小时最多一次。</p>
      */
     private void alertDlqReplayExhausted(int exhausted) {
-        long now = System.currentTimeMillis();
-        if (now - lastDlqExhaustedAlertTime < 3600_000L) return;
-        lastDlqExhaustedAlertTime = now;
+        // 每小时最多一次（跨机，Redis 节流键）
+        if (!jobGuard.firstWithin(THROTTLE_DLQ_EXHAUSTED, Duration.ofHours(1))) return;
         alertService.createAlert(null, "dlq_replay_exhausted",
             AgentAlert.AlertSeverity.high,
             String.format("死信队列 %d 条消息已达自动重放 %d 次上限，不再自动重放。"
@@ -458,10 +484,16 @@ public class PatrolWorker {
      */
     @Scheduled(cron = "30 */1 * * * *")
     public void recoverOrphanedPending() {
-        log.debug("PEL 崩溃回收巡检开始");
-        long idleMs = 120_000; // 给滚动重启留足缓冲，避免 PEL 误回收
-
+        // 两机各 XCLAIM + INCR 会翻倍共享重试计数、把消息提前打进 DLQ —— 必须跨机互斥
+        String token = jobGuard.tryAcquire(PEL_RECOVERY_LOCK_KEY, PEL_RECOVERY_LOCK_TTL);
+        if (token == null) {
+            log.debug("PEL 崩溃回收被其他实例执行中，跳过");
+            return;
+        }
         try {
+            log.debug("PEL 崩溃回收巡检开始");
+            long idleMs = 120_000; // 给滚动重启留足缓冲，避免 PEL 误回收
+
             int cb = messageGuardService.recoverOrphanedPending(
                 RedisConfig.CALLBACK_STREAM_KEY,
                 RedisConfig.CALLBACK_CONSUMER_GROUP,
@@ -493,6 +525,8 @@ public class PatrolWorker {
             }
         } catch (Exception e) {
             log.error("PEL 崩溃回收异常", e);
+        } finally {
+            jobGuard.release(PEL_RECOVERY_LOCK_KEY, token);
         }
     }
 
@@ -537,10 +571,8 @@ public class PatrolWorker {
             log.info("异常员工巡检: {} 个异常员工分布在 {} 个活码上",
                 anomalyCount, affectedQrIds.size());
 
-            // 每小时最多告警一次
-            long now = System.currentTimeMillis();
-            if (now - lastAnomalyAlertTime > 3600_000L) {
-                lastAnomalyAlertTime = now;
+            // 每小时最多告警一次（跨机，Redis 节流键）
+            if (jobGuard.firstWithin(THROTTLE_QR_AGENT_ANOMALY, Duration.ofHours(1))) {
                 alertService.createAlert(null, "qr_agent_anomaly",
                     AgentAlert.AlertSeverity.medium,
                     String.format("巡检发现 %d 个异常员工分布在 %d 个活码上，可调用 /qrcodes/verify-all-agents 查看详情或 /qrcodes/replace-all-anomaly-agents 批量替换",
@@ -588,35 +620,44 @@ public class PatrolWorker {
      */
     @Scheduled(cron = "0 7 3 * * *")
     public void dailyAnomalyAutoHeal() {
-        log.info("每日异常员工自愈开始");
-        List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
-        if (activeQrs.isEmpty()) {
-            log.info("每日异常员工自愈: 无活跃活码，跳过");
+        String token = jobGuard.tryAcquire(ANOMALY_HEAL_LOCK_KEY, ANOMALY_HEAL_LOCK_TTL);
+        if (token == null) {
+            log.debug("每日异常员工自愈被其他实例执行中，跳过");
             return;
         }
-
-        int totalRemoved = 0, totalReplaced = 0, totalShortfall = 0;
-        for (QrCode qr : activeQrs) {
-            try {
-                Map<String, Object> r = qrCodeService.replaceAnomalyAgents(qr.getId());
-                totalRemoved += (int) r.get("removed");
-                totalReplaced += (int) r.get("replaced");
-                totalShortfall += (int) r.get("shortfall");
-            } catch (Exception e) {
-                log.error("每日自愈处理失败: qrCodeId={}", qr.getId(), e);
+        try {
+            log.info("每日异常员工自愈开始");
+            List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
+            if (activeQrs.isEmpty()) {
+                log.info("每日异常员工自愈: 无活跃活码，跳过");
+                return;
             }
-        }
 
-        if (totalRemoved > 0) {
-            log.warn("每日异常员工自愈完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人 (共 {} 个活码)",
-                totalRemoved, totalReplaced, totalShortfall, activeQrs.size());
-            alertService.createAlert(null, "daily_anomaly_heal",
-                totalShortfall > 0 ? AgentAlert.AlertSeverity.medium : AgentAlert.AlertSeverity.low,
-                String.format("每日自愈: 扫描 %d 个活码，移除 %d 个异常员工，补入 %d 人，缺口 %d 人",
-                    activeQrs.size(), totalRemoved, totalReplaced, totalShortfall),
-                AgentAlert.AutoAction.none, null);
-        } else {
-            log.info("每日异常员工自愈: 未发现异常员工");
+            int totalRemoved = 0, totalReplaced = 0, totalShortfall = 0;
+            for (QrCode qr : activeQrs) {
+                try {
+                    Map<String, Object> r = qrCodeService.replaceAnomalyAgents(qr.getId());
+                    totalRemoved += (int) r.get("removed");
+                    totalReplaced += (int) r.get("replaced");
+                    totalShortfall += (int) r.get("shortfall");
+                } catch (Exception e) {
+                    log.error("每日自愈处理失败: qrCodeId={}", qr.getId(), e);
+                }
+            }
+
+            if (totalRemoved > 0) {
+                log.warn("每日异常员工自愈完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人 (共 {} 个活码)",
+                    totalRemoved, totalReplaced, totalShortfall, activeQrs.size());
+                alertService.createAlert(null, "daily_anomaly_heal",
+                    totalShortfall > 0 ? AgentAlert.AlertSeverity.medium : AgentAlert.AlertSeverity.low,
+                    String.format("每日自愈: 扫描 %d 个活码，移除 %d 个异常员工，补入 %d 人，缺口 %d 人",
+                        activeQrs.size(), totalRemoved, totalReplaced, totalShortfall),
+                    AgentAlert.AutoAction.none, null);
+            } else {
+                log.info("每日异常员工自愈: 未发现异常员工");
+            }
+        } finally {
+            jobGuard.release(ANOMALY_HEAL_LOCK_KEY, token);
         }
     }
 }

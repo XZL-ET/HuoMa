@@ -14,6 +14,7 @@ import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.RateLimiterService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -153,6 +154,7 @@ class PatrolWorkerTest {
             mock(OperationLogRepository.class),
             mock(CustomerTransferRepository.class),
             mock(QrCodeService.class),
-            metrics);
+            metrics,
+            mock(ScheduledJobGuard.class));
     }
 }

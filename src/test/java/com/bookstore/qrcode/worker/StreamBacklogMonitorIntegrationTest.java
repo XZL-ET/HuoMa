@@ -18,7 +18,6 @@ import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +37,9 @@ class StreamBacklogMonitorIntegrationTest extends BaseIntegrationTest {
     private static final String KEY = RedisConfig.CALLBACK_STREAM_KEY;
     private static final String GROUP = RedisConfig.CALLBACK_CONSUMER_GROUP;
     private static final String ALERT_TYPE = "callback_stream_backlog";
+    private static final String THROTTLE_STALL = "throttle:alert:" + ALERT_TYPE + ":stall";
+    private static final String THROTTLE_PENDING = "throttle:alert:" + ALERT_TYPE + ":pending";
+    private static final String LOCK_KEY = "lock:job:backlog-scan";
     /** 2000-01-01，用来伪造一条「很久以前写入」的消息 */
     private static final String ANCIENT_ID = "946684800000-0";
 
@@ -46,18 +48,22 @@ class StreamBacklogMonitorIntegrationTest extends BaseIntegrationTest {
     @Autowired private AgentAlertRepository alertRepo;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         redisTemplate.delete(KEY);
         alertRepo.deleteAll();
-        // 限流状态是 static，同 JVM 内跨用例残留，不清会导致后一个用例静默不告警
-        Field f = StreamBacklogMonitor.class.getDeclaredField("lastAlertAt");
-        f.setAccessible(true);
-        ((Map<?, ?>) f.get(null)).clear();
+        // 限流键与巡检锁都在共享 Redis 里跨用例残留：不清限流键会让后一个用例静默不告警，
+        // 不清巡检锁则会让后一个用例整个被跳过
+        clearJobKeys();
     }
 
     @AfterEach
     void tearDown() {
         redisTemplate.delete(KEY);
+        clearJobKeys();
+    }
+
+    private void clearJobKeys() {
+        redisTemplate.delete(List.of(THROTTLE_STALL, THROTTLE_PENDING, LOCK_KEY));
     }
 
     @Test

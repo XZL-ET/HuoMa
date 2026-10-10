@@ -22,6 +22,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -55,10 +56,15 @@ public class EmployeeSyncService {
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    private final ScheduledJobGuard jobGuard;
 
     /** 接待员默认日上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:150}")
     private int dailyMaxDefault;
+
+    /** 跨机互斥：双机同刻全量拉通讯录，与企微 API 配额和级联清理都在白跑 */
+    private static final String SYNC_LOCK_KEY = "lock:job:employee-sync";
+    private static final Duration SYNC_LOCK_TTL = Duration.ofMinutes(10);
 
     /**
      * 应用启动后回填存量池记录的 departmentId，确保部门匹配立即可用。
@@ -75,9 +81,15 @@ public class EmployeeSyncService {
 
     /**
      * 定时全量同步 — 每 30 分钟执行一次（偏移 7 分钟避免整点争抢资源）。
+     *
+     * <p>双机 active-active 下加分布式锁：同一轮只由一台执行，避免两台重复全量拉取与级联清理。</p>
      */
     @Scheduled(cron = "0 7,37 * * * *")
     public void scheduledSync() {
+        jobGuard.runExclusive(SYNC_LOCK_KEY, SYNC_LOCK_TTL, this::doScheduledSync);
+    }
+
+    void doScheduledSync() {
         log.info("定时员工同步开始");
         try {
             int count = syncFromWecom();

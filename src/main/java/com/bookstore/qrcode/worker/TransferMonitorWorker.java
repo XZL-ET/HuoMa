@@ -4,6 +4,7 @@ import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.MessageGuardService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import com.bookstore.qrcode.service.TransferService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,7 @@ public class TransferMonitorWorker {
     private final MessageGuardService messageGuardService;
     private final AlertService alertService;
     private final StringRedisTemplate redisTemplate;
+    private final ScheduledJobGuard jobGuard;
 
     /** Redis 分布式锁 key — 防止多实例同时执行 trackResults */
     private static final String TRACK_RESULTS_LOCK_KEY = "lock:transfer:track-results";
@@ -53,9 +55,11 @@ public class TransferMonitorWorker {
     private static final String RETRY_GREETINGS_LOCK_KEY = "lock:transfer:retry-greetings";
     private static final Duration RETRY_LOCK_TTL = Duration.ofMinutes(5);
 
-    /** DLQ 告警限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
-    private static volatile long lastDlqAlertTime = 0L;
-    private static volatile int skippedDlqAlertCount = 0;
+    /** 死信检查跨机互斥：双机同刻触发会重复告警 */
+    private static final String CHECK_DLQ_LOCK_KEY = "lock:job:dlq-check";
+    private static final Duration CHECK_DLQ_LOCK_TTL = Duration.ofMinutes(10);
+    /** 死信积压告警限流（跨机，Redis 键）：每小时最多一条 */
+    private static final String THROTTLE_DLQ_BACKLOG = "throttle:alert:transfer_dlq_backlog";
 
     /**
      * 每 30 分钟执行一次，追踪在职继承的确认结果。
@@ -176,31 +180,23 @@ public class TransferMonitorWorker {
      * <p>注意 {@link MessageGuardService#dlqSize()} 读的是**所有 Stream 共用**的那条 DLQ，
      * 不限于在职继承（消息各自的来源记在 {@code _dlq_origin_stream} 字段里）。
      * 消息经多次退避重试后依然失败才会进 DLQ，因此积压通常意味着企微 API 持续不可用
-     * 或存在系统性错误。告警限流：每小时最多发送一次，避免告警风暴。</p>
+     * 或存在系统性错误。</p>
+     *
+     * <p>跨机互斥与「每小时最多一条」的限流都放在 Redis：双机 active-active 下进程内节流
+     * 两台各判一次，等于没限流。</p>
      */
     @Scheduled(cron = "0 */15 * * * *")
     public void checkDlq() {
-        long dlqLen = messageGuardService.dlqSize();
-        if (dlqLen > 0) {
+        jobGuard.runExclusive(CHECK_DLQ_LOCK_KEY, CHECK_DLQ_LOCK_TTL, () -> {
+            long dlqLen = messageGuardService.dlqSize();
+            if (dlqLen <= 0) return;
             log.warn("⚠ 死信队列积压: {} 条 — 建议检查并重放", dlqLen);
-
-            long now = System.currentTimeMillis();
-            if (now - lastDlqAlertTime > 3600_000L) {
-                String suffix = skippedDlqAlertCount > 0
-                    ? String.format("（过去 1 小时内累计触发 %d 次）", skippedDlqAlertCount)
-                    : "";
-                lastDlqAlertTime = now;
-                skippedDlqAlertCount = 0;
+            if (jobGuard.firstWithin(THROTTLE_DLQ_BACKLOG, Duration.ofHours(1))) {
                 alertService.createAlert(null, "transfer_dlq_backlog",
                     AgentAlert.AlertSeverity.high,
-                    String.format("死信队列积压 %d 条，消息经重试后仍失败，请检查企微 API 状态或手动重放%s",
-                        dlqLen, suffix),
+                    String.format("死信队列积压 %d 条，消息经重试后仍失败，请检查企微 API 状态或手动重放", dlqLen),
                     AgentAlert.AutoAction.none, null);
-            } else {
-                skippedDlqAlertCount++;
-                log.warn("DLQ 积压（告警限流，第{}次）: {} 条",
-                    skippedDlqAlertCount, dlqLen);
             }
-        }
+        });
     }
 }

@@ -9,6 +9,7 @@ import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -65,17 +66,23 @@ public class InheritanceJob {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final AlertService alertService;
+    private final ScheduledJobGuard jobGuard;
 
     @org.springframework.beans.factory.annotation.Value("${app.inheritance.day-start-hour:8}")
     private int dayStartHour;
     @org.springframework.beans.factory.annotation.Value("${app.inheritance.day-end-hour:21}")
     private int dayEndHour;
 
-    /** 上次缺服务老师告警时间戳 — 限流：每小时最多告警一次。static 避免 CGLIB 代理实例字段分裂导致限流失效 */
-    private static volatile long lastNoServiceAlertTime = 0L;
+    // ---- 跨实例互斥：双机 active-active 下同一批次只由一台入队（下游去重可兜底，但全量扫描白跑一遍）----
+    private static final String INHERIT_DAY_LOCK_KEY = "lock:job:inherit-day";
+    private static final Duration INHERIT_DAY_LOCK_TTL = Duration.ofMinutes(10);
+    private static final String INHERIT_NIGHT_LOCK_KEY = "lock:job:inherit-night";
+    private static final Duration INHERIT_NIGHT_LOCK_TTL = Duration.ofMinutes(30);
 
-    /** 上次「服务老师不唯一」告警时间戳 — 限流：每小时最多告警一次。 */
-    private static volatile long lastAmbiguousServiceAlertTime = 0L;
+    // ---- 告警限流（跨机，Redis 键）：原先的进程内字段在两机上各判一次，等于没限流 ----
+    private static final String THROTTLE_NO_SERVICE = "throttle:alert:inheritance_no_service";
+    private static final String THROTTLE_AMBIGUOUS_SERVICE = "throttle:alert:inheritance_ambiguous_service";
+    private static final Duration ALERT_THROTTLE_WINDOW = Duration.ofHours(1);
 
     /** Redis key: 自动在职继承开关，值 "true"=开启 "false"=暂停，key 不存在视为开启 */
     public static final String AUTO_ENABLED_KEY = "inheritance:auto:enabled";
@@ -145,6 +152,11 @@ public class InheritanceJob {
     @Scheduled(cron = "0 */15 * * * *")
     public void executeDaytimeBatch() {
         if (!isAutoEnabled()) return;
+        jobGuard.runExclusive(INHERIT_DAY_LOCK_KEY, INHERIT_DAY_LOCK_TTL,
+            this::doExecuteDaytimeBatch);
+    }
+
+    void doExecuteDaytimeBatch() {
         LocalTime now = LocalTime.now();
         LocalTime dayStart = LocalTime.of(dayStartHour, 0);
         LocalTime dayEnd = LocalTime.of(dayEndHour, 0);
@@ -183,6 +195,11 @@ public class InheritanceJob {
     @Scheduled(cron = "${app.inheritance.cron:0 30 8 * * *}")
     public void executeNightBatch() {
         if (!isAutoEnabled()) { log.info("自动在职继承已暂停，跳过夜间批次"); return; }
+        jobGuard.runExclusive(INHERIT_NIGHT_LOCK_KEY, INHERIT_NIGHT_LOCK_TTL,
+            this::doExecuteNightBatch);
+    }
+
+    void doExecuteNightBatch() {
         log.info("在职继承定时任务开始（夜间窗口批量转移）");
         // 夜间窗口：前一日 00:00:00 ~ 今日 (dayStartHour-1):59:59
         // 覆盖全天遗漏（白天 1h 窗口已兜大部分，夜批做最后防线），重叠靠去重保安全
@@ -335,9 +352,7 @@ public class InheritanceJob {
 
         // 缺服务老师时发送告警（每小时限流一次，防止告警风暴）
         if (!noServiceSchools.isEmpty()) {
-            long now = System.currentTimeMillis();
-            if (now - lastNoServiceAlertTime > 3600_000L) {
-                lastNoServiceAlertTime = now;
+            if (jobGuard.firstWithin(THROTTLE_NO_SERVICE, ALERT_THROTTLE_WINDOW)) {
                 alertService.createAlert(null, "inheritance_no_service",
                     AgentAlert.AlertSeverity.high,
                     String.format("在职继承：%d 个活码缺少服务老师，新客户将无法被转移。缺少服务老师的学校: %s",
@@ -353,9 +368,7 @@ public class InheritanceJob {
 
         // 服务老师不唯一时发送告警（每小时限流一次）：这类活码无法确定唯一转移目标，需人工修正配置
         if (!ambiguousServiceSchools.isEmpty()) {
-            long now = System.currentTimeMillis();
-            if (now - lastAmbiguousServiceAlertTime > 3600_000L) {
-                lastAmbiguousServiceAlertTime = now;
+            if (jobGuard.firstWithin(THROTTLE_AMBIGUOUS_SERVICE, ALERT_THROTTLE_WINDOW)) {
                 alertService.createAlert(null, "inheritance_ambiguous_service",
                     AgentAlert.AlertSeverity.high,
                     String.format("在职继承：%d 个活码配置了多个服务老师，转移目标不唯一，已跳过。请人工修正。学校: %s",

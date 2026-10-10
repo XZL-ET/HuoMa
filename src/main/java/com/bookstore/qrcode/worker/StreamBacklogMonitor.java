@@ -3,6 +3,7 @@ package com.bookstore.qrcode.worker;
 import com.bookstore.qrcode.config.RedisConfig;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.ScheduledJobGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,9 +15,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Stream 消费健康巡检 —— 发现「消费线程已停摆」这类否则完全静默的故障。
@@ -58,6 +58,7 @@ public class StreamBacklogMonitor {
 
     private final StringRedisTemplate redisTemplate;
     private final AlertService alertService;
+    private final ScheduledJobGuard jobGuard;
 
     /**
      * 投递停滞判定阈值（分钟）：队头那条未投递的消息积压超过该时长，视为消费链停摆。
@@ -75,17 +76,17 @@ public class StreamBacklogMonitor {
     @Value("${app.redis-stream.pending-backlog-threshold:200}")
     private long pendingBacklogThreshold = 200L;
 
-    /** 每条流、每种判据的告警限流窗口 */
-    private static final long ALERT_THROTTLE_MS = 3600_000L;
+    /** 跨机互斥：双机同刻各扫一遍，告警与日志成对出现 */
+    private static final String BACKLOG_LOCK_KEY = "lock:job:backlog-scan";
+    private static final Duration BACKLOG_LOCK_TTL = Duration.ofMinutes(4);
 
     /**
-     * 各流各判据的上次告警时间，Key 为 {@code alertType:signal}。
-     * static 避免 CGLIB 代理实例字段分裂导致限流失效。
+     * 每条流、每种判据的告警限流窗口（Redis 键，跨机生效）。
      *
      * <p>限流按判据分开计：否则同一条流先报「积压」后转成「停摆」时，
      * 更严重的停摆会被较轻的积压告警压制最多一小时。</p>
      */
-    private static final Map<String, Long> lastAlertAt = new ConcurrentHashMap<>();
+    private static final Duration ALERT_THROTTLE_WINDOW = Duration.ofHours(1);
 
     /** 巡检目标：一条 Stream + 它的消费组 + 负责消费它的 Worker（仅用于告警文案） */
     private record StreamWatch(String streamKey, String group, String workerName, String alertType) {}
@@ -105,17 +106,22 @@ public class StreamBacklogMonitor {
 
     /**
      * 每 5 分钟巡检一轮。错开 30 秒启动，避免与 {@link PatrolWorker} 的整点巡检同时打 Redis。
+     *
+     * <p>双机 active-active 下加分布式锁：同一轮只由一台执行，否则告警与日志成对出现。
+     * 锁 TTL 4 分钟略短于 5 分钟周期，下一轮开始前必已释放。</p>
      */
     @Scheduled(cron = "30 */5 * * * *")
     public void checkAll() {
-        for (StreamWatch watch : WATCHES) {
-            try {
-                check(watch);
-            } catch (Exception e) {
-                // 单条流检查失败不影响其余流；Stream 不存在时 XINFO 会抛异常，属正常情况
-                log.debug("Stream 积压检查跳过: stream={}, {}", watch.streamKey(), e.getMessage());
+        jobGuard.runExclusive(BACKLOG_LOCK_KEY, BACKLOG_LOCK_TTL, () -> {
+            for (StreamWatch watch : WATCHES) {
+                try {
+                    check(watch);
+                } catch (Exception e) {
+                    // 单条流检查失败不影响其余流；Stream 不存在时 XINFO 会抛异常，属正常情况
+                    log.debug("Stream 积压检查跳过: stream={}, {}", watch.streamKey(), e.getMessage());
+                }
             }
-        }
+        });
     }
 
     private void check(StreamWatch watch) {
@@ -214,23 +220,23 @@ public class StreamBacklogMonitor {
     }
 
     /**
-     * 发出告警，受「每流每判据每小时一次」的限流约束。
+     * 发出告警，受「每流每判据每小时一次」的限流约束（Redis 键，跨机生效）。
      *
      * @param signal 判据标识（{@code stall} / {@code pending}），参与限流 Key 但不进告警类型，
      *               以保证两种判据各自限流、同时又不改变告警类型的历史聚合
      */
     private void raise(StreamWatch watch, String signal, String message) {
-        String throttleKey = watch.alertType() + ":" + signal;
-        long now = System.currentTimeMillis();
-        Long last = lastAlertAt.get(throttleKey);
-        if (last != null && now - last < ALERT_THROTTLE_MS) {
+        String throttleKey = "throttle:alert:" + watch.alertType() + ":" + signal;
+        if (!jobGuard.firstWithin(throttleKey, ALERT_THROTTLE_WINDOW)) {
             log.debug("Stream 积压告警限流中，跳过: {}", throttleKey);
             return;
         }
-        // 先告警再记限流：createAlert 失败时不抛异常、静默返回 null，
-        // 先记限流的话这条告警就彻底没了、还会被压一个小时
-        alertService.createAlert(null, watch.alertType(), AgentAlert.AlertSeverity.high,
-            message, AgentAlert.AutoAction.none, null);
-        lastAlertAt.put(throttleKey, now);
+        // createAlert 失败时不抛异常、静默返回 null；此时把限流键撤掉，
+        // 否则这条告警会彻底消失、还要被压制一整个窗口
+        AgentAlert created = alertService.createAlert(null, watch.alertType(),
+            AgentAlert.AlertSeverity.high, message, AgentAlert.AutoAction.none, null);
+        if (created == null) {
+            jobGuard.clearThrottle(throttleKey);
+        }
     }
 }
