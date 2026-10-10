@@ -188,6 +188,24 @@ CREATE TABLE IF NOT EXISTS customer_tag (
 );
 CREATE INDEX IF NOT EXISTS idx_customer_tag_tag_id ON customer_tag (tag_id);
 
+-- grade_tag_migration_progress：年级标签归并进度/报告表
+CREATE TABLE IF NOT EXISTS grade_tag_migration_progress (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    customer_id BIGINT NOT NULL,
+    external_userid VARCHAR(100),
+    row_class VARCHAR(4) NOT NULL,
+    local_tag_id BIGINT NOT NULL,
+    local_tag_name VARCHAR(100),
+    target_wecom_tag_id VARCHAR(50),
+    target_tag_id BIGINT,
+    action VARCHAR(40) NOT NULL,
+    requires_review BOOLEAN NOT NULL DEFAULT FALSE,
+    note VARCHAR(255),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uk_gm_progress_item UNIQUE (customer_id, local_tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gm_progress_class ON grade_tag_migration_progress (row_class, requires_review);
+
 -- agent_alert：异常记录
 CREATE TABLE IF NOT EXISTS agent_alert (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
