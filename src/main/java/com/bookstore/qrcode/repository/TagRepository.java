@@ -2,6 +2,9 @@ package com.bookstore.qrcode.repository;
 
 import com.bookstore.qrcode.entity.Tag;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -67,4 +70,21 @@ public interface TagRepository extends JpaRepository<Tag, Long> {
      * @return 匹配的标签对象，未找到时返回 {@link Optional#empty()}
      */
     Optional<Tag> findFirstByNameAndGroupKeyword(String name, String groupKeyword);
+
+    /**
+     * 按企微标签 ID + 组关键词定位本地行（canonical 行解析用）。
+     *
+     * <p>归并必须按 {@code wecom_tag_id} 接线而非按名字：每学期运营会把企微年级标签名
+     * 改一级（升学），本地行名与企微当前名可能差一级。</p>
+     */
+    Optional<Tag> findFirstByWecomTagIdAndGroupKeyword(String wecomTagId, String groupKeyword);
+
+    /**
+     * 取所有「名字是年级名、但不属于年级组」的本地 tag 行 —— 即待归并的重复行。
+     *
+     * <p>用 {@code group_keyword <> '年级'} 而不是 {@code LIKE '学校%'}：历史遗留行
+     * 的 group_keyword 可能是空串，但它们同样是重复行。</p>
+     */
+    @Query("select t from Tag t where t.name in :names and t.groupKeyword <> '年级'")
+    List<Tag> findGradeNamedRowsOutsideGradeGroup(@Param("names") Collection<String> names);
 }
