@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='年级标签归并', content=~{::#content})}">
+<body>
+<div id="content">
+    <h4 class="mb-3">🏷️ 年级标签归并</h4>
+
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
+        ✅ <span th:text="${message}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show" role="alert">
+        ❌ <span th:text="${error}"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <h6>Phase D 校验</h6>
+            <ul class="mb-0">
+                <li>本地非年级组年级 tag 行：<b th:text="${verify.localNonCanonicalRows()}"></b></li>
+                <li>指向这些行的 customer_tag 绑定：<b th:text="${verify.localBindingsToThem()}"></b></li>
+                <li>企微「学校-*」组里的年级同名标签：<b th:text="${verify.wecomSchoolGroupGradeTags()}"></b></li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <h6>Phase A 进度（按行分类）</h6>
+            <p class="mb-1">R1 <b th:text="${counts['R1']}"></b>
+                · R2 <b th:text="${counts['R2']}"></b>
+                · R3 <b th:text="${counts['R3']}"></b>
+                · 待人工复核 <b th:text="${counts['review']}"></b></p>
+            <form method="post" th:action="@{/admin/tag-migration/run-a}" class="d-inline">
+                <input type="hidden" name="dryRun" value="true">
+                <button class="btn btn-outline-secondary btn-sm">dry-run（零 API 零写库）</button>
+            </form>
+            <form method="post" th:action="@{/admin/tag-migration/run-a}" class="d-inline">
+                <input type="hidden" name="dryRun" value="false">
+                <button class="btn btn-primary btn-sm"
+                        onclick="return confirm('确认后台启动 Phase A？约 25–40 分钟')">启动 Phase A</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <h6>Phase B 待删企微标签（<span th:text="${deletePlan.size()}"></span> 个）</h6>
+            <table class="table table-sm">
+                <thead><tr><th>组</th><th>标签名</th><th>wid</th></tr></thead>
+                <tbody>
+                <tr th:each="p : ${deletePlan}">
+                    <td th:text="${p.groupName()}"></td>
+                    <td th:text="${p.tagName()}"></td>
+                    <td><code th:text="${p.wecomTagId()}"></code></td>
+                </tr>
+                </tbody>
+            </table>
+            <form method="post" th:action="@{/admin/tag-migration/delete-school-tags}" class="d-inline">
+                <input type="hidden" name="probeOnly" value="true">
+                <button class="btn btn-outline-warning btn-sm"
+                        onclick="return confirm('先删清单里第 1 个标签做实测？')">实测删 1 个</button>
+            </form>
+            <form method="post" th:action="@{/admin/tag-migration/delete-school-tags}" class="d-inline">
+                <input type="hidden" name="confirmed" value="true">
+                <button class="btn btn-danger btn-sm"
+                        onclick="return confirm('确认删除全部待删标签？Phase A 必须已完成')">批量删除</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <h6>Phase C 本地孤儿 tag 行清理</h6>
+            <form method="post" th:action="@{/admin/tag-migration/purge-orphans}" class="d-inline">
+                <input type="hidden" name="dryRun" value="true">
+                <button class="btn btn-outline-secondary btn-sm">dry-run</button>
+            </form>
+            <form method="post" th:action="@{/admin/tag-migration/purge-orphans}" class="d-inline">
+                <input type="hidden" name="confirmed" value="true">
+                <button class="btn btn-danger btn-sm"
+                        onclick="return confirm('确认删除无引用的孤儿 tag 行？')">执行清理</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body">
+            <h6>待人工复核（按本地名补打，升学可能差一级，最多 200 条）</h6>
+            <table class="table table-sm">
+                <thead><tr><th>客户</th><th>本地行名</th><th>分类</th><th>动作</th></tr></thead>
+                <tbody>
+                <tr th:each="p : ${reviewList}">
+                    <td th:text="${p.externalUserid}"></td>
+                    <td th:text="${p.localTagName}"></td>
+                    <td th:text="${p.rowClass}"></td>
+                    <td th:text="${p.action}"></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>

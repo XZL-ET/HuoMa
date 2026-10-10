@@ -92,6 +92,8 @@ public class SecurityConfig {
                         .requestMatchers("/admin/dlq/replay").hasRole("ADMIN")
                         // 系统配置管理：仅 admin 可访问
                         .requestMatchers("/admin/system-config/**").hasRole("ADMIN")
+                        // 年级标签归并：仅 admin 可访问（含删除企微标签等破坏性操作）
+                        .requestMatchers("/admin/tag-migration/**").hasRole("ADMIN")
                         // 学校入口二维码管理：仅 admin 可访问
                         .requestMatchers("/admin/school-entry/**").hasRole("ADMIN")
                         // 登录页面及静态资源（含上传的卡片图片，企微服务器需匿名抓取）
