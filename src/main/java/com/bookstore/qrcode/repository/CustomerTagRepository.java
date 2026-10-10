@@ -66,5 +66,7 @@ public interface CustomerTagRepository extends JpaRepository<CustomerTag, Long> 
 
     long countByTagIdIn(Collection<Long> tagIds);
 
+    long countByTagId(Long tagId);
+
     List<CustomerTag> findByTagIdAndIdGreaterThanOrderByIdAsc(Long tagId, Long afterId, Pageable pageable);
 }

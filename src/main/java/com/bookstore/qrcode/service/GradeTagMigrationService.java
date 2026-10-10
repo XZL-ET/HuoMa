@@ -500,4 +500,51 @@ public class GradeTagMigrationService {
         }
         return deleted;
     }
+
+    // ---------------------------------------------------------------- C
+
+    /**
+     * 删除重接线后不再被任何 customer_tag 引用的非年级组年级 tag 行。
+     *
+     * <p><b>顺序要求：</b>必须确认无引用再删。否则 {@link TagService#getOrCreateTag} 的
+     * 僵尸 id 修复若再被调用（企微标签已删），会重同步、甚至按名重建学校组标签，抵消 Phase B。</p>
+     *
+     * @return 删除（dry-run 时为「可删」）的行数
+     */
+    public long purgeOrphanGradeTagRows(boolean dryRun) {
+        List<Tag> rows = tagRepo.findGradeNamedRowsOutsideGradeGroup(GRADE_NAMES);
+        long orphans = 0;
+        for (Tag t : rows) {
+            if (customerTagRepo.countByTagId(t.getId()) > 0) continue;
+            orphans++;
+            if (dryRun) {
+                log.info("[dry-run] 可删孤儿 tag 行: id={}, name={}, group={}", t.getId(), t.getName(), t.getGroupKeyword());
+            } else {
+                tagRepo.deleteById(t.getId());
+                log.info("已删孤儿 tag 行: id={}, name={}, group={}", t.getId(), t.getName(), t.getGroupKeyword());
+            }
+        }
+        log.info("Phase C 完成: {} 行非年级组年级 tag 行中，孤儿 {} 行（dryRun={}）", rows.size(), orphans, dryRun);
+        return orphans;
+    }
+
+    // ---------------------------------------------------------------- D
+
+    public record VerifyResult(long localNonCanonicalRows, long localBindingsToThem,
+                               long wecomSchoolGroupGradeTags) {
+        public boolean converged() {
+            return localNonCanonicalRows == 0 && wecomSchoolGroupGradeTags == 0;
+        }
+    }
+
+    /** Phase D：三项归并完成度指标。 */
+    public VerifyResult verify() {
+        List<Tag> rows = tagRepo.findGradeNamedRowsOutsideGradeGroup(GRADE_NAMES);
+        long bindings = rows.isEmpty() ? 0
+            : rows.stream().mapToLong(t -> customerTagRepo.countByTagId(t.getId())).sum();
+        long wecomDupes = planSchoolGroupGradeDeletions(loadWecomTagIndex()).size();
+        VerifyResult r = new VerifyResult(rows.size(), bindings, wecomDupes);
+        log.info("Phase D 校验: {}", r);
+        return r;
+    }
 }

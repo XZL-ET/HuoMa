@@ -430,4 +430,41 @@ class GradeTagMigrationServiceTest {
         assertEquals(1, service.deleteSchoolGroupGradeTags(List.of("s1")));
         org.mockito.Mockito.verify(wecomApi).delCorpTag(List.of("s1"));
     }
+
+    @Test
+    @DisplayName("Phase C：有引用的行不删，无引用的行删除")
+    void purgesOnlyOrphanRows() {
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection())).thenReturn(java.util.List.of(
+            row(200, "一年级", "学校-天水市", "s1"),
+            row(201, "二年级", "", "DEAD")));
+        when(customerTagRepo.countByTagId(200L)).thenReturn(3L);
+        when(customerTagRepo.countByTagId(201L)).thenReturn(0L);
+
+        assertEquals(1, service.purgeOrphanGradeTagRows(false));
+        org.mockito.Mockito.verify(tagRepo, org.mockito.Mockito.never()).deleteById(200L);
+        org.mockito.Mockito.verify(tagRepo).deleteById(201L);
+    }
+
+    @Test
+    @DisplayName("Phase C dry-run：只报告不删除")
+    void purgeDryRunDoesNotDelete() {
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection())).thenReturn(java.util.List.of(
+            row(201, "二年级", "", "DEAD")));
+        when(customerTagRepo.countByTagId(201L)).thenReturn(0L);
+
+        assertEquals(1, service.purgeOrphanGradeTagRows(true));
+        org.mockito.Mockito.verify(tagRepo, org.mockito.Mockito.never()).deleteById(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    @DisplayName("Phase D verify：三项指标都为 0 表示已收敛")
+    void verifyCounts() throws Exception {
+        when(wecomApi.getCorpTagList()).thenReturn(MAPPER.readTree(CORP_TAG_LIST));
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection())).thenReturn(java.util.List.of());
+
+        var v = service.verify();
+
+        assertEquals(0, v.localNonCanonicalRows());
+        assertEquals(2, v.wecomSchoolGroupGradeTags()); // CORP_TAG_LIST 里 s1/s7 还在
+    }
 }
