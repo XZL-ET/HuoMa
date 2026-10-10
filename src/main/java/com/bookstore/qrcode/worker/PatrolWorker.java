@@ -143,7 +143,7 @@ public class PatrolWorker {
         // 保留在 DLQ 等人工介入，避免确定性失败的消息被无限重放、空耗企微配额
         try {
             long now = System.currentTimeMillis();
-            if (now - lastDlqReplayTime > 30 * 60 * 1000L) {
+            if (now - lastDlqReplayTime > RedisConfig.DLQ_AUTO_REPLAY_INTERVAL_SECONDS * 1000L) {
                 // 不管 DLQ 是否为空都跑一轮：空 DLQ 时这一轮只做「回收已失效的重放计数」，
                 // 否则计数 Key 会残留到 7 天 TTL 到期，把后续同内容消息的重放额度提前吃掉
                 lastDlqReplayTime = now;

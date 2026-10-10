@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 消息可靠性守护服务 —— 去重 / 重试计数 / 死信队列 / PEL 回收 / DLQ 重放。
@@ -520,11 +521,19 @@ public class MessageGuardService {
      * 扫同一学校的活码每次都会算出同一个 logicalId —— 某条消息用光 5 次额度后（哪怕它后来成功了），
      * 这位客户之后任何一次新的、本来可恢复的失败都会被直接判为达限，一次自动重放都不给。</p>
      *
+     * <p><b>「不在 DLQ 里」不等于「已离场」</b>：消息被重放出去后，要经过下游消费、退避重试，
+     * 甚至下游积压，才可能再次失败回到 DLQ。这段在途窗口里它同样不在 DLQ 中，若直接回收，
+     * 下一轮就会从 1 重新计数，{@link RedisConfig#DLQ_MAX_AUTO_REPLAYS} 永远卡不住 ——
+     * 于是要求计数 Key 至少空闲一个宽限期（{@link RedisConfig#DLQ_REPLAY_COUNTER_GC_GRACE_SECONDS}）
+     * 才回收。空闲时长取自计数 Key 自身的 TTL：{@link #autoReplayExhausted} 每次判定都会把
+     * TTL 刷满，因此「总 TTL − 剩余 TTL」就是它距上次被判定的时长。无 TTL 的键按已失效回收。</p>
+     *
      * <p>只在本轮完整扫过 DLQ 时调用（见 {@link #replayAllDlq(String, boolean)}），
      * 否则会把没扫到的消息的计数误删。误删只会让封顶机制少拦几次，方向是安全的。</p>
      */
     private void gcReplayCounters(Set<String> presentCounters) {
         int removed = 0;
+        int inFlight = 0;
         try (Cursor<String> cursor = redisTemplate.scan(ScanOptions.scanOptions()
                 .match(RedisConfig.DLQ_REPLAY_KEY_PREFIX + "*")
                 .count(500)
@@ -533,6 +542,10 @@ public class MessageGuardService {
                 String key = cursor.next();
                 String suffix = key.substring(RedisConfig.DLQ_REPLAY_KEY_PREFIX.length());
                 if (presentCounters.contains(suffix)) continue;
+                if (isWithinGcGrace(key)) {
+                    inFlight++;
+                    continue;
+                }
                 redisTemplate.delete(key);
                 removed++;
             }
@@ -540,9 +553,18 @@ public class MessageGuardService {
             log.warn("自动重放计数 Key 回收失败（不影响本轮重放）", e);
             return;
         }
-        if (removed > 0) {
-            log.debug("已回收 {} 个失效的自动重放计数 Key", removed);
+        if (removed > 0 || inFlight > 0) {
+            log.debug("自动重放计数 Key：回收 {} 个，在途宽限期内保留 {} 个", removed, inFlight);
         }
+    }
+
+    /** 计数 Key 是否仍在回收宽限期内（距上次重放判定不足 {@code DLQ_REPLAY_COUNTER_GC_GRACE_SECONDS}）。 */
+    private boolean isWithinGcGrace(String key) {
+        Long ttl = redisTemplate.getExpire(key, TimeUnit.SECONDS);
+        if (ttl == null) return true;
+        // 无 TTL（-1）或已不存在（-2）都按「无从判断新鲜度」处理：前者当失效回收，后者删除无害
+        if (ttl <= 0) return false;
+        return RedisConfig.DLQ_REPLAY_TTL_SECONDS - ttl < RedisConfig.DLQ_REPLAY_COUNTER_GC_GRACE_SECONDS;
     }
 
     /**
@@ -554,7 +576,7 @@ public class MessageGuardService {
      * 检查到，若每次都记，{@code dlq_replay_exhausted} 会把「1 条卡住」和「1000 条卡住」
      * 抹平成同一个持续上涨的数字，同时每周期刷出一条重复 WARN。</p>
      *
-     * <p>计数 Key 的清理见 {@link #gcReplayCounters(Set)}：消息一旦离开 DLQ，
+     * <p>计数 Key 的清理见 {@link #gcReplayCounters(Set)}：消息离开 DLQ 且超过宽限期后，
      * 其 Key 会被回收，后续同内容的新消息重新获得完整的重放额度。</p>
      */
     private boolean autoReplayExhausted(String target, String logicalId) {

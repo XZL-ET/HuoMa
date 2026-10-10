@@ -88,6 +88,18 @@ public class RedisConfig {
     public static final int DLQ_MAX_AUTO_REPLAYS = 5;
     /** 自动重放计数 TTL：远长于重试计数，确保跨多次重放周期仍能累计 */
     public static final long DLQ_REPLAY_TTL_SECONDS = 7L * 24 * 3600;
+    /** 死信自动重放的周期（秒）：PatrolWorker 按此间隔跑一轮重放与计数回收 */
+    public static final long DLQ_AUTO_REPLAY_INTERVAL_SECONDS = 30L * 60;
+    /**
+     * 自动重放计数 Key 的回收宽限期（秒）。
+     *
+     * <p>消息被重放出去后不会立刻回到 DLQ —— 还要经过下游消费、退避重试，
+     * 甚至下游积压。这段在途窗口里它不在 DLQ 中，但重放配额必须继续有效：
+     * 按「本轮扫描时不在 DLQ 就回收」会把在途消息的计数抹掉，此后每轮都从 1 重新
+     * 计数，{@link #DLQ_MAX_AUTO_REPLAYS} 形同虚设。宽限期取 2 个重放周期，
+     * 保证「连续两个周期都没在 DLQ 见到它」才判定为真正离场。</p>
+     */
+    public static final long DLQ_REPLAY_COUNTER_GC_GRACE_SECONDS = 2 * DLQ_AUTO_REPLAY_INTERVAL_SECONDS;
 
     // ==================== 消息去重 Key 前缀常量 ====================
 

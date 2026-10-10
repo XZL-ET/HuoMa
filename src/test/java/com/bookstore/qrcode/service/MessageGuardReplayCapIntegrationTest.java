@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -203,18 +204,47 @@ class MessageGuardReplayCapIntegrationTest extends BaseIntegrationTest {
     }
 
     @Test
-    @DisplayName("消息离开 DLQ 后其自动重放计数 Key 被回收，同内容新消息重新获得完整配额")
-    void replayCounterGcAfterMessageLeavesDlq() {
+    @DisplayName("重放出去、仍在途的消息，其计数 Key 在整个在途窗口内不被回收")
+    void replayCounterSurvivesGcWhileMessageIsStillInFlight() {
         sendMessageToDlq();
         assertThat(messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true).replayed()).isEqualTo(1);
-        assertThat(replayCounterKeys()).as("消息刚离开 DLQ 的这一轮，计数 Key 尚在（本轮扫描见过它）")
-            .isNotEmpty();
 
-        // 第二轮 DLQ 已空：扫描不到任何消息 → 上一轮的计数 Key 应被回收
+        // 消息已重放出去、尚未（再次失败）回到 DLQ：这一轮 DLQ 为空、扫描不到它
         assertThat(messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true).replayed()).isZero();
         assertThat(replayCounterKeys())
-            .as("DLQ 里已没有这条消息，残留计数会让同内容的新消息永远拿不到重放额度")
+            .as("在途消息不在 DLQ 里，但它的重放配额必须继续有效，否则下一轮会当成第 1 次重放")
+            .isNotEmpty();
+
+        // 把 TTL 拨到宽限期之外，等价于「这条内容已经一个宽限期没在 DLQ 出现过了」
+        Set<String> keys = replayCounterKeys();
+        redisTemplate.expire(keys.iterator().next(), Duration.ofSeconds(1));
+        messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true);
+        assertThat(replayCounterKeys())
+            .as("超出宽限期后仍要回收，否则同内容的新消息会永远拿不到重放额度")
             .isEmpty();
+    }
+
+    @Test
+    @DisplayName("每轮重放后都有一个空的在途周期时，重放封顶必须依然生效")
+    void capStillEngagesWhenMessageIsInFlightBetweenPasses() {
+        int cap = RedisConfig.DLQ_MAX_AUTO_REPLAYS;
+
+        for (int round = 1; round <= cap; round++) {
+            sendMessageToDlq();
+            assertThat(messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true).replayed())
+                .as("第 %d 轮应重放", round).isEqualTo(1);
+            // 重放后消息在途：此后 DLQ 为空，直到它再次失败才会回来
+            assertThat(messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true).replayed()).isZero();
+        }
+
+        sendMessageToDlq();
+        MessageGuardService.ReplaySummary reachedCap =
+            messageGuardService.replayAllDlq(RedisConfig.CALLBACK_STREAM_KEY, true);
+        assertThat(reachedCap.replayed())
+            .as("已重放 %d 次；计数若被在途周期误回收，这一轮会被当成第 1 次又放行，封顶永远卡不住", cap)
+            .isZero();
+        assertThat(reachedCap.exhausted()).isEqualTo(1);
+        assertThat(messageGuardService.dlqSize()).as("达限消息应留在 DLQ 等人工处理").isEqualTo(1);
     }
 
     private Set<String> replayCounterKeys() {
