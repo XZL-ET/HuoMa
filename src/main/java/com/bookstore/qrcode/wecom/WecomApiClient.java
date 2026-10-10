@@ -514,6 +514,35 @@ public class WecomApiClient {
         }
     }
 
+    /**
+     * 删除企业标签（corp 级）。
+     * <p>
+     * <b>企微接口：</b>{@code POST /cgi-bin/externalcontact/del_corp_tag}
+     * <pre>
+     * 请求: {"tag_id": ["etxxx", "etyyy"]}
+     * 响应: {"errcode": 0, "errmsg": "ok"}
+     * </pre>
+     * 删除后企微会自动把该标签从所有客户身上摘掉。
+     *
+     * @param tagIds 要删除的企微标签 ID 列表
+     * @throws WecomApiException 删除失败时抛出
+     */
+    public JsonNode delCorpTag(List<String> tagIds) {
+        String url = BASE_URL + "/externalcontact/del_corp_tag?access_token=" + getAccessToken();
+        try {
+            Map<String, Object> bodyMap = new java.util.LinkedHashMap<>();
+            bodyMap.put("tag_id", tagIds);
+            String body = objectMapper.writeValueAsString(bodyMap);
+            String respStr = postForJson(url, body);
+            return parseAndCheck(respStr, "删除企业标签");
+        } catch (WecomApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new WecomTransientException(-1,
+                "删除企业标签失败: " + e.getMessage(), null);
+        }
+    }
+
     // ========================================================================
     //  在职继承
     //  文档: https://developer.work.weixin.qq.com/document/path/92124
