@@ -52,7 +52,7 @@ class TagMigrationControllerTest {
         var index = emptyIndex();
         when(service.loadWecomTagIndex()).thenReturn(index);
         when(service.planSchoolGroupGradeDeletions(index)).thenReturn(List.of());
-        when(service.verify()).thenReturn(new GradeTagMigrationService.VerifyResult(0, 0, 0));
+        when(service.verify(index)).thenReturn(new GradeTagMigrationService.VerifyResult(0, 0, 0));
         when(progressRepo.countByRowClass("R1")).thenReturn(1L);
         when(progressRepo.countByRowClass("R2")).thenReturn(2L);
         when(progressRepo.countByRowClass("R3")).thenReturn(3L);
@@ -70,7 +70,7 @@ class TagMigrationControllerTest {
     @DisplayName("POST run-a dryRun=true 同步跑 dry-run，并回填 flash 结果")
     void runADryRun() throws Exception {
         when(service.runPhaseA(true)).thenReturn(new GradeTagMigrationService.MigrationReport(
-            1, 1, 1, 0, 0, 0, 0, 0, true));
+            1, 1, 1, 0, 0, 0, 0, 0, 0, true));
 
         mockMvc.perform(post("/admin/tag-migration/run-a").with(csrf())
                 .param("dryRun", "true"))

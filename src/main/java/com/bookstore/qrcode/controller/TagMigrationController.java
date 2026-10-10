@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -32,7 +33,7 @@ public class TagMigrationController {
     public String dashboard(Model model) {
         var index = service.loadWecomTagIndex();
         model.addAttribute("deletePlan", service.planSchoolGroupGradeDeletions(index));
-        model.addAttribute("verify", service.verify());
+        model.addAttribute("verify", service.verify(index));
 
         Map<String, Long> counts = new LinkedHashMap<>();
         counts.put("R1", progressRepo.countByRowClass("R1"));
@@ -52,7 +53,8 @@ public class TagMigrationController {
             redirect.addFlashAttribute("message", "Phase A dry-run: " + report);
         } else {
             service.runPhaseAAsync();
-            redirect.addFlashAttribute("message", "Phase A 已后台启动，刷新本页看进度（约 25–40 分钟）");
+            redirect.addFlashAttribute("message",
+                "Phase A 已提交后台执行（约 25–40 分钟，刷新看进度）；若已有任务在跑，本次会被分布式锁跳过");
         }
         return "redirect:/admin/tag-migration";
     }
@@ -61,15 +63,19 @@ public class TagMigrationController {
     public String deleteSchoolTags(@RequestParam(defaultValue = "false") boolean confirmed,
                                    @RequestParam(defaultValue = "false") boolean probeOnly,
                                    RedirectAttributes redirect) {
-        var index = service.loadWecomTagIndex();
         if (probeOnly) {
-            var probe = service.probeSingleDeletion(index);
+            var probe = service.probeSingleDeletion(service.loadWecomTagIndex());
             if (probe == null) {
                 redirect.addFlashAttribute("message", "待删清单为空，无需探针");
             } else {
-                service.deleteSchoolGroupGradeTags(java.util.List.of(probe.wecomTagId()));
-                redirect.addFlashAttribute("message", "已实测删除 1 个: [" + probe.groupName() + "]"
-                    + probe.tagName() + " wid=" + probe.wecomTagId());
+                var outcome = service.deleteSchoolGroupGradeTags(List.of(probe.wecomTagId()));
+                if (outcome.blockedIds().isEmpty()) {
+                    redirect.addFlashAttribute("message", "已实测删除 1 个: [" + probe.groupName() + "]"
+                        + probe.tagName() + " wid=" + probe.wecomTagId());
+                } else {
+                    redirect.addFlashAttribute("error", "实测未删 " + probe.wecomTagId()
+                        + "：本地仍有 customer_tag 绑定，请先跑完 Phase A");
+                }
             }
             return "redirect:/admin/tag-migration";
         }
@@ -77,10 +83,16 @@ public class TagMigrationController {
             redirect.addFlashAttribute("error", "需勾选确认后再执行批量删除");
             return "redirect:/admin/tag-migration";
         }
-        var plan = service.planSchoolGroupGradeDeletions(index);
-        int n = service.deleteSchoolGroupGradeTags(plan.stream()
+        var plan = service.planSchoolGroupGradeDeletions(service.loadWecomTagIndex());
+        var outcome = service.deleteSchoolGroupGradeTags(plan.stream()
             .map(GradeTagMigrationService.DeletePlanEntry::wecomTagId).toList());
-        redirect.addFlashAttribute("message", "已删除企微学校组年级标签 " + n + " 个");
+        if (outcome.blockedIds().isEmpty()) {
+            redirect.addFlashAttribute("message", "已删除企微学校组年级标签 " + outcome.deleted().size() + " 个");
+        } else {
+            redirect.addFlashAttribute("message", "已删除 " + outcome.deleted().size()
+                + " 个；跳过 " + outcome.blockedIds().size() + " 个（本地仍有绑定，未删）："
+                + outcome.blockedIds());
+        }
         return "redirect:/admin/tag-migration";
     }
 

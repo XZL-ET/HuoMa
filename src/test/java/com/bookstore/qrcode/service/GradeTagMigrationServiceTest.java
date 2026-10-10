@@ -256,10 +256,10 @@ class GradeTagMigrationServiceTest {
     }
 
     @Test
-    @DisplayName("markTag 抛错（客户已删/84061）不炸整批：计入 wecomMarkFailed，不重接线（留旧绑定给重跑）")
+    @DisplayName("瞬时错误不炸整批：计入 wecomMarkFailed，不重接线（留旧绑定给重跑）")
     void markFailureIsIsolated() throws Exception {
         stubSingleRow(CORP_TAG_LIST, 125L, "七年级", "", "DEAD", 13L, "wm3", "ag3");
-        org.mockito.Mockito.doThrow(new RuntimeException("84061 not external contact"))
+        org.mockito.Mockito.doThrow(new RuntimeException("transient 45035 operation conflict"))
             .when(wecomApi).markTag("wm3", "ag3", List.of("g7"));
 
         var report = service.runPhaseA(false);
@@ -407,17 +407,69 @@ class GradeTagMigrationServiceTest {
     }
 
     @Test
-    @DisplayName("删除前护栏：本地仍有 customer_tag 指向待删标签时拒绝执行")
-    void refusesDeletionWhileLocalBindingsRemain() throws Exception {
-        // 本地仍有一条 R2 学校组行指向 s1
-        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection()))
-            .thenReturn(List.of(row(2127, "一年级", "学校-天水市", "s1")));
-        when(customerTagRepo.countByTagIdIn(List.of(2127L))).thenReturn(5L);
+    @DisplayName("客户关系已失效（84061）：按本地名本地重接线，零企微写，不计失败")
+    void relationGoneCustomerIsRewiredLocally() throws Exception {
+        stubSingleRow(CORP_TAG_LIST, 125L, "七年级", "", "DEAD", 13L, "wm3", "ag3");
+        when(tagRepo.findFirstByNameAndGroupKeyword("七年级", "年级"))
+            .thenReturn(java.util.Optional.of(Tag.builder().id(1190L)
+                .name("七年级").groupKeyword("年级").wecomTagId("g7").build()));
+        org.mockito.Mockito.doThrow(
+                new com.bookstore.qrcode.wecom.WecomApiException(84061, "not external contact", ""))
+            .when(wecomApi).markTag("wm3", "ag3", List.of("g7"));
 
-        assertThrows(IllegalStateException.class,
-            () -> service.deleteSchoolGroupGradeTags(List.of("s1")));
-        org.mockito.Mockito.verify(wecomApi, org.mockito.Mockito.never())
-            .delCorpTag(org.mockito.ArgumentMatchers.any());
+        var report = service.runPhaseA(false);
+
+        assertEquals(1, report.relationGone());
+        assertEquals(0, report.wecomMarkFailed());
+        assertEquals(0, report.requiresReview());
+        org.mockito.Mockito.verify(customerTagInsertService).rewire(13L, 125L, 1190L);
+    }
+
+    @Test
+    @DisplayName("同一行第二个客户复用已新建的年级标签，不重复 addCorpTag（索引即时更新）")
+    void reusesCreatedGradeTagWithinRun() throws Exception {
+        when(jobGuard.tryAcquire(org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any())).thenReturn("tok");
+        when(wecomApi.getCorpTagList()).thenReturn(MAPPER.readTree(CORP_TAG_LIST));
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection()))
+            .thenReturn(List.of(row(126L, "八年级", "", null)));
+        when(customerTagRepo.findByTagIdAndIdGreaterThanOrderByIdAsc(
+                org.mockito.ArgumentMatchers.eq(126L), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of(ct(1L, 21L, 126L), ct(2L, 22L, 126L)))
+            .thenReturn(List.of());
+        when(customerRepo.findAllById(org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of(cust(21L, "wmA", "agA"), cust(22L, "wmB", "agB")));
+        when(wecomApi.addCorpTag("八年级", "GRADE")).thenReturn(MAPPER.readTree(
+            "{\"errcode\":0,\"tag_group\":{\"tag\":[{\"id\":\"g8new\",\"name\":\"八年级\"}]}}"));
+        when(tagRepo.findFirstByWecomTagIdAndGroupKeyword("g8new", "年级"))
+            .thenReturn(java.util.Optional.of(Tag.builder().id(1190L)
+                .name("八年级").groupKeyword("年级").wecomTagId("g8new").build()));
+
+        var report = service.runPhaseA(false);
+
+        assertEquals(2, report.wecomMarked());
+        org.mockito.Mockito.verify(wecomApi, org.mockito.Mockito.times(1))
+            .addCorpTag("八年级", "GRADE");
+        org.mockito.Mockito.verify(wecomApi).markTag("wmA", "agA", List.of("g8new"));
+        org.mockito.Mockito.verify(wecomApi).markTag("wmB", "agB", List.of("g8new"));
+    }
+
+    @Test
+    @DisplayName("Phase B 护栏按 wid 逐个判定：被绑定的 wid 跳过并上报，干净的 wid 照删")
+    void skipsBlockedWidAndDeletesCleanOnes() throws Exception {
+        when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection())).thenReturn(List.of(
+            row(2127, "一年级", "学校-天水市", "s1"),   // 仍有绑定 → 跳过
+            row(2128, "七年级", "学校-天水市", "s7"))); // 无绑定 → 删
+        when(customerTagRepo.countByTagIdIn(List.of(2127L))).thenReturn(5L);
+        when(customerTagRepo.countByTagIdIn(List.of(2128L))).thenReturn(0L);
+
+        var outcome = service.deleteSchoolGroupGradeTags(List.of("s1", "s7"));
+
+        assertEquals(List.of("s7"), outcome.deleted());
+        assertEquals(List.of("s1"), outcome.blockedIds());
+        org.mockito.Mockito.verify(wecomApi, org.mockito.Mockito.never()).delCorpTag(List.of("s1"));
+        org.mockito.Mockito.verify(wecomApi).delCorpTag(List.of("s7"));
     }
 
     @Test
@@ -427,7 +479,10 @@ class GradeTagMigrationServiceTest {
             .thenReturn(List.of(row(2127, "一年级", "学校-天水市", "s1")));
         when(customerTagRepo.countByTagIdIn(List.of(2127L))).thenReturn(0L);
 
-        assertEquals(1, service.deleteSchoolGroupGradeTags(List.of("s1")));
+        var outcome = service.deleteSchoolGroupGradeTags(List.of("s1"));
+
+        assertEquals(List.of("s1"), outcome.deleted());
+        assertTrue(outcome.blockedIds().isEmpty());
         org.mockito.Mockito.verify(wecomApi).delCorpTag(List.of("s1"));
     }
 
@@ -462,7 +517,7 @@ class GradeTagMigrationServiceTest {
         when(wecomApi.getCorpTagList()).thenReturn(MAPPER.readTree(CORP_TAG_LIST));
         when(tagRepo.findGradeNamedRowsOutsideGradeGroup(anyCollection())).thenReturn(java.util.List.of());
 
-        var v = service.verify();
+        var v = service.verify(service.loadWecomTagIndex());
 
         assertEquals(0, v.localNonCanonicalRows());
         assertEquals(2, v.wecomSchoolGroupGradeTags()); // CORP_TAG_LIST 里 s1/s7 还在

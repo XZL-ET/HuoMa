@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS grade_tag_migration_progress (
     local_tag_name       VARCHAR(100) COMMENT '迁移前本地行名（升学改名时可能与企微当前名不一致）',
     target_wecom_tag_id  VARCHAR(50)  COMMENT '归并后应指向的「年级」组企微标签 id',
     target_tag_id        BIGINT       COMMENT '归并后本地 canonical tag 行 id',
-    action               VARCHAR(40)  NOT NULL COMMENT 'LOCAL_ONLY/WECOM_RELINK/WECOM_MARKED/WECOM_MARK_FAILED/SKIPPED_NO_AGENT',
+    action               VARCHAR(40)  NOT NULL COMMENT 'LOCAL_ONLY/WECOM_RELINK/WECOM_MARKED/WECOM_MARK_FAILED/SKIPPED_NO_AGENT/RELATION_GONE',
     requires_review      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1=按本地名补打（升学可能差一级），需人工复核',
     note                 VARCHAR(255) COMMENT '备注（错误信息等）',
     created_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,

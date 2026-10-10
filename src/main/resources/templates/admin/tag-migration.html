@@ -34,7 +34,7 @@
                 · 待人工复核 <b th:text="${counts['review']}"></b></p>
             <form method="post" th:action="@{/admin/tag-migration/run-a}" class="d-inline">
                 <input type="hidden" name="dryRun" value="true">
-                <button class="btn btn-outline-secondary btn-sm">dry-run（零 API 零写库）</button>
+                <button class="btn btn-outline-secondary btn-sm">dry-run（零企微写、零写库）</button>
             </form>
             <form method="post" th:action="@{/admin/tag-migration/run-a}" class="d-inline">
                 <input type="hidden" name="dryRun" value="false">

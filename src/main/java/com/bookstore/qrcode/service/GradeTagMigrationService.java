@@ -6,6 +6,8 @@ import com.bookstore.qrcode.entity.GradeTagMigrationProgress;
 import com.bookstore.qrcode.entity.Tag;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.bookstore.qrcode.wecom.WecomApiException;
+import com.bookstore.qrcode.wecom.WecomErrorCodes;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -175,7 +177,7 @@ public class GradeTagMigrationService {
 
     public record MigrationReport(long rows, long customers, long localOnly, long wecomRelink,
                                   long wecomMarked, long wecomMarkFailed, long skippedNoAgent,
-                                  long requiresReview, boolean dryRun) {}
+                                  long relationGone, long requiresReview, boolean dryRun) {}
 
     /**
      * 逐客户对账计数器。做成<b>局部变量</b>贯穿调用，不做成字段 ——
@@ -183,19 +185,19 @@ public class GradeTagMigrationService {
      */
     private static final class Counters {
         long rows, customers, localOnly, wecomRelink, wecomMarked, wecomMarkFailed,
-             skippedNoAgent, requiresReview;
+             skippedNoAgent, relationGone, requiresReview;
         int apiCalls;
 
         MigrationReport toReport(boolean dryRun) {
             return new MigrationReport(rows, customers, localOnly, wecomRelink, wecomMarked,
-                wecomMarkFailed, skippedNoAgent, requiresReview, dryRun);
+                wecomMarkFailed, skippedNoAgent, relationGone, requiresReview, dryRun);
         }
 
         @Override public String toString() {
             return String.format("rows=%d customers=%d localOnly=%d relink=%d marked=%d "
-                    + "markFailed=%d skipped=%d review=%d apiCalls=%d",
+                    + "markFailed=%d skipped=%d relationGone=%d review=%d apiCalls=%d",
                 rows, customers, localOnly, wecomRelink, wecomMarked, wecomMarkFailed,
-                skippedNoAgent, requiresReview, apiCalls);
+                skippedNoAgent, relationGone, requiresReview, apiCalls);
         }
     }
 
@@ -233,7 +235,7 @@ public class GradeTagMigrationService {
             long customers = rows.stream()
                 .mapToLong(r -> customerTagRepo.countByTagIdIn(List.of(r.tagId())))
                 .sum();
-            return new MigrationReport(rows.size(), customers, 0, 0, 0, 0, 0, 0, true);
+            return new MigrationReport(rows.size(), customers, 0, 0, 0, 0, 0, 0, 0, true);
         }
 
         // 先拿锁再读企微：避免双节点同时各扫一遍分类
@@ -300,11 +302,17 @@ public class GradeTagMigrationService {
                 } catch (JobAbortedException e) {
                     throw e;
                 } catch (Exception e) {
-                    // 单客户失败不炸整批（客户已删会抛 84061 等）
-                    log.error("归并失败: customerId={}, tagRow={}, error={}",
-                        c.getId(), row.tagId(), e.getMessage());
-                    counters.wecomMarkFailed++;
-                    recordProgress(c, row, null, null, "WECOM_MARK_FAILED", true, e.getMessage());
+                    if (isCustomerRelationGone(e)) {
+                        // 客户关系已失效（84061/84073/25002）：企微侧没有可打标的载体。
+                        // 本地账目仍要归并到 canonical —— 按本地行名做本地重接线，零企微写，不计失败。
+                        rewireToCanonicalByName(row, c, counters);
+                    } else {
+                        // 单客户失败不炸整批（瞬时 45035 等）
+                        log.error("归并失败: customerId={}, tagRow={}, error={}",
+                            c.getId(), row.tagId(), e.getMessage());
+                        counters.wecomMarkFailed++;
+                        recordProgress(c, row, null, null, "WECOM_MARK_FAILED", true, e.getMessage());
+                    }
                 }
             }
         }
@@ -367,6 +375,35 @@ public class GradeTagMigrationService {
         recordProgress(c, row, target.wecomTagId(), canonicalId, action, review, null);
     }
 
+    /** 客户关系已失效的企微错误码 —— 沿用 {@link WecomErrorCodes} 与 TagService 的既有口径。 */
+    private static boolean isCustomerRelationGone(Exception e) {
+        if (!(e instanceof WecomApiException wae)) return false;
+        int code = wae.getErrcode();
+        return code == WecomErrorCodes.NOT_EXTERNAL_CONTACT
+            || code == WecomErrorCodes.DELETED_BY_USER
+            || code == WecomErrorCodes.REJECTED;
+    }
+
+    /**
+     * 客户关系已失效时的本地归并：企微侧没有可打标的载体，只能按本地行名找到 canonical
+     * 年级行做本地重接线（零企微写）。找不到同名 canonical 行时保留旧绑定并标复核。
+     */
+    private void rewireToCanonicalByName(GradeTagRow row, Customer c, Counters counters) {
+        Long canonicalId = tagRepo.findFirstByNameAndGroupKeyword(row.name(), GRADE_GROUP)
+            .map(Tag::getId).orElse(null);
+        boolean unresolved = canonicalId == null;
+        if (!unresolved && canonicalId.longValue() != row.tagId()) {
+            customerTagInsertService.rewire(c.getId(), row.tagId(), canonicalId);
+        }
+        if (unresolved) {
+            log.warn("客户关系失效且无同名 canonical 年级行，保留旧绑定待复核: customerId={}, tagRow={}, name={}",
+                c.getId(), row.tagId(), row.name());
+        }
+        counters.relationGone++;
+        if (unresolved) counters.requiresReview++;
+        recordProgress(c, row, null, canonicalId, "RELATION_GONE", unresolved, null);
+    }
+
     /**
      * 取「年级」组里名叫 {@code name} 的标签；不存在则新建（组已存在则 add 进该组）。
      *
@@ -388,6 +425,10 @@ public class GradeTagMigrationService {
         if (newId == null || newId.isBlank()) {
             throw new IllegalStateException("add_corp_tag 未返回新标签 id: " + name);
         }
+        // 本行其余客户共用同一 name：必须把新标签补进索引，否则每个客户都会再 addCorpTag 一次
+        index.wid2name().put(newId, name);
+        index.wid2group().put(newId, GRADE_GROUP);
+        index.gradeWids().add(newId);
         log.warn("按本地名补建「年级」组标签: name={}, newId={}（本地名可能因升学差一级，请复核）",
             name, newId);
         return new TargetTag(newId, name);
@@ -461,44 +502,54 @@ public class GradeTagMigrationService {
         return plan.isEmpty() ? null : plan.get(0);
     }
 
+    /** Phase B 批量删除结果：实际删掉的 wid，以及因本地仍有绑定而被跳过的 wid。 */
+    public record DeleteOutcome(List<String> deleted, List<String> blockedIds) {}
+
     /**
      * 执行删除。调用前必须先跑完 Phase A，否则那些客户在企微就没年级标签了。
      *
-     * <p>护栏：若本地仍有 {@code customer_tag} 指向这些 wid 对应的 tag 行，直接拒绝 ——
-     * 说明 Phase A 没跑干净。</p>
+     * <p>护栏<b>按 wid 逐个判定</b>：某个 wid 的本地 tag 行若仍被 {@code customer_tag} 引用，
+     * 只跳过这一个（记录进 {@link DeleteOutcome#blockedIds()}），其余照删。整批一起拒绝会让任何
+     * 一个 Phase A 未能归并的客户（如无 current_agent）堵死整个 Phase B，runbook 的批量删除
+     * 永远做不完。</p>
      */
-    public int deleteSchoolGroupGradeTags(List<String> wecomTagIds) {
-        if (wecomTagIds == null || wecomTagIds.isEmpty()) return 0;
+    public DeleteOutcome deleteSchoolGroupGradeTags(List<String> wecomTagIds) {
+        List<String> deleted = new ArrayList<>();
+        List<String> blocked = new ArrayList<>();
+        if (wecomTagIds == null || wecomTagIds.isEmpty()) return new DeleteOutcome(deleted, blocked);
 
-        List<Long> localRowIds = new ArrayList<>();
-        for (String wid : wecomTagIds) {
-            tagRepo.findFirstByWecomTagIdAndGroupKeyword(wid, GRADE_GROUP).ifPresent(t -> localRowIds.add(t.getId()));
-        }
-        // 也可能指向校园组行（group_keyword 不是年级组）
+        // wid → 该 wid 对应的本地 tag 行 id（非年级组同名行 + 年级组行）
+        Map<String, List<Long>> rowsByWid = new HashMap<>();
         for (var t : tagRepo.findGradeNamedRowsOutsideGradeGroup(GRADE_NAMES)) {
             if (t.getWecomTagId() != null && wecomTagIds.contains(t.getWecomTagId())) {
-                localRowIds.add(t.getId());
+                rowsByWid.computeIfAbsent(t.getWecomTagId(), k -> new ArrayList<>()).add(t.getId());
             }
         }
-        if (!localRowIds.isEmpty()) {
-            long bound = customerTagRepo.countByTagIdIn(localRowIds);
-            if (bound > 0) {
-                throw new IllegalStateException(
-                    "本地仍有 " + bound + " 条 customer_tag 指向待删的学校组年级标签行，"
-                        + "请先跑完 Phase A 再删企微标签");
-            }
+        for (String wid : wecomTagIds) {
+            tagRepo.findFirstByWecomTagIdAndGroupKeyword(wid, GRADE_GROUP)
+                .ifPresent(t -> rowsByWid.computeIfAbsent(wid, k -> new ArrayList<>()).add(t.getId()));
         }
 
-        int deleted = 0;
         Counters counters = new Counters();
         for (String wid : wecomTagIds) {
+            List<Long> localRowIds = rowsByWid.getOrDefault(wid, List.of());
+            long bound = localRowIds.isEmpty() ? 0 : customerTagRepo.countByTagIdIn(localRowIds);
+            if (bound > 0) {
+                blocked.add(wid);
+                log.warn("跳过删除 wid={}：本地仍有 {} 条 customer_tag 指向其 tag 行（Phase A 未归并干净）",
+                    wid, bound);
+                continue;
+            }
             sleepIfNeeded(counters);
             wecomApi.delCorpTag(List.of(wid));
             counters.apiCalls++;
-            deleted++;
-            log.info("已删企微学校组年级标签: wid={}（{}/{}）", wid, deleted, wecomTagIds.size());
+            deleted.add(wid);
+            log.info("已删企微学校组年级标签: wid={}（{}/{}）", wid, deleted.size(), wecomTagIds.size());
         }
-        return deleted;
+        if (!blocked.isEmpty()) {
+            log.warn("Phase B 跳过 {} 个 wid（本地仍有绑定，未删除）: {}", blocked.size(), blocked);
+        }
+        return new DeleteOutcome(deleted, blocked);
     }
 
     // ---------------------------------------------------------------- C
@@ -537,12 +588,12 @@ public class GradeTagMigrationService {
         }
     }
 
-    /** Phase D：三项归并完成度指标。 */
-    public VerifyResult verify() {
+    /** Phase D：三项归并完成度指标。传入调用方已拉取的索引，避免看板一次刷新两次 get_corp_tag_list。 */
+    public VerifyResult verify(WecomTagIndex index) {
         List<Tag> rows = tagRepo.findGradeNamedRowsOutsideGradeGroup(GRADE_NAMES);
         long bindings = rows.isEmpty() ? 0
             : rows.stream().mapToLong(t -> customerTagRepo.countByTagId(t.getId())).sum();
-        long wecomDupes = planSchoolGroupGradeDeletions(loadWecomTagIndex()).size();
+        long wecomDupes = planSchoolGroupGradeDeletions(index).size();
         VerifyResult r = new VerifyResult(rows.size(), bindings, wecomDupes);
         log.info("Phase D 校验: {}", r);
         return r;
