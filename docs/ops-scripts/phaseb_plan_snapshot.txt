@@ -1,0 +1,345 @@
+Phase B 待删清单存档（删除前快照） 2026-10-12 09:01:52
+企微待删 wid 共 111 个；本地非年级组年级行 172 个
+
+[学校] 三年级   wid=etZUH8SgAA9Rl60wAv6Q2WXZ5rsVP5Iw
+    本地行 #865 [学校]三年级  残留绑定=0  PhaseA迁走=0  主要目标wid=-(行-,0人)
+    本地行 #650 [学校-张掖市]三年级  残留绑定=1  PhaseA迁走=685  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,674人)
+    本地行 #1288 [学校-甘南州]三年级  残留绑定=0  PhaseA迁走=160  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,158人)
+    本地行 #2271 [学校-金昌市]三年级  残留绑定=0  PhaseA迁走=20  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,20人)
+    → 会被 blocked（本地仍有残留绑定）
+[学校] 二年级   wid=etZUH8SgAADcDBpxEN0R3_xCR5ldCQvA
+    本地行 #863 [学校]二年级  残留绑定=0  PhaseA迁走=0  主要目标wid=-(行-,0人)
+    本地行 #1416 [学校-兰州市]二年级  残留绑定=0  PhaseA迁走=85  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,83人)
+    本地行 #666 [学校-张掖市]二年级  残留绑定=1  PhaseA迁走=98  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,90人)
+    本地行 #1298 [学校-武威市]二年级  残留绑定=0  PhaseA迁走=108  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,105人)
+    本地行 #2421 [学校-金昌市]二年级  残留绑定=0  PhaseA迁走=2  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,2人)
+    → 会被 blocked（本地仍有残留绑定）
+[学校-临夏州] 一年级   wid=etZUH8SgAAEDQ9mbUNhQrp_eIUKk4Jwg
+    本地行 #2290 [学校-临夏州]一年级  残留绑定=0  PhaseA迁走=60  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,59人)
+    → 会真删
+[学校-临夏州] 七年级   wid=etZUH8SgAALiMuigvUUb-d6fqphtTRbg
+    本地行 #2352 [学校-临夏州]七年级  残留绑定=0  PhaseA迁走=245  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,244人)
+    → 会真删
+[学校-临夏州] 三年级   wid=etZUH8SgAAh6SQio5jO6ZlBLIDyIGNJQ
+    本地行 #1306 [学校-临夏州]三年级  残留绑定=0  PhaseA迁走=132  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,130人)
+    → 会真删
+[学校-临夏州] 九年级   wid=etZUH8SgAAWZXCvwiQbb5PVMIxSAxzhA
+    本地行 #2355 [学校-临夏州]九年级  残留绑定=0  PhaseA迁走=113  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,109人)
+    → 会真删
+[学校-临夏州] 二年级   wid=etZUH8SgAARuHRhU6X8V0GnO0S1j9SEQ
+    本地行 #1296 [学校-临夏州]二年级  残留绑定=0  PhaseA迁走=22  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,21人)
+    → 会真删
+[学校-临夏州] 五年级   wid=etZUH8SgAAjlFzGcs22CGP95qvHmvG9g
+    本地行 #1342 [学校-临夏州]五年级  残留绑定=0  PhaseA迁走=58  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,47人)
+    → 会真删
+[学校-临夏州] 八年级   wid=etZUH8SgAAzXoeToxYRfxDHJWemDvNgg
+    本地行 #2356 [学校-临夏州]八年级  残留绑定=0  PhaseA迁走=195  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,194人)
+    → 会真删
+[学校-临夏州] 六年级   wid=etZUH8SgAAoMC4-e6khtOmrJT1Zijzog
+    本地行 #1423 [学校-临夏州]六年级  残留绑定=0  PhaseA迁走=85  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,77人)
+    → 会真删
+[学校-临夏州] 四年级   wid=etZUH8SgAARhWeffpii2RZ-y1Mb5HiWQ
+    本地行 #1213 [学校-临夏州]四年级  残留绑定=0  PhaseA迁走=124  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,119人)
+    → 会真删
+[学校-临夏州] 高一   wid=etZUH8SgAAYcNKXRQA-rmmg7qBp5Pj9A
+    本地行 #1311 [学校-临夏州]高一  残留绑定=0  PhaseA迁走=43  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,40人)
+    → 会真删
+[学校-临夏州] 高二   wid=etZUH8SgAAKBXceMwcv726mxaT1o__7A
+    本地行 #3057 [学校-临夏州]高二  残留绑定=0  PhaseA迁走=8  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,8人)
+    → 会真删
+[学校-兰州市] 一年级   wid=etZUH8SgAAfFkQ0amRiOCeQnJrJqNFDg
+    本地行 #1419 [学校-兰州市]一年级  残留绑定=0  PhaseA迁走=138  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,133人)
+    → 会真删
+[学校-兰州市] 三年级   wid=etZUH8SgAAoIzvZ0fO3kfyZrzOR7FLMw
+    本地行 #1294 [学校-兰州市]三年级  残留绑定=0  PhaseA迁走=181  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,180人)
+    → 会真删
+[学校-兰州市] 五年级   wid=etZUH8SgAAl6A0N8-2j2taCUl7D3tMyA
+    本地行 #659 [学校-兰州市]五年级  残留绑定=0  PhaseA迁走=187  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,177人)
+    → 会真删
+[学校-兰州市] 六年级   wid=etZUH8SgAAecfe8H_THFkR2AcCVfMZMQ
+    本地行 #1291 [学校-兰州市]六年级  残留绑定=0  PhaseA迁走=79  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,74人)
+    → 会真删
+[学校-天水市] 一年级   wid=etZUH8SgAAC4Ko2_qRBq01cj9d-5ZKXg
+    本地行 #2127 [学校-天水市]一年级  残留绑定=0  PhaseA迁走=245  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,239人)
+    → 会真删
+[学校-天水市] 七年级   wid=etZUH8SgAA8yO-bw0iUhWHnR96njyQHQ
+    本地行 #2362 [学校-天水市]七年级  残留绑定=0  PhaseA迁走=411  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,405人)
+    → 会真删
+[学校-天水市] 三年级   wid=etZUH8SgAACE5vbL6QR3Yc5kN-xOB-rQ
+    本地行 #1680 [学校-天水市]三年级  残留绑定=0  PhaseA迁走=194  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,184人)
+    → 会真删
+[学校-天水市] 九年级   wid=etZUH8SgAA7m5aZtlJPob-Rf_ZJjomVA
+    本地行 #2363 [学校-天水市]九年级  残留绑定=0  PhaseA迁走=193  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,190人)
+    → 会真删
+[学校-天水市] 二年级   wid=etZUH8SgAA48CIAlfmBJPAT03xzoY_zw
+    本地行 #1839 [学校-天水市]二年级  残留绑定=0  PhaseA迁走=201  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,189人)
+    → 会真删
+[学校-天水市] 五年级   wid=etZUH8SgAAZQGWOxbzZsOTgs2N9xp2QQ
+    本地行 #2103 [学校-天水市]五年级  残留绑定=0  PhaseA迁走=164  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,163人)
+    → 会真删
+[学校-天水市] 八年级   wid=etZUH8SgAAOfao8Amkar_GOxuXJi4tnA
+    本地行 #1827 [学校-天水市]八年级  残留绑定=0  PhaseA迁走=321  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,312人)
+    → 会真删
+[学校-天水市] 六年级   wid=etZUH8SgAAnKiveGlaHd4EVuC8bUbJvA
+    本地行 #2026 [学校-天水市]六年级  残留绑定=0  PhaseA迁走=164  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,157人)
+    → 会真删
+[学校-天水市] 四年级   wid=etZUH8SgAAkNQ27lW6IQDRk1Q-xpL4pg
+    本地行 #1718 [学校-天水市]四年级  残留绑定=0  PhaseA迁走=213  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,211人)
+    → 会真删
+[学校-天水市] 高一   wid=etZUH8SgAAF-8cf1ho10nVjJgye7X1IQ
+    本地行 #2636 [学校-天水市]高一  残留绑定=0  PhaseA迁走=269  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,257人)
+    → 会真删
+[学校-天水市] 高三   wid=etZUH8SgAAoPF6288JOxiOwXJ2TSfjMg
+    本地行 #3376 [学校-天水市]高三  残留绑定=0  PhaseA迁走=2  主要目标wid=etZUH8SgAA6kOWZCR59GM0kkNDkCYD0w(行1195,2人)
+    → 会真删
+[学校-天水市] 高二   wid=etZUH8SgAAoNECXoMQRE1v88uCOxQk2Q
+    本地行 #2615 [学校-天水市]高二  残留绑定=0  PhaseA迁走=107  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,105人)
+    → 会真删
+[学校-定西市] 一年级   wid=etZUH8SgAAPWLHgSCO7tm9im9LCkcVrg
+    本地行 #1237 [学校-定西市]一年级  残留绑定=0  PhaseA迁走=703  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,692人)
+    → 会真删
+[学校-定西市] 七年级   wid=etZUH8SgAA09KEh5evg3-wzW1UNwsZVA
+    本地行 #669 [学校-定西市]七年级  残留绑定=0  PhaseA迁走=2271  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,2245人)
+    → 会真删
+[学校-定西市] 三年级   wid=etZUH8SgAA-L2MiBnk4MNqTnbWxl1iKg
+    本地行 #647 [学校-定西市]三年级  残留绑定=0  PhaseA迁走=782  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,756人)
+    → 会真删
+[学校-定西市] 九年级   wid=etZUH8SgAAOkOIENy4lPND64kiqeS5hA
+    本地行 #671 [学校-定西市]九年级  残留绑定=0  PhaseA迁走=1011  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,997人)
+    → 会真删
+[学校-定西市] 二年级   wid=etZUH8SgAAjVRlwqimsHRG4oKnc850AQ
+    本地行 #1240 [学校-定西市]二年级  残留绑定=0  PhaseA迁走=632  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,619人)
+    → 会真删
+[学校-定西市] 五年级   wid=etZUH8SgAAyNXifu9Vr0PaaBSJ4kGQyw
+    本地行 #662 [学校-定西市]五年级  残留绑定=0  PhaseA迁走=735  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,714人)
+    → 会真删
+[学校-定西市] 八年级   wid=etZUH8SgAAam1XQnQNoXTPjnTbCL9yHg
+    本地行 #1377 [学校-定西市]八年级  残留绑定=0  PhaseA迁走=1325  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,1308人)
+    → 会真删
+[学校-定西市] 六年级   wid=etZUH8SgAAy88hBF9ZJuwZyBG8u1vmpQ
+    本地行 #1304 [学校-定西市]六年级  残留绑定=0  PhaseA迁走=679  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,663人)
+    → 会真删
+[学校-定西市] 四年级   wid=etZUH8SgAAlDzb_ef0fbIc-TAsG9OBHA
+    本地行 #1270 [学校-定西市]四年级  残留绑定=0  PhaseA迁走=1116  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,1088人)
+    → 会真删
+[学校-定西市] 高一   wid=etZUH8SgAAMzEW-gN66trXpcITYq2uDQ
+    本地行 #620 [学校-定西市]高一  残留绑定=0  PhaseA迁走=252  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,233人)
+    → 会真删
+[学校-平凉市] 一年级   wid=etZUH8SgAA0kupSe-y8BgdDWwWMFsVjQ
+    本地行 #1273 [学校-平凉市]一年级  残留绑定=0  PhaseA迁走=1545  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,1523人)
+    → 会真删
+[学校-平凉市] 七年级   wid=etZUH8SgAAKTv7srZ2nVwX08R70fvg6A
+    本地行 #1726 [学校-平凉市]七年级  残留绑定=0  PhaseA迁走=3781  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,3620人)
+    → 会真删
+[学校-平凉市] 三年级   wid=etZUH8SgAA_VU561GlSpF1QpJuSa2fIA
+    本地行 #1510 [学校-平凉市]三年级  残留绑定=0  PhaseA迁走=2384  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,2232人)
+    → 会真删
+[学校-平凉市] 九年级   wid=etZUH8SgAArdqq-TRqMNVZb8wAqSdmxQ
+    本地行 #1693 [学校-平凉市]九年级  残留绑定=0  PhaseA迁走=2997  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,2865人)
+    → 会真删
+[学校-平凉市] 二年级   wid=etZUH8SgAAifgUBwBqd97PDj-LQ2GeKQ
+    本地行 #1649 [学校-平凉市]二年级  残留绑定=0  PhaseA迁走=1262  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,1187人)
+    → 会真删
+[学校-平凉市] 五年级   wid=etZUH8SgAATSY68ocYq52JwIih2kpaNA
+    本地行 #1390 [学校-平凉市]五年级  残留绑定=0  PhaseA迁走=2171  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,2084人)
+    → 会真删
+[学校-平凉市] 八年级   wid=etZUH8SgAAxkoq6up4S4Q3hBRt8QJ7Jg
+    本地行 #1696 [学校-平凉市]八年级  残留绑定=0  PhaseA迁走=3103  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,2979人)
+    → 会真删
+[学校-平凉市] 六年级   wid=etZUH8SgAACRtNij01wgEnzsdftEEj7Q
+    本地行 #1508 [学校-平凉市]六年级  残留绑定=0  PhaseA迁走=2361  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,2276人)
+    → 会真删
+[学校-平凉市] 四年级   wid=etZUH8SgAAGjmanrs4QjOeXriGdsCL-w
+    本地行 #1504 [学校-平凉市]四年级  残留绑定=0  PhaseA迁走=2753  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,2660人)
+    → 会真删
+[学校-平凉市] 高一   wid=etZUH8SgAAztDi6_PzhOFjxCrWHe8xDA
+    本地行 #1346 [学校-平凉市]高一  残留绑定=0  PhaseA迁走=2291  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,2072人)
+    → 会真删
+[学校-平凉市] 高三   wid=etZUH8SgAAwg6oChzBr6Da8ecN66ko3w
+    本地行 #1910 [学校-平凉市]高三  残留绑定=0  PhaseA迁走=428  主要目标wid=etZUH8SgAA6kOWZCR59GM0kkNDkCYD0w(行1195,393人)
+    → 会真删
+[学校-平凉市] 高二   wid=etZUH8SgAAazyVdWTOZu7ArkO4WF9tgQ
+    本地行 #1437 [学校-平凉市]高二  残留绑定=0  PhaseA迁走=2187  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,1553人)
+    → 会真删
+[学校-庆阳市] 一年级   wid=etZUH8SgAAPRucUf-O0fWxJjHx-_JHuQ
+    本地行 #1290 [学校-庆阳市]一年级  残留绑定=0  PhaseA迁走=278  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,203人)
+    → 会真删
+[学校-庆阳市] 七年级   wid=etZUH8SgAAKjSp8XuUWTbZYdvcCdP-KQ
+    本地行 #1337 [学校-庆阳市]七年级  残留绑定=0  PhaseA迁走=648  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,632人)
+    → 会真删
+[学校-庆阳市] 三年级   wid=etZUH8SgAA7vaazbeKCtJrrnJDe6DWdQ
+    本地行 #1246 [学校-庆阳市]三年级  残留绑定=0  PhaseA迁走=351  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,341人)
+    → 会真删
+[学校-庆阳市] 九年级   wid=etZUH8SgAAoKq2hgSAgrWCrlJX-pqdOQ
+    本地行 #1426 [学校-庆阳市]九年级  残留绑定=0  PhaseA迁走=576  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,571人)
+    → 会真删
+[学校-庆阳市] 二年级   wid=etZUH8SgAAhOvhJ2fxWW49NfhpiA0xtA
+    本地行 #1251 [学校-庆阳市]二年级  残留绑定=0  PhaseA迁走=195  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,188人)
+    → 会真删
+[学校-庆阳市] 五年级   wid=etZUH8SgAAcabBkP9u7NjcOFz_UA_h_A
+    本地行 #1257 [学校-庆阳市]五年级  残留绑定=0  PhaseA迁走=305  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,181人)
+    → 会真删
+[学校-庆阳市] 八年级   wid=etZUH8SgAAVvXN8IU4_dp4QetkMg2X6A
+    本地行 #1336 [学校-庆阳市]八年级  残留绑定=0  PhaseA迁走=414  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,401人)
+    → 会真删
+[学校-庆阳市] 六年级   wid=etZUH8SgAAnpdNA6e0T6DahsADTLJZDg
+    本地行 #1258 [学校-庆阳市]六年级  残留绑定=0  PhaseA迁走=204  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,164人)
+    → 会真删
+[学校-庆阳市] 四年级   wid=etZUH8SgAAy90IxzYAbES2QDQMUSiXxQ
+    本地行 #1249 [学校-庆阳市]四年级  残留绑定=0  PhaseA迁走=350  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,194人)
+    → 会真删
+[学校-庆阳市] 高一   wid=etZUH8SgAAG-Pa1p4rQRVkBNfDXeRaiQ
+    本地行 #1489 [学校-庆阳市]高一  残留绑定=0  PhaseA迁走=65  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,62人)
+    → 会真删
+[学校-张掖市] 一年级   wid=etZUH8SgAAilwO_0Le3lyt58Ctar7okw
+    本地行 #1286 [学校-张掖市]一年级  残留绑定=0  PhaseA迁走=43  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,25人)
+    → 会真删
+[学校-张掖市] 七年级   wid=etZUH8SgAAnlmTeyq_xBGufmsVuOj8vg
+    本地行 #1223 [学校-张掖市]七年级  残留绑定=0  PhaseA迁走=842  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,827人)
+    → 会真删
+[学校-张掖市] 九年级   wid=etZUH8SgAA3bIjyHkMtRaDsd0Xv2Kiyg
+    本地行 #629 [学校-张掖市]九年级  残留绑定=0  PhaseA迁走=409  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,402人)
+    → 会真删
+[学校-张掖市] 五年级   wid=etZUH8SgAAWVVm0cOT2CV_ET4sww3WAQ
+    本地行 #638 [学校-张掖市]五年级  残留绑定=0  PhaseA迁走=492  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,477人)
+    → 会真删
+[学校-张掖市] 八年级   wid=etZUH8SgAA3ifOhay3OvQA8gyR_AwgaQ
+    本地行 #634 [学校-张掖市]八年级  残留绑定=0  PhaseA迁走=348  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,326人)
+    → 会真删
+[学校-张掖市] 六年级   wid=etZUH8SgAA6IvaPvI1TSL-MErTuIn3AQ
+    本地行 #1271 [学校-张掖市]六年级  残留绑定=0  PhaseA迁走=417  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,408人)
+    → 会真删
+[学校-张掖市] 四年级   wid=etZUH8SgAADigapfoBYX2uPPM3MYZphw
+    本地行 #605 [学校-张掖市]四年级  残留绑定=0  PhaseA迁走=586  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,570人)
+    → 会真删
+[学校-张掖市] 高一   wid=etZUH8SgAASRUlZASX0RvvrCWlD6EC9w
+    本地行 #1880 [学校-张掖市]高一  残留绑定=0  PhaseA迁走=421  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,415人)
+    → 会真删
+[学校-张掖市] 高三   wid=etZUH8SgAAn1-XN8qDeboUGDALED2eVA
+    本地行 #2972 [学校-张掖市]高三  残留绑定=0  PhaseA迁走=66  主要目标wid=etZUH8SgAA6kOWZCR59GM0kkNDkCYD0w(行1195,63人)
+    → 会真删
+[学校-张掖市] 高二   wid=etZUH8SgAAbAcwQM5Ty0e3H-Ne0FN93g
+    本地行 #2418 [学校-张掖市]高二  残留绑定=0  PhaseA迁走=258  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,254人)
+    → 会真删
+[学校-武威市] 七年级   wid=etZUH8SgAAwfnaceewUTD-W99sApeGGA
+    本地行 #1263 [学校-武威市]七年级  残留绑定=0  PhaseA迁走=256  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,251人)
+    → 会真删
+[学校-武威市] 三年级   wid=etZUH8SgAAVjjpUyCyxv8vkBy2lgwLdA
+    本地行 #1465 [学校-武威市]三年级  残留绑定=0  PhaseA迁走=217  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,210人)
+    → 会真删
+[学校-武威市] 九年级   wid=etZUH8SgAAAKJcsQTFb5AJuQDenMw-9Q
+    本地行 #1265 [学校-武威市]九年级  残留绑定=0  PhaseA迁走=323  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,315人)
+    → 会真删
+[学校-武威市] 五年级   wid=etZUH8SgAAYiwqxc3AMZKV_EVi5WPsYQ
+    本地行 #1268 [学校-武威市]五年级  残留绑定=0  PhaseA迁走=205  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,200人)
+    → 会真删
+[学校-武威市] 六年级   wid=etZUH8SgAAo4n8vajH7V_IJEI4AIwUuA
+    本地行 #1244 [学校-武威市]六年级  残留绑定=0  PhaseA迁走=220  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,214人)
+    → 会真删
+[学校-武威市] 四年级   wid=etZUH8SgAA2J6xqUk6CPRhxGVmeNiaaA
+    本地行 #1381 [学校-武威市]四年级  残留绑定=0  PhaseA迁走=253  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,249人)
+    → 会真删
+[学校-武威市] 高二   wid=etZUH8SgAAqa77psrK78XHcHKkN8iSpg
+    本地行 #2454 [学校-武威市]高二  残留绑定=0  PhaseA迁走=71  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,70人)
+    → 会真删
+[学校-甘南州] 二年级   wid=etZUH8SgAALMOWh4u1ZWVkeaLu_poeGw
+    本地行 #1363 [学校-甘南州]二年级  残留绑定=0  PhaseA迁走=122  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,118人)
+    → 会真删
+[学校-甘南州] 高二   wid=etZUH8SgAADVJHG0bN0zfA8tzOAq4TFw
+    本地行 #2044 [学校-甘南州]高二  残留绑定=0  PhaseA迁走=9  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,9人)
+    → 会真删
+[学校-白银市] 三年级   wid=etZUH8SgAAq0f4UX4q_cHC6JTZxsF6Kw
+    本地行 #1216 [学校-白银市]三年级  残留绑定=0  PhaseA迁走=609  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,592人)
+    → 会真删
+[学校-白银市] 九年级   wid=etZUH8SgAA7r1dIPWW1Xy363v4_KjDaQ
+    本地行 #1233 [学校-白银市]九年级  残留绑定=0  PhaseA迁走=553  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,493人)
+    → 会真删
+[学校-白银市] 二年级   wid=etZUH8SgAAwqRaEt3UkMzlLNT189blwA
+    本地行 #633 [学校-白银市]二年级  残留绑定=0  PhaseA迁走=363  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,353人)
+    → 会真删
+[学校-白银市] 五年级   wid=etZUH8SgAAZCNiUjxHhXyFjCa-BewDiQ
+    本地行 #596 [学校-白银市]五年级  残留绑定=0  PhaseA迁走=545  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,442人)
+    → 会真删
+[学校-白银市] 四年级   wid=etZUH8SgAAFjw0VoAhf18b-rWu6GcHLw
+    本地行 #640 [学校-白银市]四年级  残留绑定=0  PhaseA迁走=562  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,458人)
+    → 会真删
+[学校-白银市] 高二   wid=etZUH8SgAAIJPIDxXgHmCyWedR0AZK5Q
+    本地行 #1398 [学校-白银市]高二  残留绑定=0  PhaseA迁走=6  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,5人)
+    → 会真删
+[学校-酒泉市] 一年级   wid=etZUH8SgAAidTkT1Gw_HweL-PfUM5cog
+    本地行 #1357 [学校-酒泉市]一年级  残留绑定=0  PhaseA迁走=233  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,229人)
+    → 会真删
+[学校-酒泉市] 七年级   wid=etZUH8SgAA0cQrhn_QqDo3pQelHXxvlA
+    本地行 #1275 [学校-酒泉市]七年级  残留绑定=0  PhaseA迁走=219  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,217人)
+    → 会真删
+[学校-酒泉市] 三年级   wid=etZUH8SgAAEneJSt9qiQ_t7K2yNlb8ZQ
+    本地行 #1407 [学校-酒泉市]三年级  残留绑定=0  PhaseA迁走=254  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,246人)
+    → 会真删
+[学校-酒泉市] 九年级   wid=etZUH8SgAAvlwPI7urIEdG6ExDUCtuxg
+    本地行 #2122 [学校-酒泉市]九年级  残留绑定=0  PhaseA迁走=130  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,129人)
+    → 会真删
+[学校-酒泉市] 二年级   wid=etZUH8SgAArMK7ptYG2ndJwwjTrztd3Q
+    本地行 #1720 [学校-酒泉市]二年级  残留绑定=0  PhaseA迁走=148  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,144人)
+    → 会真删
+[学校-酒泉市] 五年级   wid=etZUH8SgAAAvLEbA_vnqlDWNyidYDrRA
+    本地行 #1278 [学校-酒泉市]五年级  残留绑定=0  PhaseA迁走=245  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,238人)
+    → 会真删
+[学校-酒泉市] 八年级   wid=etZUH8SgAAyqt-ZxiXGPEQrKTcNSSGxg
+    本地行 #1300 [学校-酒泉市]八年级  残留绑定=0  PhaseA迁走=394  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,391人)
+    → 会真删
+[学校-酒泉市] 六年级   wid=etZUH8SgAAXbbHTUDF1ywwO2J40OmoJg
+    本地行 #1724 [学校-酒泉市]六年级  残留绑定=0  PhaseA迁走=251  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,249人)
+    → 会真删
+[学校-酒泉市] 四年级   wid=etZUH8SgAAnGokD_HKHgy9lG2inKX2XA
+    本地行 #1715 [学校-酒泉市]四年级  残留绑定=0  PhaseA迁走=282  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,282人)
+    → 会真删
+[学校-酒泉市] 高二   wid=etZUH8SgAAIbY74DxOm706vsHr6i1H3w
+    本地行 #2597 [学校-酒泉市]高二  残留绑定=0  PhaseA迁走=331  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,331人)
+    → 会真删
+[学校-金昌市] 五年级   wid=etZUH8SgAAsB_hxsdZlU0k0JjCTpNbdQ
+    本地行 #2265 [学校-金昌市]五年级  残留绑定=0  PhaseA迁走=31  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,29人)
+    → 会真删
+[学校-金昌市] 八年级   wid=etZUH8SgAAGK1i0ajh8a6gg93G0yXrHg
+    本地行 #2257 [学校-金昌市]八年级  残留绑定=0  PhaseA迁走=50  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,50人)
+    → 会真删
+[学校-金昌市] 六年级   wid=etZUH8SgAAjkwSBTV_3ptt8LuXNeaCRw
+    本地行 #2291 [学校-金昌市]六年级  残留绑定=0  PhaseA迁走=29  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,29人)
+    → 会真删
+[学校-陇南市] 一年级   wid=etZUH8SgAAq47OVDMWzdDNm17cLQXgeQ
+    本地行 #1490 [学校-陇南市]一年级  残留绑定=0  PhaseA迁走=75  主要目标wid=etZUH8SgAA74m0M427yx8oZto_n2OmTw(行1184,73人)
+    → 会真删
+[学校-陇南市] 七年级   wid=etZUH8SgAAdZuGuuH5Lb_QTbFegbovWg
+    本地行 #1339 [学校-陇南市]七年级  残留绑定=0  PhaseA迁走=610  主要目标wid=etZUH8SgAAw9BNZJ04GP7KjRwTjuU_aQ(行1190,598人)
+    → 会真删
+[学校-陇南市] 三年级   wid=etZUH8SgAAmyFWynpgjplNrJua6dpsEA
+    本地行 #1226 [学校-陇南市]三年级  残留绑定=0  PhaseA迁走=368  主要目标wid=etZUH8SgAAl-kcoNzt2vLi4kxUP7rStA(行1186,363人)
+    → 会真删
+[学校-陇南市] 九年级   wid=etZUH8SgAAxuneG50V1ztl7JbAjYtR6A
+    本地行 #1542 [学校-陇南市]九年级  残留绑定=0  PhaseA迁走=305  主要目标wid=etZUH8SgAAckspTNp_qJOQKsCit5vd2A(行1192,298人)
+    → 会真删
+[学校-陇南市] 二年级   wid=etZUH8SgAAM87MhOr9JvLqXmGwvPKgig
+    本地行 #1217 [学校-陇南市]二年级  残留绑定=0  PhaseA迁走=104  主要目标wid=etZUH8SgAAr13-Xi5e3M-s0jd_LEIURw(行1185,99人)
+    → 会真删
+[学校-陇南市] 五年级   wid=etZUH8SgAAQtYAg1w4tZ7srvSZI2xiqA
+    本地行 #1321 [学校-陇南市]五年级  残留绑定=0  PhaseA迁走=351  主要目标wid=etZUH8SgAAP5MfwjyDHYCRwL8TH07Tmw(行1188,338人)
+    → 会真删
+[学校-陇南市] 八年级   wid=etZUH8SgAAkkIr1iMHOnTNEEcTb4LLFQ
+    本地行 #1316 [学校-陇南市]八年级  残留绑定=0  PhaseA迁走=388  主要目标wid=etZUH8SgAA8JIGrw2PgUVcXBUkKAJM8Q(行1191,381人)
+    → 会真删
+[学校-陇南市] 六年级   wid=etZUH8SgAAvBIn59XDETNAV7v6V-5FRQ
+    本地行 #1261 [学校-陇南市]六年级  残留绑定=0  PhaseA迁走=380  主要目标wid=etZUH8SgAAyF3d44oR2so1gteS_TNxHg(行1189,373人)
+    → 会真删
+[学校-陇南市] 四年级   wid=etZUH8SgAAg4JBPMdNL2lQb3KMiA5XHg
+    本地行 #1252 [学校-陇南市]四年级  残留绑定=0  PhaseA迁走=457  主要目标wid=etZUH8SgAAV04nTs92kA8PTnf2qP2r3w(行1187,447人)
+    → 会真删
+[学校-陇南市] 高一   wid=etZUH8SgAAMjTd-mGEfkfGZfZButcXig
+    本地行 #1313 [学校-陇南市]高一  残留绑定=0  PhaseA迁走=973  主要目标wid=etZUH8SgAA15jcPT577xf64nV-_J0ntw(行1193,790人)
+    → 会真删
+[学校-陇南市] 高三   wid=etZUH8SgAAzWt60CTjHLfy_Xps9MIY4w
+    本地行 #1454 [学校-陇南市]高三  残留绑定=0  PhaseA迁走=179  主要目标wid=etZUH8SgAA6kOWZCR59GM0kkNDkCYD0w(行1195,115人)
+    → 会真删
+[学校-陇南市] 高二   wid=etZUH8SgAAkaT1AIipvI4iFFX9uRCODQ
+    本地行 #1460 [学校-陇南市]高二  残留绑定=0  PhaseA迁走=220  主要目标wid=etZUH8SgAAXieykS3dRqBN12qVVUqqUQ(行1194,198人)
+    → 会真删
+
+汇总：可删 109 个 / 会 blocked 2 个
