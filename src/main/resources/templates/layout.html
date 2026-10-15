@@ -332,25 +332,6 @@
             });
         });
     })();
-
-    // 区县负责人编辑模态框
-    var editModal = document.getElementById('editModal');
-    if (editModal) {
-        editModal.addEventListener('show.bs.modal', function(e) {
-            var btn = e.relatedTarget;
-            var id = btn.getAttribute('data-id');
-            var userid = btn.getAttribute('data-userid');
-            this.querySelector('#editForm').action = '/admin/district-managers/' + id + '/update';
-            var box = this.querySelector('.combo-box');
-            if (box) {
-                var input = box.querySelector('.combo-input');
-                var select = box.querySelector('select');
-                select.value = userid;
-                var opt = select.querySelector('option[value="' + userid + '"]');
-                input.value = opt ? opt.textContent.trim() : userid;
-            }
-        });
-    }
     </script>
 </body>
 </html>

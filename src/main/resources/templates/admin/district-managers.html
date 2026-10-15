@@ -147,6 +147,30 @@
             </form>
         </div>
     </div>
+
+    <script>
+    // 区县负责人编辑模态框：回填当前负责人并指向更新接口
+    // 注意：此脚本必须留在本页，不能放进 layout —— 多个页面都用了 #editModal/#editForm，
+    // 共享脚本会就近改写它们的表单 action，导致提交到错误接口。
+    (function() {
+        var editModal = document.getElementById('editModal');
+        if (!editModal) return;
+        editModal.addEventListener('show.bs.modal', function(e) {
+            var btn = e.relatedTarget;
+            var id = btn.getAttribute('data-id');
+            var userid = btn.getAttribute('data-userid');
+            this.querySelector('#editForm').action = '/admin/district-managers/' + id + '/update';
+            var box = this.querySelector('.combo-box');
+            if (box) {
+                var input = box.querySelector('.combo-input');
+                var select = box.querySelector('select');
+                select.value = userid;
+                var opt = select.querySelector('option[value="' + userid + '"]');
+                input.value = opt ? opt.textContent.trim() : userid;
+            }
+        });
+    })();
+    </script>
 </div>
 
 </body>
