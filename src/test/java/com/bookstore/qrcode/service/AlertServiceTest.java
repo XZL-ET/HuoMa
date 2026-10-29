@@ -22,10 +22,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -192,5 +195,76 @@ class AlertServiceTest {
                 AgentAlert.AlertSeverity.high, "详情", AgentAlert.AutoAction.none, null);
 
         assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("createAlert — 条件类命中 open 行时更新次数/最近时间，不新增")
+    void shouldUpsertConditionAlert() {
+        AgentAlert existing = AgentAlert.builder().id(9L).alertType("traffic_spike")
+            .severity(AgentAlert.AlertSeverity.low).detail("\"old\"")
+            .status(AgentAlert.AlertStatus.open).qrCodeId(7L).occurrenceCount(1)
+            .createdAt(LocalDateTime.now().minusDays(3)).build();
+        when(alertRepo.findOpenByKey("traffic_spike", null, 7L, AgentAlert.AlertStatus.open))
+            .thenReturn(List.of(existing));
+
+        alertService.createAlert("agentX", "traffic_spike", AgentAlert.AlertSeverity.high,
+            "新详情", AgentAlert.AutoAction.none, 7L);
+
+        assertThat(existing.getOccurrenceCount()).isEqualTo(2);
+        assertThat(existing.getSeverity()).isEqualTo(AgentAlert.AlertSeverity.high);
+        assertThat(existing.getDetail()).contains("新详情");
+        assertThat(existing.getLastSeenAt()).isAfter(LocalDateTime.now().minusMinutes(1));
+        verify(alertRepo).save(existing);
+    }
+
+    @Test
+    @DisplayName("createAlert — 条件类无 open 行时插入，次数=1、最近时间=now")
+    void shouldInsertConditionAlertWhenNoneOpen() {
+        when(alertRepo.findOpenByKey("traffic_spike", null, 7L, AgentAlert.AlertStatus.open))
+            .thenReturn(List.of());
+        when(alertRepo.save(any(AgentAlert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        alertService.createAlert("a", "traffic_spike", AgentAlert.AlertSeverity.medium, "x",
+            AgentAlert.AutoAction.none, 7L);
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getOccurrenceCount()).isEqualTo(1);
+        assertThat(captor.getValue().getAgentUserid()).isNull(); // traffic_spike 归一键
+        assertThat(captor.getValue().getLastSeenAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("createAlert — 事件类不做 upsert")
+    void shouldAlwaysInsertEventAlert() {
+        when(alertRepo.save(any(AgentAlert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        alertService.createAlert("u1", "melt", AgentAlert.AlertSeverity.high, "x",
+            AgentAlert.AutoAction.melted, 7L);
+
+        verify(alertRepo, never()).findOpenByKey(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveOpenByType — 批量关闭并为空时不发 SQL")
+    void shouldResolveOpenByType() {
+        AgentAlert a = AgentAlert.builder().id(1L).status(AgentAlert.AlertStatus.open).build();
+        AgentAlert b = AgentAlert.builder().id(2L).status(AgentAlert.AlertStatus.open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(List.of("qr_agent_anomaly"), AgentAlert.AlertStatus.open))
+            .thenReturn(List.of(a, b));
+
+        int n = alertService.resolveOpenByType("qr_agent_anomaly");
+
+        assertThat(n).isEqualTo(2);
+        verify(alertRepo).closeByIds(eq(List.of(1L, 2L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(LocalDateTime.class), eq("auto:condition-cleared"));
+    }
+
+    @Test
+    @DisplayName("resolveOpenByType — 没有 open 行时不调用 closeByIds")
+    void shouldSkipCloseWhenNothingOpen() {
+        when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of());
+        assertThat(alertService.resolveOpenByType("qr_agent_anomaly")).isZero();
+        verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
     }
 }

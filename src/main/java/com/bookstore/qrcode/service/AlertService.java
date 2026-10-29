@@ -23,10 +23,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Predicate;
 
 /**
  * 异常监控与告警服务。
@@ -251,10 +254,18 @@ public class AlertService {
     /**
      * 创建异常告警记录并持久化。
      *
+     * <p>告警分两类，行为不同（由 {@link AlertTypeMeta#isConditionType(String)} 判定）：</p>
+     * <ul>
+     *   <li><b>条件类</b> — 同一条件持续存在时合并为一条：按归一化键
+     *       （类型 + 员工 + 活码）查找 open 行，命中则更新 detail / lastSeenAt /
+     *       occurrenceCount / severity，不再新增；未命中才插入。</li>
+     *   <li><b>事件类</b> — 每次发生都独立记录，始终插入新行。</li>
+     * </ul>
+     *
      * <p>告警记录包含以下关键信息：</p>
      * <ul>
-     *   <li>关联员工(agentUserid)和活码(qrCodeId)</li>
-     *   <li>告警类型(alertType)：add_fail / transfer_fail / melt / empty_backup</li>
+     *   <li>关联员工(agentUserid)和活码(qrCodeId)，均按类型归一化后写入</li>
+     *   <li>告警类型(alertType)：见 {@link AlertTypeMeta}</li>
      *   <li>严重程度(severity)：low / medium / high</li>
      *   <li>详细内容(detail)：JSON 格式，包含错误码、次数等上下文</li>
      *   <li>自动处置动作(autoAction)：none / paused / melted</li>
@@ -262,7 +273,7 @@ public class AlertService {
      * </ul>
      *
      * @param agentUserid 关联的员工 userid
-     * @param alertType   告警类型（add_fail、transfer_fail、melt、empty_backup）
+     * @param alertType   告警类型
      * @param severity    严重等级
      * @param detail      详细内容（String 或 Map，自动序列化为 JSON）
      * @param autoAction  已执行的自动处置动作
@@ -283,6 +294,11 @@ public class AlertService {
             log.error("创建告警失败: detail 序列化异常", e);
             return null;
         }
+        // 归一化键：traffic_spike 丢弃员工、全局类型丢弃员工与活码，
+        // 查找与写入必须使用同一套归一化值，否则永远命中不了已有的 open 行。
+        final String keyAgent = AlertTypeMeta.normalizeAgent(alertType, agentUserid);
+        final Long keyQr = AlertTypeMeta.normalizeQr(alertType, qrCodeId);
+        final boolean conditionType = AlertTypeMeta.isConditionType(alertType);
         // 用 TransactionTemplate 而非 @Transactional(REQUIRES_NEW)：@Transactional 在自调用时被代理绕过，
         // 且提交异常发生在方法体返回之后、try-catch 之外，仍会抛 UnexpectedRollbackException 冒泡给调用方。
         // TransactionTemplate 把事务边界移进方法内，写入/提交失败都能被下方 catch 接住，告警保持「尽力而为」。
@@ -290,24 +306,149 @@ public class AlertService {
             TransactionTemplate tx = new TransactionTemplate(transactionManager);
             tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
             return tx.execute(status -> {
+                LocalDateTime now = LocalDateTime.now();
+                if (conditionType) {
+                    List<AgentAlert> existing = alertRepo.findOpenByKey(
+                        alertType, keyAgent, keyQr, AgentAlert.AlertStatus.open);
+                    if (existing != null && !existing.isEmpty()) {
+                        // 取最早一条（findOpenByKey 按 id 升序），合并本次命中
+                        AgentAlert alert = existing.get(0);
+                        alert.setAgentUserid(keyAgent);
+                        alert.setQrCodeId(keyQr);
+                        alert.setDetail(detailJson);
+                        alert.setLastSeenAt(now);
+                        int previous = alert.getOccurrenceCount();
+                        alert.setOccurrenceCount((previous <= 0 ? 1 : previous) + 1);
+                        if (severity != null
+                            && (alert.getSeverity() == null
+                                || severity.ordinal() > alert.getSeverity().ordinal())) {
+                            alert.setSeverity(severity);
+                        }
+                        alert.setAutoAction(autoAction);
+                        AgentAlert saved = alertRepo.save(alert);
+                        log.debug("告警合并(upsert): id={}, user={}, type={}, severity={}, count={}",
+                            alert.getId(), keyAgent, alertType, alert.getSeverity(),
+                            alert.getOccurrenceCount());
+                        return saved;
+                    }
+                }
                 AgentAlert alert = AgentAlert.builder()
-                    .agentUserid(agentUserid)
+                    .agentUserid(keyAgent)
                     .alertType(alertType)
                     .severity(severity)
                     .detail(detailJson)
                     .autoAction(autoAction)
                     .status(AgentAlert.AlertStatus.open)
-                    .qrCodeId(qrCodeId)
+                    .qrCodeId(keyQr)
+                    .lastSeenAt(now)
+                    .occurrenceCount(1)
                     .build();
                 AgentAlert saved = alertRepo.save(alert);
                 log.warn("告警: user={}, type={}, severity={}, detail={}",
-                    agentUserid, alertType, severity, detailJson);
+                    keyAgent, alertType, severity, detailJson);
                 return saved;
             });
         } catch (Exception e) {
             log.error("创建告警失败", e);
             return null;
         }
+    }
+
+    // ==================== 条件清除后的自动关闭 ====================
+
+    /**
+     * 关闭某类型下所有 open 告警（条件已整体清除）。
+     *
+     * @param alertType 告警类型
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByType(String alertType) {
+        return resolveWhere(List.of(alertType), alert -> true);
+    }
+
+    /**
+     * 关闭某类型下匹配归一化键（员工 + 活码）的 open 告警。
+     *
+     * @param alertType   告警类型
+     * @param agentUserid 员工 userid（按类型归一化，traffic_spike/全局类型会忽略）
+     * @param qrCodeId    活码 ID（按类型归一化）
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByKey(String alertType, String agentUserid, Long qrCodeId) {
+        String keyAgent = AlertTypeMeta.normalizeAgent(alertType, agentUserid);
+        Long keyQr = AlertTypeMeta.normalizeQr(alertType, qrCodeId);
+        return resolveWhere(List.of(alertType), alert ->
+            Objects.equals(alert.getAgentUserid(), keyAgent)
+                && Objects.equals(alert.getQrCodeId(), keyQr));
+    }
+
+    /**
+     * 关闭某类型下活码不在保留集合内的 open 告警。
+     *
+     * @param alertType 告警类型
+     * @param keepQrIds 仍需保持 open 的活码 ID 集合
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByTypeExceptQr(String alertType, Collection<Long> keepQrIds) {
+        return resolveWhere(List.of(alertType), alert ->
+            !keepQrIds.contains(alert.getQrCodeId()));
+    }
+
+    /**
+     * 关闭某类型下员工不在保留集合内的 open 告警。
+     *
+     * @param alertType  告警类型
+     * @param keepAgents 仍需保持 open 的员工集合
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByTypeExceptAgents(String alertType, Collection<String> keepAgents) {
+        return resolveWhere(List.of(alertType), alert ->
+            !keepAgents.contains(alert.getAgentUserid()));
+    }
+
+    /**
+     * 跨类型关闭：给定这些类型下合并键不在保留集合内的 open 告警。
+     *
+     * @param alertTypes 告警类型集合
+     * @param keepKeys   仍需保持 open 的合并键集合（{@link AlertTypeMeta#keyOf} 生成）
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByTypesExceptKeys(Collection<String> alertTypes,
+                                            Collection<String> keepKeys) {
+        return resolveWhere(alertTypes, alert ->
+            !keepKeys.contains(AlertTypeMeta.keyOf(
+                alert.getAlertType(), alert.getAgentUserid(), alert.getQrCodeId())));
+    }
+
+    /**
+     * 关闭助手：查询给定类型下的 open 告警，按 {@code keepOut} 过滤出需要关闭的行，
+     * 批量置为 {@code auto_resolved}。没有需要关闭的行时直接返回 0，避免发出空的
+     * {@code IN ()} SQL。
+     *
+     * @param alertTypes 告警类型集合
+     * @param keepOut    返回 {@code true} 表示该行应被关闭（从 open 中剔除）
+     * @return 关闭的数量
+     */
+    private int resolveWhere(Collection<String> alertTypes, Predicate<AgentAlert> keepOut) {
+        List<AgentAlert> open = alertRepo.findByAlertTypeInAndStatus(
+            alertTypes, AgentAlert.AlertStatus.open);
+        List<Long> ids = open.stream()
+            .filter(keepOut)
+            .map(AgentAlert::getId)
+            .toList();
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        int closed = alertRepo.closeByIds(ids, AgentAlert.AlertStatus.auto_resolved,
+            LocalDateTime.now(), "auto:condition-cleared");
+        log.info("自动关闭告警 {} 条（命中 {} 条）: types={}, ids={}",
+            closed, ids.size(), alertTypes, ids);
+        return ids.size();
     }
 
     /**
