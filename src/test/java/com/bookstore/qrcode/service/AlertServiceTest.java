@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.bookstore.qrcode.entity.AgentAlert.AlertStatus.auto_resolved;
+import static com.bookstore.qrcode.entity.AgentAlert.AlertStatus.open;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -303,5 +305,66 @@ class AlertServiceTest {
         assertThat(n).isEqualTo(1);
         verify(alertRepo).closeByIds(eq(List.of(12L)), eq(AgentAlert.AlertStatus.auto_resolved),
             any(LocalDateTime.class), eq("auto:condition-cleared"));
+    }
+
+    @Test
+    @DisplayName("collapseDuplicates — 保留最早一条，次数求和、最近取最大，其余关闭")
+    void shouldCollapseKeepingOldestAndSumming() {
+        LocalDateTime old = LocalDateTime.now().minusDays(5);
+        AgentAlert a = AgentAlert.builder().id(1L).alertType("qr_agent_anomaly").status(open)
+            .occurrenceCount(2).lastSeenAt(old).createdAt(old).build();
+        AgentAlert b = AgentAlert.builder().id(2L).alertType("qr_agent_anomaly").status(open)
+            .occurrenceCount(3).lastSeenAt(old.plusDays(1)).createdAt(old.plusDays(1)).build();
+        AgentAlert c = AgentAlert.builder().id(3L).alertType("qr_agent_anomaly").status(open)
+            .occurrenceCount(1).lastSeenAt(old.plusDays(2)).createdAt(old.plusDays(2)).build();
+        when(alertRepo.findByStatus(open)).thenReturn(List.of(a, b, c));
+
+        int n = alertService.collapseDuplicates();
+
+        assertThat(n).isEqualTo(2);
+        assertThat(a.getOccurrenceCount()).isEqualTo(6);
+        assertThat(a.getLastSeenAt()).isEqualTo(old.plusDays(2));
+        assertThat(a.getId()).isEqualTo(1L);
+        verify(alertRepo).closeByIds(eq(List.of(2L, 3L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(), eq("auto:dedup"));
+    }
+
+    @Test
+    @DisplayName("archiveStale — lastSeenAt 为空时按 createdAt 判定（滚动部署兼容）")
+    void shouldUseCreatedAtWhenLastSeenMissing() {
+        AgentAlert legacy = AgentAlert.builder().id(1L).alertType("traffic_spike").status(open)
+            .occurrenceCount(1).createdAt(LocalDateTime.now().minusDays(2)).build();
+        when(alertRepo.findByStatus(open)).thenReturn(List.of(legacy));
+
+        assertThat(alertService.archiveStale()).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(1L)), eq(auto_resolved), any(), eq("auto:stale"));
+    }
+
+    @Test
+    @DisplayName("archiveStale — 只清旧文案的无权限 48002，不误清自愈告警")
+    void shouldArchiveOnlyLegacy48002Text() {
+        AgentAlert legacy = AgentAlert.builder().id(1L).alertType("wechat_unavailable").status(open)
+            .detail("\"员工 u1 无客户联系权限(errcode=48002)，欢迎语发送被企微拒绝\"")
+            .occurrenceCount(1).createdAt(LocalDateTime.now()).build();
+        AgentAlert healing = AgentAlert.builder().id(2L).alertType("wechat_unavailable").status(open)
+            .detail("\"企微不可用员工已被自愈移除: userid=u2 活码=9 errcode=48002\"")
+            .occurrenceCount(1).createdAt(LocalDateTime.now()).build();
+        when(alertRepo.findByStatus(open)).thenReturn(List.of(legacy, healing));
+
+        assertThat(alertService.archiveStale()).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(1L)), eq(auto_resolved), any(), eq("auto:stale"));
+    }
+
+    @Test
+    @DisplayName("archiveStale — 真实待办永不过期")
+    void shouldNotArchiveActionableTypes() {
+        AgentAlert inherit = AgentAlert.builder().id(1L).alertType("inheritance_no_service").status(open)
+            .occurrenceCount(1).createdAt(LocalDateTime.now().minusDays(365)).build();
+        AgentAlert teacher = AgentAlert.builder().id(2L).alertType("service_teacher_anomaly").status(open)
+            .occurrenceCount(1).createdAt(LocalDateTime.now().minusDays(365)).build();
+        when(alertRepo.findByStatus(open)).thenReturn(List.of(inherit, teacher));
+
+        assertThat(alertService.archiveStale()).isZero();
+        verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
     }
 }

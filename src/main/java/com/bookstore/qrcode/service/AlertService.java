@@ -23,7 +23,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -453,6 +455,215 @@ public class AlertService {
         log.info("自动关闭告警 {} 条（命中 {} 条）: types={}, ids={}",
             closed, ids.size(), alertTypes, ids);
         return ids.size();
+    }
+
+    // ==================== 每小时安全网：去重与过期归档 ====================
+
+    /**
+     * 合并重复的 open 条件类告警。
+     *
+     * <p>多节点并发或旧代码可能为同一条件留下多条 open 行；本方法按
+     * {@link AlertTypeMeta#keyOf} 分组，组内保留 id 最小（最早）的一条作为存活行，
+     * 汇总 {@code occurrenceCount}（null/0 视作 1）、取最大 {@code lastSeenAt}
+     * （为空时回退 {@code createdAt}）、取更高 severity、取最近命中行的 {@code detail}；
+     * 其余行批量置为 {@code auto_resolved}，解决人记为 {@code auto:dedup}。</p>
+     *
+     * <p>事件类告警不做合并。任何异常都在方法内吞掉并记日志，返回 0，
+     * 避免每小时任务因单次失败中断。</p>
+     *
+     * @return 被合并关闭的条数
+     */
+    @Transactional
+    public int collapseDuplicates() {
+        try {
+            List<AgentAlert> open = alertRepo.findByStatus(AgentAlert.AlertStatus.open);
+            if (open == null || open.isEmpty()) {
+                return 0;
+            }
+            Map<String, List<AgentAlert>> groups = new LinkedHashMap<>();
+            for (AgentAlert alert : open) {
+                String type = alert.getAlertType();
+                if (type == null || !AlertTypeMeta.isConditionType(type)) {
+                    continue;
+                }
+                String key = AlertTypeMeta.keyOf(type, alert.getAgentUserid(), alert.getQrCodeId());
+                groups.computeIfAbsent(key, k -> new ArrayList<>()).add(alert);
+            }
+
+            List<Long> toClose = new ArrayList<>();
+            List<AgentAlert> changed = new ArrayList<>();
+            for (List<AgentAlert> group : groups.values()) {
+                if (group.size() < 2) {
+                    continue;
+                }
+                // 存活行 = id 最小（最早）的一条
+                group.sort(Comparator.comparing(AgentAlert::getId,
+                    Comparator.nullsLast(Comparator.naturalOrder())));
+                AgentAlert survivor = group.get(0);
+
+                int total = 0;
+                LocalDateTime maxLastSeen = null;
+                AgentAlert.AlertSeverity maxSeverity = survivor.getSeverity();
+                AgentAlert detailSource = survivor;
+                for (AgentAlert alert : group) {
+                    int count = alert.getOccurrenceCount();
+                    total += count <= 0 ? 1 : count;
+
+                    LocalDateTime seen = lastSeenOf(alert);
+                    if (seen != null && (maxLastSeen == null || seen.isAfter(maxLastSeen))) {
+                        maxLastSeen = seen;
+                    }
+                    // detail 取「最近命中」的一条：lastSeen 最大，并列时取 id 最大
+                    if (isLater(alert, detailSource)) {
+                        detailSource = alert;
+                    }
+                    if (alert.getSeverity() != null
+                        && (maxSeverity == null
+                            || alert.getSeverity().ordinal() > maxSeverity.ordinal())) {
+                        maxSeverity = alert.getSeverity();
+                    }
+                }
+
+                boolean rowChanged = survivor.getOccurrenceCount() != total
+                    || !Objects.equals(survivor.getLastSeenAt(), maxLastSeen)
+                    || survivor.getSeverity() != maxSeverity
+                    || !Objects.equals(survivor.getDetail(), detailSource.getDetail());
+                survivor.setOccurrenceCount(total);
+                if (maxLastSeen != null) {
+                    survivor.setLastSeenAt(maxLastSeen);
+                }
+                survivor.setSeverity(maxSeverity);
+                survivor.setDetail(detailSource.getDetail());
+                if (rowChanged) {
+                    changed.add(survivor);
+                }
+                for (int i = 1; i < group.size(); i++) {
+                    Long id = group.get(i).getId();
+                    if (id != null) {
+                        toClose.add(id);
+                    }
+                }
+            }
+
+            if (!changed.isEmpty()) {
+                alertRepo.saveAll(changed);
+            }
+            if (toClose.isEmpty()) {
+                return 0;
+            }
+            alertRepo.closeByIds(toClose, AgentAlert.AlertStatus.auto_resolved,
+                LocalDateTime.now(), "auto:dedup");
+            log.info("合并重复告警 {} 条（存活行有变化 {} 条）", toClose.size(), changed.size());
+            return toClose.size();
+        } catch (Exception e) {
+            log.error("合并重复告警失败", e);
+            return 0;
+        }
+    }
+
+    /**
+     * 归档已无法再被处理的过期 open 告警。
+     *
+     * <p>按类型与阈值判定（{@code lastSeen = lastSeenAt != null ? lastSeenAt : createdAt}，
+     * 兼容滚动部署期间遗留的 NULL 行）：</p>
+     * <ul>
+     *   <li>{@code daily_anomaly_heal} — {@code createdAt} 早于 24 小时前</li>
+     *   <li>{@code traffic_spike} / {@code wechat_48002} — {@code lastSeen} 早于 24 小时前</li>
+     *   <li>{@code qr_agent_anomaly} / {@code dlq_replay_exhausted} /
+     *       {@code deletion_report_fail} — {@code lastSeen} 早于 7 天前</li>
+     *   <li>{@code employee_departed_service} — {@code lastSeen} 早于 30 天前</li>
+     *   <li>{@code wechat_unavailable} 且 {@code detail} 含「无客户联系权限」— 无条件</li>
+     *   <li>{@code transfer_retry_exhausted_svc} — {@code lastSeen} 早于 14 天前</li>
+     *   <li>{@code add_fail} / {@code melt} / {@code transfer_fail} — {@code createdAt} 早于 30 天前</li>
+     *   <li>其他类型不做归档（真实待办永不自动过期）</li>
+     * </ul>
+     *
+     * <p>归档为 {@code auto_resolved}，解决人记为 {@code auto:stale}。
+     * 任何异常都在方法内吞掉并记日志，返回 0。</p>
+     *
+     * @return 被归档的条数
+     */
+    @Transactional
+    public int archiveStale() {
+        try {
+            List<AgentAlert> open = alertRepo.findByStatus(AgentAlert.AlertStatus.open);
+            if (open == null || open.isEmpty()) {
+                return 0;
+            }
+            LocalDateTime now = LocalDateTime.now();
+            List<Long> ids = new ArrayList<>();
+            for (AgentAlert alert : open) {
+                if (alert.getId() != null && isStale(alert, now)) {
+                    ids.add(alert.getId());
+                }
+            }
+            if (ids.isEmpty()) {
+                return 0;
+            }
+            alertRepo.closeByIds(ids, AgentAlert.AlertStatus.auto_resolved, now, "auto:stale");
+            log.info("归档过期告警 {} 条", ids.size());
+            return ids.size();
+        } catch (Exception e) {
+            log.error("归档过期告警失败", e);
+            return 0;
+        }
+    }
+
+    /** 最近命中时间：优先 {@code lastSeenAt}，滚动部署遗留的 NULL 回退 {@code createdAt}。 */
+    private static LocalDateTime lastSeenOf(AgentAlert alert) {
+        return alert.getLastSeenAt() != null ? alert.getLastSeenAt() : alert.getCreatedAt();
+    }
+
+    /** 比较两行的「最近命中」先后：lastSeen 大者在后；并列时 id 大者在后。 */
+    private static boolean isLater(AgentAlert candidate, AgentAlert current) {
+        LocalDateTime ct = lastSeenOf(candidate);
+        LocalDateTime ot = lastSeenOf(current);
+        int cmp;
+        if (ct == null && ot == null) {
+            cmp = 0;
+        } else if (ct == null) {
+            cmp = -1;
+        } else if (ot == null) {
+            cmp = 1;
+        } else {
+            cmp = ct.compareTo(ot);
+        }
+        if (cmp != 0) {
+            return cmp > 0;
+        }
+        Long ci = candidate.getId();
+        Long oi = current.getId();
+        if (ci == null) {
+            return false;
+        }
+        return oi == null || ci > oi;
+    }
+
+    /** 按类型与阈值判定单条 open 告警是否已过期，规则见 {@link #archiveStale()}。 */
+    private static boolean isStale(AgentAlert alert, LocalDateTime now) {
+        String type = alert.getAlertType();
+        if (type == null) {
+            return false;
+        }
+        LocalDateTime lastSeen = lastSeenOf(alert);
+        LocalDateTime createdAt = alert.getCreatedAt();
+        return switch (type) {
+            case "daily_anomaly_heal" -> before(createdAt, now.minusHours(24));
+            case "traffic_spike", "wechat_48002" -> before(lastSeen, now.minusHours(24));
+            case "qr_agent_anomaly", "dlq_replay_exhausted", "deletion_report_fail" ->
+                before(lastSeen, now.minusDays(7));
+            case "employee_departed_service" -> before(lastSeen, now.minusDays(30));
+            // 仅归档旧文案的无权限告警；自愈告警 detail 也含 errcode=48002，绝不能匹配错误码
+            case "wechat_unavailable" ->
+                alert.getDetail() != null && alert.getDetail().contains("无客户联系权限");
+            case "transfer_retry_exhausted_svc" -> before(lastSeen, now.minusDays(14));
+            case "add_fail", "melt", "transfer_fail" -> before(createdAt, now.minusDays(30));
+            default -> false;
+        };
+    }
+
+    private static boolean before(LocalDateTime time, LocalDateTime threshold) {
+        return time != null && time.isBefore(threshold);
     }
 
     /**
