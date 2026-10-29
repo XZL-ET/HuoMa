@@ -394,7 +394,7 @@ public class AlertService {
     @Transactional
     public int resolveOpenByTypeExceptQr(String alertType, Collection<Long> keepQrIds) {
         return resolveWhere(List.of(alertType), alert ->
-            !keepQrIds.contains(alert.getQrCodeId()));
+            alert.getQrCodeId() == null || !keepQrIds.contains(alert.getQrCodeId()));
     }
 
     /**
@@ -407,7 +407,7 @@ public class AlertService {
     @Transactional
     public int resolveOpenByTypeExceptAgents(String alertType, Collection<String> keepAgents) {
         return resolveWhere(List.of(alertType), alert ->
-            !keepAgents.contains(alert.getAgentUserid()));
+            alert.getAgentUserid() == null || !keepAgents.contains(alert.getAgentUserid()));
     }
 
     /**
@@ -435,6 +435,10 @@ public class AlertService {
      * @return 关闭的数量
      */
     private int resolveWhere(Collection<String> alertTypes, Predicate<AgentAlert> keepOut) {
+        // 空集合会生成非法 SQL `IN ()`，直接短路（顺带防护 null）
+        if (alertTypes == null || alertTypes.isEmpty()) {
+            return 0;
+        }
         List<AgentAlert> open = alertRepo.findByAlertTypeInAndStatus(
             alertTypes, AgentAlert.AlertStatus.open);
         List<Long> ids = open.stream()

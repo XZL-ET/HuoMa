@@ -25,6 +25,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -266,5 +267,41 @@ class AlertServiceTest {
         when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of());
         assertThat(alertService.resolveOpenByType("qr_agent_anomaly")).isZero();
         verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypesExceptKeys — 空类型集合短路，不查库也不发关闭")
+    void shouldShortCircuitOnEmptyAlertTypes() {
+        int n = alertService.resolveOpenByTypesExceptKeys(List.of(), List.of());
+
+        assertThat(n).isZero();
+        verify(alertRepo, never()).findByAlertTypeInAndStatus(any(), any());
+        verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypeExceptQr — 行 qrCodeId 为 null 且保留集合不可变时不抛 NPE，照常关闭")
+    void shouldNotThrowOnNullQrWithImmutableKeepSet() {
+        AgentAlert row = AgentAlert.builder().id(11L).status(AgentAlert.AlertStatus.open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of(row));
+
+        int n = alertService.resolveOpenByTypeExceptQr("empty_backup", Set.of(1L));
+
+        assertThat(n).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(11L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(LocalDateTime.class), eq("auto:condition-cleared"));
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypeExceptAgents — 行 agentUserid 为 null 且保留集合不可变时不抛 NPE")
+    void shouldNotThrowOnNullAgentWithImmutableKeepList() {
+        AgentAlert row = AgentAlert.builder().id(12L).status(AgentAlert.AlertStatus.open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of(row));
+
+        int n = alertService.resolveOpenByTypeExceptAgents("qr_agent_anomaly", List.of("u1"));
+
+        assertThat(n).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(12L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(LocalDateTime.class), eq("auto:condition-cleared"));
     }
 }
