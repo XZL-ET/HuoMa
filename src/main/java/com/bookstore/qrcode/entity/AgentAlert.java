@@ -101,6 +101,15 @@ public class AgentAlert {
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
 
+    /** 最近一次命中的时间，告警合并时随每次触发刷新 */
+    @Column(name = "last_seen_at")
+    private LocalDateTime lastSeenAt;
+
+    /** 累计命中次数，告警合并时每次触发加一 */
+    @Column(name = "occurrence_count", nullable = false)
+    @Builder.Default
+    private int occurrenceCount = 1;
+
     /** 关联的活码 ID，可用于定位具体哪个活码触发了预警 */
     @Column(name = "qr_code_id")
     private Long qrCodeId;
@@ -109,11 +118,14 @@ public class AgentAlert {
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
-    /** 持久化前自动设置创建时间 */
+    /** 持久化前自动设置创建时间；首次命中时间默认与创建时间一致 */
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
+        }
+        if (lastSeenAt == null) {
+            lastSeenAt = createdAt;
         }
     }
 

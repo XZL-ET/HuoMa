@@ -220,9 +220,12 @@ CREATE TABLE IF NOT EXISTS agent_alert (
         CHECK (status IN ('open','resolved','auto_resolved')),
     resolved_by VARCHAR(100),
     resolved_at TIMESTAMP,
+    last_seen_at TIMESTAMP,
+    occurrence_count INT NOT NULL DEFAULT 1,
     qr_code_id BIGINT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_type_status_key ON agent_alert (alert_type, status, agent_userid, qr_code_id);
 CREATE INDEX IF NOT EXISTS idx_alert_agent_status ON agent_alert (agent_userid, status);
 CREATE INDEX IF NOT EXISTS idx_alert_created ON agent_alert (created_at);
 CREATE INDEX IF NOT EXISTS idx_alert_status_created ON agent_alert (status, created_at);

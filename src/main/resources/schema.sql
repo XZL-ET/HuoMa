@@ -238,10 +238,13 @@ CREATE TABLE IF NOT EXISTS agent_alert (
     status ENUM('open','resolved','auto_resolved') NOT NULL DEFAULT 'open',
     resolved_by VARCHAR(100) COMMENT '处理人',
     resolved_at DATETIME COMMENT '处理时间',
+    last_seen_at DATETIME NULL COMMENT '最近一次命中时间',
+    occurrence_count INT NOT NULL DEFAULT 1 COMMENT '累计命中次数',
     qr_code_id BIGINT COMMENT '关联活码',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_agent_status (agent_userid, status),
-    INDEX idx_created (created_at)
+    INDEX idx_created (created_at),
+    INDEX idx_type_status_key (alert_type, status, agent_userid, qr_code_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异常记录表';
 
 -- customer_transfer：继承记录

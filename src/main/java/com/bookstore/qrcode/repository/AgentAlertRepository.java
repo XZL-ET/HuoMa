@@ -4,9 +4,11 @@ import com.bookstore.qrcode.entity.AgentAlert;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -153,4 +155,67 @@ public interface AgentAlertRepository extends JpaRepository<AgentAlert, Long> {
                             @Param("startDate") LocalDateTime startDate,
                             @Param("endDate") LocalDateTime endDate,
                             Pageable pageable);
+
+    /**
+     * 按状态查询全部告警（不分页）。
+     *
+     * @param status 告警状态
+     * @return 该状态的所有告警
+     */
+    List<AgentAlert> findByStatus(AgentAlert.AlertStatus status);
+
+    /**
+     * 按告警类型集合与状态查询告警。
+     * <p>
+     * 用于维护任务按类型批量检查并关闭已恢复的告警。
+     * </p>
+     *
+     * @param alertTypes 告警类型集合
+     * @param status     告警状态
+     * @return 命中类型与状态的告警列表
+     */
+    List<AgentAlert> findByAlertTypeInAndStatus(
+            Collection<String> alertTypes, AgentAlert.AlertStatus status);
+
+    /**
+     * 按合并键查找未处理告警：类型 + 员工 + 活码。
+     * <p>
+     * 合并键中任意字段为 {@code null} 时，只匹配同样为 {@code null} 的记录，
+     * 避免把"全局告警"和"某员工告警"混为一谈。结果按 id 升序，便于调用方取首条。
+     * </p>
+     *
+     * @param alertType   告警类型
+     * @param agentUserid 员工 userid，可为 {@code null}
+     * @param qrCodeId    活码 ID，可为 {@code null}
+     * @param status      告警状态
+     * @return 匹配的告警列表（按 id 升序）
+     */
+    @Query("SELECT a FROM AgentAlert a WHERE a.alertType = :alertType AND a.status = :status "
+         + "AND ((:agentUserid IS NULL AND a.agentUserid IS NULL) OR a.agentUserid = :agentUserid) "
+         + "AND ((:qrCodeId IS NULL AND a.qrCodeId IS NULL) OR a.qrCodeId = :qrCodeId) "
+         + "ORDER BY a.id ASC")
+    List<AgentAlert> findOpenByKey(@Param("alertType") String alertType,
+                                   @Param("agentUserid") String agentUserid,
+                                   @Param("qrCodeId") Long qrCodeId,
+                                   @Param("status") AgentAlert.AlertStatus status);
+
+    /**
+     * 按 ID 批量关闭告警，写入目标状态、解决时间与解决人。
+     * <p>
+     * 调用方必须保证 {@code ids} 非空——空集合会生成非法的 {@code IN ()} SQL。
+     * </p>
+     *
+     * @param ids        待关闭的告警 ID 集合
+     * @param status     目标状态（resolved / auto_resolved）
+     * @param resolvedAt 解决时间
+     * @param resolvedBy 解决人
+     * @return 实际更新的行数
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE AgentAlert a SET a.status = :status, a.resolvedAt = :resolvedAt, "
+         + "a.resolvedBy = :resolvedBy WHERE a.id IN :ids")
+    int closeByIds(@Param("ids") Collection<Long> ids,
+                   @Param("status") AgentAlert.AlertStatus status,
+                   @Param("resolvedAt") LocalDateTime resolvedAt,
+                   @Param("resolvedBy") String resolvedBy);
 }
