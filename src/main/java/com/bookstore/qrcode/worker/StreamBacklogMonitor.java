@@ -121,8 +121,8 @@ public class StreamBacklogMonitor {
                     }
                 } catch (Exception e) {
                     // 单条流检查失败不影响其余流；Stream 不存在时 XINFO 会抛异常，属正常情况。
-                    // 检查不完整时保持告警不关（fail-safe），异常向上不外抛。
-                    log.debug("Stream 积压检查跳过: stream={}, {}", watch.streamKey(), e.getMessage());
+                    // 检查或告警关闭失败时保持告警不关（fail-safe），异常向上不外抛。
+                    log.debug("Stream 检查或告警关闭失败: stream={}, {}", watch.streamKey(), e.getMessage());
                 }
             }
         });
@@ -146,17 +146,20 @@ public class StreamBacklogMonitor {
         if (olderThan(group.lastDeliveredId(), lastGenerated)) {
             String stalledId = firstUndeliveredId(watch.streamKey(), group.lastDeliveredId());
             long[] head = parseId(stalledId);
-            if (head != null && head[0] > 0) {
-                long stalledMinutes = (System.currentTimeMillis() - head[0]) / 60_000L;
-                if (stalledMinutes >= DELIVERY_STALL_MINUTES) {
-                    String msg = String.format(
-                        "%s 消费停摆: 队头消息(%s)已积压 %d 分钟仍未被任何消费者取走，"
-                            + "消费线程可能已全部退出，请检查 %s",
-                        watch.streamKey(), stalledId, stalledMinutes, watch.workerName());
-                    log.error("{}", msg);
-                    raise(watch, "stall", msg);
-                    return false;
-                }
+            if (head == null || head[0] <= 0) {
+                // 队头缺失或 ID 无法解析：XINFO 与 XRANGE 之间消息被裁剪，
+                // 本轮读数不完整，不能据此判定恢复
+                return false;
+            }
+            long stalledMinutes = (System.currentTimeMillis() - head[0]) / 60_000L;
+            if (stalledMinutes >= DELIVERY_STALL_MINUTES) {
+                String msg = String.format(
+                    "%s 消费停摆: 队头消息(%s)已积压 %d 分钟仍未被任何消费者取走，"
+                        + "消费线程可能已全部退出，请检查 %s",
+                    watch.streamKey(), stalledId, stalledMinutes, watch.workerName());
+                log.error("{}", msg);
+                raise(watch, "stall", msg);
+                return false;
             }
         }
 

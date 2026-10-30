@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.job;
 
+import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
@@ -39,6 +40,7 @@ class InheritanceJobTest {
 
     private QrCodeRepository qrCodeRepo;
     private QrAgentRepository qrAgentRepo;
+    private CustomerRepository customerRepo;
     private AlertService alertService;
     private StringRedisTemplate redisTemplate;
     private InheritanceJob job;
@@ -48,7 +50,7 @@ class InheritanceJobTest {
     void setUp() {
         qrCodeRepo = mock(QrCodeRepository.class);
         qrAgentRepo = mock(QrAgentRepository.class);
-        CustomerRepository customerRepo = mock(CustomerRepository.class);
+        customerRepo = mock(CustomerRepository.class);
         redisTemplate = mock(StringRedisTemplate.class);
         ObjectMapper objectMapper = mock(ObjectMapper.class);
         alertService = mock(AlertService.class);
@@ -66,6 +68,25 @@ class InheritanceJobTest {
         job.processTransferWindow(START, END, "test", false);
 
         verify(alertService).resolveOpenByType("inheritance_no_service");
+    }
+
+    @Test
+    @DisplayName("夜间全量扫描：活码有唯一服务老师走真实转移路径，仍关闭两类告警")
+    void shouldResolveBothTypesWhenFullScanRunsTransferPath() {
+        QrCode qr = QrCode.builder().id(1L).schoolId("s1").schoolName("测试学校").build();
+        when(qrCodeRepo.findByStatus(any())).thenReturn(List.of(qr));
+
+        QrAgent receptionist = QrAgent.builder()
+            .qrCodeId(1L).agentUserid("rec1").role(QrAgent.AgentRole.receptionist).build();
+        QrAgent serviceTeacher = QrAgent.builder()
+            .qrCodeId(1L).agentUserid("svc1").role(QrAgent.AgentRole.service).build();
+        when(qrAgentRepo.findByQrCodeId(1L)).thenReturn(List.of(receptionist, serviceTeacher));
+        when(customerRepo.findForInheritance(anyString(), any(), any(), any())).thenReturn(List.of());
+
+        job.processTransferWindow(START, END, "test", false);
+
+        verify(alertService).resolveOpenByType("inheritance_no_service");
+        verify(alertService).resolveOpenByType("inheritance_ambiguous_service");
     }
 
     @Test

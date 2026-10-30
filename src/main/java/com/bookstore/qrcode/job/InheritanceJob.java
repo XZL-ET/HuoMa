@@ -330,7 +330,9 @@ public class InheritanceJob {
                                 continue; // 已入队，跳过
                             }
                         } catch (Exception e) {
-                            // Redis 不可用时降级放行，避免整批阻塞
+                            // Redis 不可用时降级放行，避免整批阻塞。
+                            // 去重失败只代表本批可能重复入队，不影响「学校是否缺服务老师」的判定，
+                            // 因此不置 scanHadError，本轮关闭告警的决定仍然有效（控制器裁决）。
                             log.warn("Redis 去重不可用，放行: customerId={}", c.getId());
                         }
 

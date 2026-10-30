@@ -181,6 +181,67 @@ class StreamBacklogMonitorTest {
     }
 
     @Test
+    @DisplayName("停摆判据命中 → 该类告警不会被同轮关闭")
+    void shouldNotResolveStallTypeWhenRaised() {
+        stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
+            20 * MIN, 60 * MIN, 20 * MIN, 0L);
+
+        monitor.checkAll();
+
+        verify(alertService).createAlert(any(), eq("callback_stream_backlog"),
+            eq(AgentAlert.AlertSeverity.high), contains("消费停摆"), any(), any());
+        verify(alertService, never()).resolveOpenByType("callback_stream_backlog");
+    }
+
+    @Test
+    @DisplayName("PEL 积压判据命中 → 该类告警不会被同轮关闭")
+    void shouldNotResolvePendingTypeWhenRaised() {
+        stubStream(RedisConfig.TAG_STREAM_KEY, RedisConfig.TAG_CONSUMER_GROUP,
+            20 * MIN, 20 * MIN, 20 * MIN, 250L);
+
+        monitor.checkAll();
+
+        verify(alertService).createAlert(any(), eq("tag_stream_backlog"),
+            eq(AgentAlert.AlertSeverity.high), contains("未 ACK"), any(), any());
+        verify(alertService, never()).resolveOpenByType("tag_stream_backlog");
+    }
+
+    @Test
+    @DisplayName("查不到消费组 → 该流不判定恢复")
+    void shouldNotResolveWhenGroupMissing() {
+        StreamInfo.XInfoGroups noGroups = emptyGroups();
+        when(ops.groups(RedisConfig.CALLBACK_STREAM_KEY)).thenReturn(noGroups);
+
+        monitor.checkAll();
+
+        verify(alertService, never()).resolveOpenByType("callback_stream_backlog");
+    }
+
+    @Test
+    @DisplayName("XINFO 读数缺失 → 该流不判定恢复")
+    void shouldNotResolveWhenInfoMissing() {
+        when(ops.info(RedisConfig.CALLBACK_STREAM_KEY)).thenReturn(null);
+
+        monitor.checkAll();
+
+        verify(alertService, never()).resolveOpenByType("callback_stream_backlog");
+    }
+
+    @Test
+    @DisplayName("停摆判定时队头读不到（读数不完整）→ 不判定恢复")
+    void shouldNotResolveWhenUndeliveredHeadUnreadable() {
+        stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
+            20 * MIN, 60 * MIN, 20 * MIN, 0L);
+        // XINFO 显示消费组落后，但 XRANGE 读不到队头（消息在两次读之间被裁剪）
+        when(ops.range(eq(RedisConfig.CALLBACK_STREAM_KEY), any(Range.class), any(Limit.class)))
+            .thenReturn(List.of());
+
+        monitor.checkAll();
+
+        verify(alertService, never()).resolveOpenByType("callback_stream_backlog");
+    }
+
+    @Test
     @DisplayName("限流键按「流 + 判据」分开，两种判据互不压制")
     void throttleKeyIsPerStreamAndSignal() {
         stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,
@@ -229,6 +290,12 @@ class StreamBacklogMonitorTest {
         StreamInfo.XInfoGroups groups = mock(StreamInfo.XInfoGroups.class);
         when(groups.isEmpty()).thenReturn(false);
         when(groups.stream()).thenReturn(Stream.of(group));
+        return groups;
+    }
+
+    private static StreamInfo.XInfoGroups emptyGroups() {
+        StreamInfo.XInfoGroups groups = mock(StreamInfo.XInfoGroups.class);
+        when(groups.isEmpty()).thenReturn(true);
         return groups;
     }
 }

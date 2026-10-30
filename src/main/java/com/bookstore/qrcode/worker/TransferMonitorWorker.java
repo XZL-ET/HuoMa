@@ -189,7 +189,12 @@ public class TransferMonitorWorker {
     public void checkDlq() {
         jobGuard.runExclusive(CHECK_DLQ_LOCK_KEY, CHECK_DLQ_LOCK_TTL, () -> {
             long dlqLen = messageGuardService.dlqSize();
-            if (dlqLen <= 0) {
+            if (dlqLen < 0) {
+                // Redis 读取失败（dlqSize 返回 -1）：本轮读数不可信，不判定恢复
+                log.warn("DLQ 长度读取失败，本轮不判定恢复");
+                return;
+            }
+            if (dlqLen == 0) {
                 // 死信已清空 → 条件恢复，关闭历史积压告警
                 alertService.resolveOpenByType("transfer_dlq_backlog");
                 return;
