@@ -139,7 +139,7 @@ class EmployeeSyncServiceTest {
     }
 
     @Test
-    @DisplayName("员工本轮在通讯录中 → 按保留集合关闭离职告警")
+    @DisplayName("员工本轮在通讯录中 → 按在职员工集合关闭离职告警")
     @SuppressWarnings("unchecked")
     void shouldResolveDepartedAlertForPresentAgents() throws Exception {
         JsonNode resp = new ObjectMapper().readTree(
@@ -149,10 +149,12 @@ class EmployeeSyncServiceTest {
         int count = service.syncFromWecom();
 
         assertThat(count).isEqualTo(2);
-        ArgumentCaptor<Collection<String>> keepAgents = ArgumentCaptor.forClass(Collection.class);
-        verify(alertService).resolveOpenByTypeExceptAgents(
-            eq("employee_departed_service"), keepAgents.capture());
-        assertThat(keepAgents.getValue()).containsExactlyInAnyOrder("u1", "u2");
+        ArgumentCaptor<Collection<String>> activeAgents = ArgumentCaptor.forClass(Collection.class);
+        verify(alertService).resolveOpenByTypeAndAgents(
+            eq("employee_departed_service"), activeAgents.capture());
+        assertThat(activeAgents.getValue()).containsExactlyInAnyOrder("u1", "u2");
+        // 反向语义（关闭不在集合内的员工）绝不能出现，否则会抹掉本轮新建的离职告警
+        verify(alertService, never()).resolveOpenByTypeExceptAgents(anyString(), any());
     }
 
     @Test
@@ -164,6 +166,8 @@ class EmployeeSyncServiceTest {
         int count = service.syncFromWecom();
 
         assertThat(count).isZero();
+        verify(alertService, never())
+            .resolveOpenByTypeAndAgents(anyString(), any());
         verify(alertService, never())
             .resolveOpenByTypeExceptAgents(anyString(), any());
     }

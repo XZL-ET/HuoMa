@@ -308,6 +308,62 @@ class AlertServiceTest {
     }
 
     @Test
+    @DisplayName("resolveOpenByTypeAndAgents — 关闭员工命中集合的 open 行")
+    void shouldResolveOpenForAgentsInSet() {
+        AgentAlert hit = AgentAlert.builder().id(21L).alertType("employee_departed_service")
+            .agentUserid("u1").status(open).build();
+        AgentAlert other = AgentAlert.builder().id(22L).alertType("employee_departed_service")
+            .agentUserid("u9").status(open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(List.of("employee_departed_service"), open))
+            .thenReturn(List.of(hit, other));
+
+        int n = alertService.resolveOpenByTypeAndAgents("employee_departed_service", List.of("u1"));
+
+        assertThat(n).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(21L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(LocalDateTime.class), eq("auto:condition-cleared"));
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypeAndAgents — 员工不在集合内的 open 行保持 open")
+    void shouldLeaveOpenForAgentsNotInSet() {
+        AgentAlert other = AgentAlert.builder().id(22L).alertType("employee_departed_service")
+            .agentUserid("u9").status(open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of(other));
+
+        int n = alertService.resolveOpenByTypeAndAgents("employee_departed_service", List.of("u1"));
+
+        assertThat(n).isZero();
+        verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypeAndAgents — 空集合短路，不查库也不发关闭")
+    void shouldShortCircuitOnEmptyAgents() {
+        int n = alertService.resolveOpenByTypeAndAgents("employee_departed_service", List.of());
+
+        assertThat(n).isZero();
+        verify(alertRepo, never()).findByAlertTypeInAndStatus(any(), any());
+        verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("resolveOpenByTypeAndAgents — 返回实际命中的关闭条数")
+    void shouldReturnClosedCountForMatchedAgents() {
+        AgentAlert a = AgentAlert.builder().id(31L).agentUserid("u1").status(open).build();
+        AgentAlert b = AgentAlert.builder().id(32L).agentUserid("u2").status(open).build();
+        AgentAlert c = AgentAlert.builder().id(33L).agentUserid("u3").status(open).build();
+        when(alertRepo.findByAlertTypeInAndStatus(any(), any())).thenReturn(List.of(a, b, c));
+
+        int n = alertService.resolveOpenByTypeAndAgents("employee_departed_service",
+            List.of("u1", "u2", "u404"));
+
+        assertThat(n).isEqualTo(2);
+        verify(alertRepo).closeByIds(eq(List.of(31L, 32L)), eq(AgentAlert.AlertStatus.auto_resolved),
+            any(LocalDateTime.class), eq("auto:condition-cleared"));
+    }
+
+    @Test
     @DisplayName("collapseDuplicates — 保留最早一条，次数求和、最近取最大，其余关闭")
     void shouldCollapseKeepingOldestAndSumming() {
         LocalDateTime old = LocalDateTime.now().minusDays(5);

@@ -413,6 +413,23 @@ public class AlertService {
     }
 
     /**
+     * 关闭某类型下员工命中集合的 open 告警。
+     *
+     * @param alertType 告警类型
+     * @param agents    需要关闭的员工 userid 集合
+     * @return 关闭的数量
+     */
+    @Transactional
+    public int resolveOpenByTypeAndAgents(String alertType, Collection<String> agents) {
+        // 空集合会生成非法 SQL `IN ()`，直接短路（顺带防护 null）
+        if (agents == null || agents.isEmpty()) {
+            return 0;
+        }
+        return resolveWhere(List.of(alertType), alert ->
+            alert.getAgentUserid() != null && agents.contains(alert.getAgentUserid()));
+    }
+
+    /**
      * 跨类型关闭：给定这些类型下合并键不在保留集合内的 open 告警。
      *
      * @param alertTypes 告警类型集合

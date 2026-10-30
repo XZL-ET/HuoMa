@@ -174,12 +174,13 @@ public class EmployeeSyncService {
         reconcileZombieAgents();
 
         // 员工列表已完整拉取后按本轮通讯录对账「离职员工仍在服务」告警：
-        // resolveOpenByTypeExceptAgents 关闭员工不在保留集合内的 open 告警，此处保留本轮
-        // 仍在通讯录中的员工（activeUserIds）。userlist 为空或格式异常时上面已提前 return，
-        // 不会因空列表误关全部告警。
+        // resolveOpenByTypeAndAgents 关闭命中所给员工集合的 open 告警，此处传入本轮仍在
+        // 通讯录中的员工（activeUserIds）——他们已确认在职，此前该员工的离职告警不再成立。
+        // 反之，本轮不在通讯录（含上面 reconcileZombieAgents 刚新建告警）的员工保持 open。
+        // userlist 为空或格式异常时上面已提前 return，不会因空列表误关全部告警。
         if (!activeUserIds.isEmpty()) {
             try {
-                alertService.resolveOpenByTypeExceptAgents("employee_departed_service", activeUserIds);
+                alertService.resolveOpenByTypeAndAgents("employee_departed_service", activeUserIds);
             } catch (Exception e) {
                 log.error("关闭离职员工服务告警异常（不影响员工同步）", e);
             }
