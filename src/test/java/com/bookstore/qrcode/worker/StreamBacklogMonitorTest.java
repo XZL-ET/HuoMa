@@ -163,6 +163,24 @@ class StreamBacklogMonitorTest {
     }
 
     @Test
+    @DisplayName("流健康（无停摆、PEL 低于阈值）→ 关闭该类积压告警")
+    void shouldResolveWhenHealthy() {
+        monitor.checkAll();
+
+        verify(alertService).resolveOpenByType("callback_stream_backlog");
+    }
+
+    @Test
+    @DisplayName("Stream 不存在/查不到消费组 → 不关闭")
+    void shouldNotResolveWhenStreamMissing() {
+        when(ops.info(anyString())).thenThrow(new RuntimeException("no stream"));
+
+        monitor.checkAll();
+
+        verify(alertService, never()).resolveOpenByType(anyString());
+    }
+
+    @Test
     @DisplayName("限流键按「流 + 判据」分开，两种判据互不压制")
     void throttleKeyIsPerStreamAndSignal() {
         stubStream(RedisConfig.CALLBACK_STREAM_KEY, RedisConfig.CALLBACK_CONSUMER_GROUP,

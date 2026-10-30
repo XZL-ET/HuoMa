@@ -227,8 +227,9 @@ public class InheritanceJob {
      *                        夜间批次是全天遗漏的唯一兜底，必须传 {@code false}
      *                        做全量扫描，否则非 dirty 学校的夜间客户会被漏掉。
      */
-    private void processTransferWindow(LocalDateTime windowStart, LocalDateTime windowEnd,
-                                        String windowLabel, boolean incrementalScan) {
+    // 包级可见（非 public）：供同包测试直接驱动扫描逻辑
+    void processTransferWindow(LocalDateTime windowStart, LocalDateTime windowEnd,
+                               String windowLabel, boolean incrementalScan) {
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
         int totalTransfers = 0;
         int skippedNoReceptionist = 0;
@@ -237,6 +238,7 @@ public class InheritanceJob {
         List<String> noServiceSchools = new ArrayList<>();
         List<String> noReceptionistSchools = new ArrayList<>();
         List<String> ambiguousServiceSchools = new ArrayList<>();
+        boolean scanHadError = false;
 
         // ---- 增量扫描优化：只处理有新客户添加的学校，减少无效 DB 查询 ----
         // 仅用于白天/启动补偿等有后续兜底窗口的批次；夜间批次禁用（全量扫描）。
@@ -346,6 +348,7 @@ public class InheritanceJob {
                     }
                 }
             } catch (Exception e) {
+                scanHadError = true;
                 log.error("在职继承失败: qrCodeId={}", qr.getId(), e);
             }
         }
@@ -379,6 +382,18 @@ public class InheritanceJob {
             } else {
                 log.warn("在职继承服务老师不唯一（告警限流）: {} 个活码, 学校: {}",
                     ambiguousServiceSchools.size(), String.join("、", ambiguousServiceSchools));
+            }
+        }
+
+        // 本轮扫描无缺口 → 条件已恢复，关闭历史告警。
+        // 必须放在上面的告警创建之后，否则同轮会「先关后建」。
+        // 增量扫描只覆盖有新客户的学校，扫描中途出错则本轮数据不可信 —— 两种情况都不关闭。
+        if (!incrementalScan && !scanHadError) {
+            if (noServiceSchools.isEmpty()) {
+                alertService.resolveOpenByType("inheritance_no_service");
+            }
+            if (ambiguousServiceSchools.isEmpty()) {
+                alertService.resolveOpenByType("inheritance_ambiguous_service");
             }
         }
 

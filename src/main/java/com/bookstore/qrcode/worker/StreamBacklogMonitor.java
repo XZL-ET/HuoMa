@@ -115,21 +115,31 @@ public class StreamBacklogMonitor {
         jobGuard.runExclusive(BACKLOG_LOCK_KEY, BACKLOG_LOCK_TTL, () -> {
             for (StreamWatch watch : WATCHES) {
                 try {
-                    check(watch);
+                    // 只有本轮检查健康（数据齐全且两项判据均未命中）才关闭历史积压告警
+                    if (check(watch)) {
+                        alertService.resolveOpenByType(watch.alertType());
+                    }
                 } catch (Exception e) {
-                    // 单条流检查失败不影响其余流；Stream 不存在时 XINFO 会抛异常，属正常情况
+                    // 单条流检查失败不影响其余流；Stream 不存在时 XINFO 会抛异常，属正常情况。
+                    // 检查不完整时保持告警不关（fail-safe），异常向上不外抛。
                     log.debug("Stream 积压检查跳过: stream={}, {}", watch.streamKey(), e.getMessage());
                 }
             }
         });
     }
 
-    private void check(StreamWatch watch) {
+    /**
+     * 检查单条流的消费健康度。
+     *
+     * @return {@code true} 表示本轮读数完整且两项判据均未命中（健康，可关闭历史告警）；
+     *         {@code false} 表示读数缺失或任一判据命中（已按限流规则告警）
+     */
+    private boolean check(StreamWatch watch) {
         StreamInfo.XInfoStream info = redisTemplate.opsForStream().info(watch.streamKey());
         StreamInfo.XInfoGroup group = findGroup(watch);
-        if (info == null || group == null) return;
+        if (info == null || group == null) return false;
         String lastGenerated = info.lastGeneratedId();
-        if (lastGenerated == null) return;
+        if (lastGenerated == null) return false;
 
         // 比较 ID 的 (时间戳, 序列号) 两段：只比时间戳会漏掉「同一毫秒内写入、但只被取走了一部分」
         // 的尾巴（delivered=1000-0 / generated=1000-5 时间戳相等，会被当成已追平）
@@ -145,7 +155,7 @@ public class StreamBacklogMonitor {
                         watch.streamKey(), stalledId, stalledMinutes, watch.workerName());
                     log.error("{}", msg);
                     raise(watch, "stall", msg);
-                    return;
+                    return false;
                 }
             }
         }
@@ -157,7 +167,10 @@ public class StreamBacklogMonitor {
                 watch.streamKey(), pending, watch.workerName());
             log.warn("{}", msg);
             raise(watch, "pending", msg);
+            return false;
         }
+
+        return true;
     }
 
     /**

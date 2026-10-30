@@ -189,7 +189,11 @@ public class TransferMonitorWorker {
     public void checkDlq() {
         jobGuard.runExclusive(CHECK_DLQ_LOCK_KEY, CHECK_DLQ_LOCK_TTL, () -> {
             long dlqLen = messageGuardService.dlqSize();
-            if (dlqLen <= 0) return;
+            if (dlqLen <= 0) {
+                // 死信已清空 → 条件恢复，关闭历史积压告警
+                alertService.resolveOpenByType("transfer_dlq_backlog");
+                return;
+            }
             log.warn("⚠ 死信队列积压: {} 条 — 建议检查并重放", dlqLen);
             if (jobGuard.firstWithin(THROTTLE_DLQ_BACKLOG, Duration.ofHours(1))) {
                 alertService.createAlert(null, "transfer_dlq_backlog",
