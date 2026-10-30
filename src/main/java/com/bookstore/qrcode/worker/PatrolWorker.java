@@ -389,8 +389,10 @@ public class PatrolWorker {
         long standbyCount = poolRepo.countByStatus(
             GlobalAgentPool.PoolStatus.standby);
         if (standbyCount >= 10) {
-            // 池子充足 —— 若此前因枯竭告过警，条件已消失，顺手关闭
-            alertService.resolveOpenByType("empty_backup");
+            // 池子充足 —— 若此前因枯竭告过警，条件已消失，顺手关闭。
+            // 只关本方法创建的全局行（agent/活码均为空）：empty_backup 不是全局类型，
+            // 各活码轮转失败会带 qrCodeId 另起一条，全局池健康不能证明它们已恢复
+            alertService.resolveOpenByKey("empty_backup", null, null);
             return;
         }
 
@@ -414,8 +416,8 @@ public class PatrolWorker {
             alertService.alertEmptyBackup(null,
                 "全局后备池严重不足: 仅剩 " + standbyCount + " 人，已自动补充");
         } else {
-            // 补充后回到 5 人及以上 —— 告警条件消失，关闭历史 empty_backup
-            alertService.resolveOpenByType("empty_backup");
+            // 补充后回到 5 人及以上 —— 告警条件消失，关闭本方法创建的全局行（理由同上）
+            alertService.resolveOpenByKey("empty_backup", null, null);
         }
     }
 

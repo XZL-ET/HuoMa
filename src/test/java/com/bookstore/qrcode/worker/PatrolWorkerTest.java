@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.AgentAlert;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.AgentRepository;
@@ -186,7 +187,6 @@ class PatrolWorkerTest {
     @Test
     @DisplayName("巡检异常归零 → 关闭 qr_agent_anomaly")
     void shouldResolveAnomalyWhenNone() throws Exception {
-        when(alertService.resolveOpenByType("qr_agent_anomaly")).thenReturn(1);
         when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
         // 有接待员记录，但 agent/employee 都查不到 → getAnomalyLabel 返回 null，无异常
         when(qrAgentRepo.findByStatus(QrAgent.AgentStatus.active))
@@ -287,6 +287,46 @@ class PatrolWorkerTest {
         invoke("autoReplayDlq");
 
         verify(alertService, never()).resolveOpenByType("dlq_replay_exhausted");
+    }
+
+    // ==================== 全局备用池恢复后自动关闭 ====================
+
+    @Test
+    @DisplayName("standby ≥ 10 → 只关闭全局 empty_backup（agent/活码均为空的那条）")
+    void shouldResolveGlobalEmptyBackupWhenPoolHealthy() throws Exception {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(10L);
+
+        invoke("checkGlobalPoolLow");
+
+        verify(alertService).resolveOpenByKey("empty_backup", null, null);
+        // empty_backup 不是全局类型，按类型全关会误伤各活码轮转失败产生的行
+        verify(alertService, never()).resolveOpenByType("empty_backup");
+    }
+
+    @Test
+    @DisplayName("同步后 re-check 回到 ≥ 5 → 同样只关闭全局 empty_backup")
+    void shouldResolveGlobalEmptyBackupAfterSyncRecheck() throws Exception {
+        // 首次 0，同步后 7
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L, 7L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(2);
+
+        invoke("checkGlobalPoolLow");
+
+        verify(alertService).resolveOpenByKey("empty_backup", null, null);
+        verify(alertService, never()).resolveOpenByType("empty_backup");
+    }
+
+    @Test
+    @DisplayName("补充后仍 < 5 → 告警且不关闭任何 empty_backup")
+    void shouldNotResolveEmptyBackupWhenStillLow() throws Exception {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(3L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
+
+        invoke("checkGlobalPoolLow");
+
+        verify(alertService).alertEmptyBackup(isNull(), anyString());
+        verify(alertService, never()).resolveOpenByKey(eq("empty_backup"), any(), any());
+        verify(alertService, never()).resolveOpenByType("empty_backup");
     }
 
     private void invoke(String methodName) throws Exception {
