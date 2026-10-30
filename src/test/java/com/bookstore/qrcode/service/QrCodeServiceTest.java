@@ -15,6 +15,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -204,6 +205,43 @@ class QrCodeServiceTest {
         int count = qrCodeService.batchUpdateRotateMode(List.of(1L, 2L), QrCode.RotateMode.manual);
 
         assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("replaceAnomalyAgents — 无 active 接待员时返回空 alertKeys")
+    void shouldReturnEmptyAlertKeysWhenNoActiveAgent() {
+        QrCode qr = QrCode.builder().id(1L).schoolName("北京第一中学").build();
+        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr));
+        when(qrAgentRepo.findByQrCodeIdAndStatus(1L, QrAgent.AgentStatus.active))
+                .thenReturn(List.of());
+
+        Map<String, Object> result = qrCodeService.replaceAnomalyAgents(1L);
+
+        assertThat(result.get("alertKeys")).asList().isEmpty();
+    }
+
+    @Test
+    @DisplayName("replaceAnomalyAgents — 全局池无 standby 的受阻路径也带 alertKeys")
+    void shouldReturnBlockedAlertKeyWhenPoolEmpty() {
+        QrCode qr = QrCode.builder().id(1L).schoolName("北京第一中学").build();
+        QrAgent qa = QrAgent.builder().id(10L).qrCodeId(1L).agentUserid("u1")
+                .role(QrAgent.AgentRole.receptionist)
+                .status(QrAgent.AgentStatus.active).build();
+        Agent blocked = Agent.builder().userid("u1")
+                .overallStatus(Agent.OverallStatus.blocked).build();
+        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr));
+        when(qrAgentRepo.findByQrCodeIdAndStatus(1L, QrAgent.AgentStatus.active))
+                .thenReturn(List.of(qa));
+        when(employeeRepo.findByUseridIn(any())).thenReturn(List.of());
+        when(agentRepo.findAllById(any())).thenReturn(List.of(blocked));
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
+
+        Map<String, Object> result = qrCodeService.replaceAnomalyAgents(1L);
+
+        assertThat(result.get("alertKeys")).asList().contains(
+                AlertTypeMeta.keyOf("anomaly_replace_blocked", null, 1L));
+        verify(alertService).createAlert(isNull(), eq("anomaly_replace_blocked"),
+                any(), any(), any(), eq(1L));
     }
 
     @Test

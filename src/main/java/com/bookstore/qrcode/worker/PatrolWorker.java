@@ -205,6 +205,9 @@ public class PatrolWorker {
             if (summary.exhausted() > 0) {
                 log.warn("死信队列 {} 条已达自动重放上限，等待人工处理", summary.exhausted());
                 alertDlqReplayExhausted(summary.exhausted());
+            } else {
+                // 本轮重放后已无「重放耗尽」消息 —— 条件恢复，关闭历史告警
+                alertService.resolveOpenByType("dlq_replay_exhausted");
             }
         } catch (Exception e) {
             log.debug("DLQ 重放跳过: {}", e.getMessage());
@@ -386,7 +389,9 @@ public class PatrolWorker {
         long standbyCount = poolRepo.countByStatus(
             GlobalAgentPool.PoolStatus.standby);
         if (standbyCount >= 10) {
-            return; // 池子充足
+            // 池子充足 —— 若此前因枯竭告过警，条件已消失，顺手关闭
+            alertService.resolveOpenByType("empty_backup");
+            return;
         }
 
         // 余量不足，尝试从企微通讯录补充
@@ -408,6 +413,9 @@ public class PatrolWorker {
         } else if (standbyCount < 5) {
             alertService.alertEmptyBackup(null,
                 "全局后备池严重不足: 仅剩 " + standbyCount + " 人，已自动补充");
+        } else {
+            // 补充后回到 5 人及以上 —— 告警条件消失，关闭历史 empty_backup
+            alertService.resolveOpenByType("empty_backup");
         }
     }
 
@@ -423,12 +431,19 @@ public class PatrolWorker {
      */
     private void checkOverloadedQrCodes() {
         List<QrCode> activeQrs = qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active);
-        if (activeQrs.isEmpty()) return;
+        if (activeQrs.isEmpty()) {
+            // 没有活跃活码就谈不上高负载 —— 条件整体消失，关闭全部 traffic_spike
+            alertService.resolveOpenByTypeExceptQr("traffic_spike", Set.of());
+            return;
+        }
 
         // 一次查全部 active QrAgent，按 qrCodeId 分组 — 避免 N+1
         Map<Long, List<QrAgent>> qrAgentMap = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active)
             .stream()
             .collect(Collectors.groupingBy(QrAgent::getQrCodeId));
+
+        // 本轮仍高负载的活码 —— 只有它们的 traffic_spike 保持 open，其余全部关闭
+        Set<Long> overloadedQrIds = new HashSet<>();
 
         for (QrCode qr : activeQrs) {
             List<QrAgent> receptionists = qrAgentMap.getOrDefault(qr.getId(), Collections.emptyList());
@@ -445,6 +460,7 @@ public class PatrolWorker {
             });
 
             if (allOverloaded) {
+                overloadedQrIds.add(qr.getId());
                 alertService.createAlert(
                     receptionists.get(0).getAgentUserid(),
                     "traffic_spike",
@@ -455,6 +471,9 @@ public class PatrolWorker {
                     qr.getId());
             }
         }
+
+        // 循环体异常会向上抛，走到这里说明本轮扫描完整 —— 关闭已不高负载活码的告警
+        alertService.resolveOpenByTypeExceptQr("traffic_spike", overloadedQrIds);
     }
 
     /**
@@ -549,7 +568,11 @@ public class PatrolWorker {
         List<QrAgent> allActive = qrAgentRepo.findByStatus(QrAgent.AgentStatus.active);
         Set<String> allUserids = allActive.stream()
             .map(QrAgent::getAgentUserid).collect(Collectors.toSet());
-        if (allUserids.isEmpty()) return;
+        if (allUserids.isEmpty()) {
+            // 没有任何在岗接待员，异常条件自然不存在 → 关闭历史告警
+            alertService.resolveOpenByType("qr_agent_anomaly");
+            return;
+        }
 
         Map<String, Agent> agentMap = agentRepo.findAllById(allUserids).stream()
             .collect(Collectors.toMap(Agent::getUserid, a -> a, (a, b) -> a));
@@ -579,6 +602,9 @@ public class PatrolWorker {
                         anomalyCount, affectedQrIds.size()),
                     AgentAlert.AutoAction.none, null);
             }
+        } else {
+            // 本轮扫描未见异常 —— 条件已清除，关闭历史告警
+            alertService.resolveOpenByType("qr_agent_anomaly");
         }
     }
 
@@ -634,15 +660,30 @@ public class PatrolWorker {
             }
 
             int totalRemoved = 0, totalReplaced = 0, totalShortfall = 0;
+            // 本轮真正命中的告警键（服务老师异常/替换缺口/受阻）——只有它们的 open 告警保留
+            Set<String> hitKeys = new HashSet<>();
+            boolean hadError = false;
             for (QrCode qr : activeQrs) {
                 try {
                     Map<String, Object> r = qrCodeService.replaceAnomalyAgents(qr.getId());
                     totalRemoved += (int) r.get("removed");
                     totalReplaced += (int) r.get("replaced");
                     totalShortfall += (int) r.get("shortfall");
+                    @SuppressWarnings("unchecked")
+                    List<String> alertKeys = (List<String>) r.get("alertKeys");
+                    hitKeys.addAll(alertKeys);
                 } catch (Exception e) {
+                    // 任一活码处理失败，本轮结果不完整 —— 不做任何关闭，避免误关仍存在的问题
+                    hadError = true;
                     log.error("每日自愈处理失败: qrCodeId={}", qr.getId(), e);
                 }
+            }
+
+            if (!hadError) {
+                alertService.resolveOpenByTypesExceptKeys(
+                    Set.of("service_teacher_anomaly", "anomaly_replace_shortfall",
+                        "anomaly_replace_blocked"),
+                    hitKeys);
             }
 
             if (totalRemoved > 0) {

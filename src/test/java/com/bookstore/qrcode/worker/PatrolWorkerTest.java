@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.AgentAlert;
+import com.bookstore.qrcode.entity.QrAgent;
+import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
@@ -22,7 +24,9 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -46,6 +50,16 @@ class PatrolWorkerTest {
     private LeakMetrics leakMetrics;
     private PatrolWorker worker;
     private Method alertOnSilentLeaks;
+
+    private QrAgentRepository qrAgentRepo;
+    private QrCodeRepository qrCodeRepo;
+    private EmployeeRepository employeeRepo;
+    private AgentRepository agentRepo;
+    private GlobalAgentPoolRepository poolRepo;
+    private EmployeeSyncService employeeSyncService;
+    private MessageGuardService messageGuardService;
+    private QrCodeService qrCodeService;
+    private ScheduledJobGuard jobGuard;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -140,21 +154,155 @@ class PatrolWorkerTest {
     }
 
     private PatrolWorker buildWorker(LeakMetrics metrics) {
+        qrAgentRepo = mock(QrAgentRepository.class);
+        poolRepo = mock(GlobalAgentPoolRepository.class);
+        qrCodeRepo = mock(QrCodeRepository.class);
+        messageGuardService = mock(MessageGuardService.class);
+        employeeSyncService = mock(EmployeeSyncService.class);
+        employeeRepo = mock(EmployeeRepository.class);
+        agentRepo = mock(AgentRepository.class);
+        qrCodeService = mock(QrCodeService.class);
+        jobGuard = mock(ScheduledJobGuard.class);
         return new PatrolWorker(
-            mock(QrAgentRepository.class),
-            mock(GlobalAgentPoolRepository.class),
-            mock(QrCodeRepository.class),
+            qrAgentRepo,
+            poolRepo,
+            qrCodeRepo,
             alertService,
             mock(RateLimiterService.class),
-            mock(MessageGuardService.class),
-            mock(EmployeeSyncService.class),
-            mock(EmployeeRepository.class),
-            mock(AgentRepository.class),
+            messageGuardService,
+            employeeSyncService,
+            employeeRepo,
+            agentRepo,
             mock(WecomApiClient.class),
             mock(OperationLogRepository.class),
             mock(CustomerTransferRepository.class),
-            mock(QrCodeService.class),
+            qrCodeService,
             metrics,
-            mock(ScheduledJobGuard.class));
+            jobGuard);
+    }
+
+    // ==================== 条件恢复后自动关闭 ====================
+
+    @Test
+    @DisplayName("巡检异常归零 → 关闭 qr_agent_anomaly")
+    void shouldResolveAnomalyWhenNone() throws Exception {
+        when(alertService.resolveOpenByType("qr_agent_anomaly")).thenReturn(1);
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
+        // 有接待员记录，但 agent/employee 都查不到 → getAnomalyLabel 返回 null，无异常
+        when(qrAgentRepo.findByStatus(QrAgent.AgentStatus.active))
+            .thenReturn(List.of(qa(1L, "u1")));
+        when(agentRepo.findAllById(any())).thenReturn(List.of());
+        when(employeeRepo.findByUseridIn(any())).thenReturn(List.of());
+
+        invoke("patrolQrAgentAnomalies");
+
+        verify(alertService).resolveOpenByType("qr_agent_anomaly");
+    }
+
+    @Test
+    @DisplayName("巡检目标空洞码 → 同样关闭 qr_agent_anomaly")
+    void shouldResolveAnomalyWhenNoActiveAgent() throws Exception {
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
+        when(qrAgentRepo.findByStatus(QrAgent.AgentStatus.active)).thenReturn(List.of());
+
+        invoke("patrolQrAgentAnomalies");
+
+        verify(alertService).resolveOpenByType("qr_agent_anomaly");
+    }
+
+    @Test
+    @DisplayName("本机仍有高负载活码 → 不关闭该活码的 traffic_spike，关闭其余")
+    void shouldResolveTrafficSpikeByQrDiff() throws Exception {
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
+        when(qrAgentRepo.findByStatus(QrAgent.AgentStatus.active))
+            .thenReturn(List.of(QrAgent.builder().qrCodeId(1L).agentUserid("u1")
+                .role(QrAgent.AgentRole.receptionist)
+                .status(QrAgent.AgentStatus.active)
+                .dailyCurrent(100).dailyMax(100).build()));
+
+        invoke("checkOverloadedQrCodes");
+
+        verify(alertService).resolveOpenByTypeExceptQr(eq("traffic_spike"), eq(Set.of(1L)));
+    }
+
+    @Test
+    @DisplayName("无活跃活码 → 关闭全部 traffic_spike")
+    void shouldResolveTrafficSpikeWhenNoActiveQr() throws Exception {
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of());
+
+        invoke("checkOverloadedQrCodes");
+
+        verify(alertService).resolveOpenByTypeExceptQr(eq("traffic_spike"), eq(Set.of()));
+    }
+
+    @Test
+    @DisplayName("自愈批次中某活码抛异常 → 整批不关闭")
+    void shouldSkipHealClosureOnError() throws Exception {
+        when(jobGuard.tryAcquire(anyString(), any())).thenReturn("token");
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
+        when(qrCodeService.replaceAnomalyAgents(anyLong()))
+            .thenThrow(new RuntimeException("boom"));
+
+        invoke("dailyAnomalyAutoHeal");
+
+        verify(alertService, never()).resolveOpenByTypesExceptKeys(any(), any());
+    }
+
+    @Test
+    @DisplayName("自愈成功 → 只有本轮命中的告警键保持 open")
+    void shouldResolveHealAlertsExceptHitKeys() throws Exception {
+        when(jobGuard.tryAcquire(anyString(), any())).thenReturn("token");
+        when(qrCodeRepo.findByStatus(QrCode.QrCodeStatus.active)).thenReturn(List.of(qr(1L)));
+        when(qrCodeService.replaceAnomalyAgents(1L)).thenReturn(Map.of(
+            "removed", 1, "replaced", 0, "shortfall", 0,
+            "alertKeys", List.of("anomaly_replace_shortfall||1")));
+
+        invoke("dailyAnomalyAutoHeal");
+
+        verify(alertService).resolveOpenByTypesExceptKeys(
+            eq(Set.of("service_teacher_anomaly", "anomaly_replace_shortfall",
+                "anomaly_replace_blocked")),
+            eq(Set.of("anomaly_replace_shortfall||1")));
+    }
+
+    @Test
+    @DisplayName("DLQ 重放无 exhausted → 关闭 dlq_replay_exhausted")
+    void shouldResolveDlqExhausted() throws Exception {
+        when(jobGuard.firstWithin(anyString(), any())).thenReturn(true);
+        when(messageGuardService.replayAllDlq(anyString(), eq(true)))
+            .thenReturn(new MessageGuardService.ReplaySummary(0, 0, 0));
+
+        invoke("autoReplayDlq");
+
+        verify(alertService).resolveOpenByType("dlq_replay_exhausted");
+    }
+
+    @Test
+    @DisplayName("DLQ 重放仍有 exhausted → 不关闭 dlq_replay_exhausted")
+    void shouldKeepDlqExhaustedWhenStillExhausted() throws Exception {
+        when(jobGuard.firstWithin(anyString(), any())).thenReturn(true);
+        when(messageGuardService.replayAllDlq(anyString(), eq(true)))
+            .thenReturn(new MessageGuardService.ReplaySummary(0, 2, 0));
+
+        invoke("autoReplayDlq");
+
+        verify(alertService, never()).resolveOpenByType("dlq_replay_exhausted");
+    }
+
+    private void invoke(String methodName) throws Exception {
+        Method m = PatrolWorker.class.getDeclaredMethod(methodName);
+        m.setAccessible(true);
+        m.invoke(worker);
+    }
+
+    private static QrCode qr(Long id) {
+        return QrCode.builder().id(id).schoolName("学校" + id).build();
+    }
+
+    private static QrAgent qa(Long qrCodeId, String userid) {
+        return QrAgent.builder().qrCodeId(qrCodeId).agentUserid(userid)
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.active)
+            .build();
     }
 }

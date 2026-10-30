@@ -2027,7 +2027,8 @@ public class QrCodeService {
      * 事务提交后异步同步企微。</p>
      *
      * @param qrCodeId 活码主键 ID
-     * @return 替换结果 Map：qrCodeId / schoolName / removed / replaced / shortfall / details
+     * @return 替换结果 Map：qrCodeId / schoolName / removed / replaced / shortfall /
+     *         details / alertKeys（本轮命中的告警合并键，供调用方保留对应 open 告警）
      */
     @Transactional
     public Map<String, Object> replaceAnomalyAgents(Long qrCodeId) {
@@ -2039,7 +2040,8 @@ public class QrCodeService {
 
         if (activeAgents.isEmpty()) {
             return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
-                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of(),
+                "alertKeys", List.of());
         }
 
         // 2. 批量加载 Employee + Agent 快照
@@ -2063,7 +2065,8 @@ public class QrCodeService {
 
         if (anomalous.isEmpty()) {
             return Map.of("qrCodeId", qrCodeId, "schoolName", qr.getSchoolName(),
-                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of());
+                "removed", 0, "replaced", 0, "shortfall", 0, "details", List.of(),
+                "alertKeys", List.of());
         }
 
         // 3.5 安全阈值：全局池无 standby 时跳过移除，防止活码变空码
@@ -2091,6 +2094,9 @@ public class QrCodeService {
             blockedResult.put("details", blockedDetails);
             blockedResult.put("skipped", true);
             blockedResult.put("reason", "全局池无 standby，跳过移除以防活码变空");
+            // 受阻告警本轮仍存在，其合并键交由调用方保留为 open
+            blockedResult.put("alertKeys", List.of(
+                AlertTypeMeta.keyOf("anomaly_replace_blocked", null, qrCodeId)));
             return blockedResult;
         }
 
@@ -2100,6 +2106,8 @@ public class QrCodeService {
 
         // 5. 移除异常 + 补人（替补二次校验）
         List<Map<String, String>> details = new ArrayList<>();
+        // 本轮命中的告警合并键，随结果返回给调用方做跨轮次关闭
+        List<String> alertKeys = new ArrayList<>();
         int replaced = 0;
         int maxSortOrder = activeAgents.stream()
             .mapToInt(QrAgent::getSortOrder).max().orElse(0);
@@ -2118,6 +2126,9 @@ public class QrCodeService {
                     String.format("活码「%s」服务老师/双角色 %s 异常(%s)，请手动处理",
                         qr.getSchoolName(), qa.getAgentUserid(), label),
                     AgentAlert.AutoAction.none, qrCodeId);
+                // 按 (员工, 活码) 归一化，与服务老师异常告警的合并键一致
+                alertKeys.add(AlertTypeMeta.keyOf(
+                    "service_teacher_anomaly", qa.getAgentUserid(), qrCodeId));
                 details.add(Map.of("userid", qa.getAgentUserid(),
                     "role", qa.getRole().name(),
                     "anomaly", label, "skipped", "服务老师/双角色需手动处理"));
@@ -2198,7 +2209,9 @@ public class QrCodeService {
                 String.format("活码「%s」(id=%d) 替换异常员工：移除 %d 人，仅补入 %d 人，缺口 %d 人",
                     qr.getSchoolName(), qrCodeId, anomalous.size(), replaced, shortfall),
                 AgentAlert.AutoAction.none, qrCodeId);
+            alertKeys.add(AlertTypeMeta.keyOf("anomaly_replace_shortfall", null, qrCodeId));
         }
+        result.put("alertKeys", alertKeys);
 
         log.info("活码 {} 异常员工替换完成: 移除 {} 人, 补入 {} 人, 缺口 {} 人",
             qrCodeId, anomalous.size(), replaced, anomalous.size() - replaced);
