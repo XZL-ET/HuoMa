@@ -166,6 +166,14 @@ public class DailyResetWorker {
             } catch (Exception e) {
                 log.error("告警发送失败", e);
             }
+        } else {
+            // 本轮实际执行且全部步骤成功 → 关闭历史「每日重置失败」告警。
+            // 关闭失败不影响主流程（失败时告警保持 open，交由人工处理）。
+            try {
+                alertService.resolveOpenByType("daily_reset_failure");
+            } catch (Exception e) {
+                log.error("关闭每日重置失败告警异常", e);
+            }
         }
 
         log.info("===== 每日重置 + 日报生成完成 (失败={}) =====", failures);

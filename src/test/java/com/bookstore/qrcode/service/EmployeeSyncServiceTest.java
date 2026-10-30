@@ -11,22 +11,26 @@ import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
@@ -132,5 +136,35 @@ class EmployeeSyncServiceTest {
         assertThat(dual.getDailyMax()).isEqualTo(300);
         assertThat(alreadyHigh.getDailyMax()).isEqualTo(200);
         verify(poolRepo).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("员工本轮在通讯录中 → 按保留集合关闭离职告警")
+    @SuppressWarnings("unchecked")
+    void shouldResolveDepartedAlertForPresentAgents() throws Exception {
+        JsonNode resp = new ObjectMapper().readTree(
+            "{\"userlist\":[{\"userid\":\"u1\",\"name\":\"甲\"},{\"userid\":\"u2\",\"name\":\"乙\"}]}");
+        when(wecomApi.getUserList()).thenReturn(resp);
+
+        int count = service.syncFromWecom();
+
+        assertThat(count).isEqualTo(2);
+        ArgumentCaptor<Collection<String>> keepAgents = ArgumentCaptor.forClass(Collection.class);
+        verify(alertService).resolveOpenByTypeExceptAgents(
+            eq("employee_departed_service"), keepAgents.capture());
+        assertThat(keepAgents.getValue()).containsExactlyInAnyOrder("u1", "u2");
+    }
+
+    @Test
+    @DisplayName("通讯录列表为空数组 → 不关闭离职告警（fail-safe）")
+    void shouldNotResolveWhenUserlistEmpty() throws Exception {
+        JsonNode resp = new ObjectMapper().readTree("{\"userlist\":[]}");
+        when(wecomApi.getUserList()).thenReturn(resp);
+
+        int count = service.syncFromWecom();
+
+        assertThat(count).isZero();
+        verify(alertService, never())
+            .resolveOpenByTypeExceptAgents(anyString(), any());
     }
 }

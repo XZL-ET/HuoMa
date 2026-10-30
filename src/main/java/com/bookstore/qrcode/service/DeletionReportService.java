@@ -235,6 +235,15 @@ public class DeletionReportService {
         int sent = admins.size() - failed.size();
         log.info("客户删除员工日报完成: date={}, admins={}, sent={}, failed={}",
                 date, admins.size(), sent, failed);
+        // 本次实际发送且全部成功 → 关闭历史「删除报告生成失败」告警；
+        // 任一接收人失败则保持 open（发送失败已在上方创建/合并告警）。
+        if (failed.isEmpty()) {
+            try {
+                alertService.resolveOpenByType("deletion_report_fail");
+            } catch (Exception e) {
+                log.warn("关闭删除报告失败告警异常: {}", e.getMessage());
+            }
+        }
         return new RangeResult(sent, List.copyOf(failed));
     }
 

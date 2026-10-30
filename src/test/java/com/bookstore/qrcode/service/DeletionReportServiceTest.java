@@ -301,6 +301,53 @@ class DeletionReportServiceTest {
     }
 
     @Test
+    @DisplayName("删除报告全部发送成功 → 关闭 deletion_report_fail")
+    void shouldResolveWhenAllSent() {
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(eventsFor("agent1", 6));
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+
+        int sent = reportService.report(date);
+
+        assertThat(sent).isEqualTo(2);
+        verify(alertService).resolveOpenByType("deletion_report_fail");
+    }
+
+    @Test
+    @DisplayName("任一接收人发送失败 → 不关闭 deletion_report_fail")
+    void shouldNotResolveWhenAnyFailed() {
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(eventsFor("agent1", 6));
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+        doAnswer(invocation -> {
+            if ("admin2".equals(invocation.getArgument(0))) {
+                throw new RuntimeException("userid not found");
+            }
+            return null;
+        }).when(wecomApi).sendReportMessage(anyString(), anyString());
+
+        int sent = reportService.report(date);
+
+        assertThat(sent).isEqualTo(1);
+        verify(alertService, never()).resolveOpenByType("deletion_report_fail");
+    }
+
+    @Test
+    @DisplayName("无删除事件（未实际发送）→ 不关闭 deletion_report_fail")
+    void shouldNotResolveWhenNoEvents() {
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(List.of());
+
+        int sent = reportService.report(date);
+
+        assertThat(sent).isZero();
+        verify(wecomApi, never()).sendReportMessage(anyString(), anyString());
+        verify(alertService, never()).resolveOpenByType("deletion_report_fail");
+    }
+
+    @Test
     @DisplayName("report — 重点员工超过 50 行时截断并提示未列出")
     void reportTruncatesHighlightedBeyondMaxLines() {
         List<CustomerDeletionEvent> events = new java.util.ArrayList<>();

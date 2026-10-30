@@ -173,6 +173,18 @@ public class EmployeeSyncService {
         // 本轮仍未在企微通讯录出现的稳定离职者，天然排除本轮因 API 异常新标记的员工。
         reconcileZombieAgents();
 
+        // 员工列表已完整拉取后按本轮通讯录对账「离职员工仍在服务」告警：
+        // resolveOpenByTypeExceptAgents 关闭员工不在保留集合内的 open 告警，此处保留本轮
+        // 仍在通讯录中的员工（activeUserIds）。userlist 为空或格式异常时上面已提前 return，
+        // 不会因空列表误关全部告警。
+        if (!activeUserIds.isEmpty()) {
+            try {
+                alertService.resolveOpenByTypeExceptAgents("employee_departed_service", activeUserIds);
+            } catch (Exception e) {
+                log.error("关闭离职员工服务告警异常（不影响员工同步）", e);
+            }
+        }
+
         // 标记已不在企微通讯录中的员工为离职
         int deactivated = 0;
         if (!activeUserIds.isEmpty()) {
