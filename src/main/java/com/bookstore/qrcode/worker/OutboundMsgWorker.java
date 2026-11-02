@@ -374,25 +374,16 @@ public class OutboundMsgWorker {
     }
 
     /**
-     * 员工无客户联系权限（48002）时兜底告警，Redis 限流每员工 24h 一次。
-     * 48002 不体现在企微通讯录字段里，本地员工同步感知不到，只能靠发消息失败时兜底。
+     * 48002 兜底告警 — 统一交给系统级「每日一条」处理。
+     *
+     * <p>48002 表示本企业未开通家校沟通能力，并非某个员工的客户联系权限问题；
+     * 按员工逐条告警会在每次发送失败时制造大量重复行。改为由
+     * {@link AlertService#alertWecom48002()} 按天合并成一条系统级告警。</p>
+     *
+     * @param userid 发送失败的员工 userid（保留参数以兼容调用点，告警本身不再按员工维度）
      */
     private void alertNoPermission(String userid) {
-        String key = "alert:48002:" + userid;
-        try {
-            Boolean first = redisTemplate.opsForValue()
-                .setIfAbsent(key, "1", Duration.ofHours(24));
-            if (Boolean.TRUE.equals(first)) {
-                alertService.createAlert(userid, "wechat_unavailable",
-                    AgentAlert.AlertSeverity.medium,
-                    String.format("员工 %s 无客户联系权限(errcode=48002)，欢迎语发送被企微拒绝，请在企微后台恢复其客户联系权限",
-                        userid),
-                    AgentAlert.AutoAction.none, null);
-                log.warn("48002 无权限兜底告警已创建: userid={}", userid);
-            }
-        } catch (Exception ex) {
-            log.warn("48002 告警限流失效: userid={}, err={}", userid, ex.getMessage());
-        }
+        alertService.alertWecom48002();
     }
 
     private String getField(JsonNode event, String field) {

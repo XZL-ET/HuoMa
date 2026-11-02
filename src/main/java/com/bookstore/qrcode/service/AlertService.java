@@ -20,9 +20,11 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -84,6 +86,12 @@ public class AlertService {
         + "redis.call('EXPIRE', key, ttl)\n"
         + "local count = redis.call('ZCARD', key)\n"
         + "return count";
+
+    /** 48002 每日失败计数键前缀：{@code alert:48002:count:{yyyyMMdd}} */
+    private static final String COUNT_48002_KEY_PREFIX = "alert:48002:count:";
+
+    /** 48002 计数 TTL：跨天后仍保留一天，便于排查前一日情况 */
+    private static final Duration COUNT_48002_TTL = Duration.ofDays(2);
 
     private static final DefaultRedisScript<Long> ALERT_COUNT_SCRIPT;
 
@@ -681,6 +689,50 @@ public class AlertService {
 
     private static boolean before(LocalDateTime time, LocalDateTime threshold) {
         return time != null && time.isBefore(threshold);
+    }
+
+    /**
+     * 记录一次企微 48002（本企业未开通家校沟通能力）发送失败，返回当日累计次数。
+     *
+     * <p>计数键按自然日分桶（{@code alert:48002:count:{yyyyMMdd}}），首次自增时设置 2 天 TTL，
+     * 避免键无限增长。计数属于「锦上添花」：Redis 不可用时返回 {@code -1}，绝不阻断
+     * 消息发送或告警创建。</p>
+     *
+     * @return 当日累计失败次数；计数不可用时返回 {@code -1}
+     */
+    public long record48002Hit() {
+        String key = COUNT_48002_KEY_PREFIX
+            + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        try {
+            Long count = redisTemplate.opsForValue().increment(key);
+            if (count != null && count == 1L) {
+                redisTemplate.expire(key, COUNT_48002_TTL);
+            }
+            return count == null ? -1L : count;
+        } catch (Exception e) {
+            log.warn("48002 失败计数不可用: {}", e.getMessage());
+            return -1L;
+        }
+    }
+
+    /**
+     * 系统级 48002 告警：计数 + upsert 一条不含员工/活码的 {@code wechat_48002} 告警。
+     *
+     * <p>48002 表示「本企业未开通家校沟通能力」，与具体员工的客户联系权限无关；
+     * 自 2026-07-21 起每次发送都会失败，按员工逐条告警只会淹没告警中心。
+     * 该类型为全局条件类，{@link #createAlert} 会把当日所有命中合并为同一条 open 行，
+     * 因此每天最多一条，detail 持续刷新当日次数。</p>
+     */
+    public void alertWecom48002() {
+        long count = record48002Hit();
+        String countText = count > 0
+            ? "今日 " + count + " 次发送失败"
+            : "今日已有发送失败";
+        String detail = "企微接口 48002（本企业未开通家校沟通能力）：欢迎语/降级消息/交接欢迎语无法送达，"
+            + countText + "。这不是员工权限问题，无需在企微后台逐个恢复；"
+            + "自 2026-07-21 起持续存在，需更换发送方案。";
+        createAlert(null, "wechat_48002", AgentAlert.AlertSeverity.low,
+            detail, AgentAlert.AutoAction.none, null);
     }
 
     /**

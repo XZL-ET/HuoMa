@@ -19,9 +19,11 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -43,6 +45,7 @@ class AlertServiceTest {
     @Mock private QrCodeRepository qrCodeRepo;
     @Mock private GlobalAgentPoolRepository poolRepo;
     @Mock private StringRedisTemplate redisTemplate;
+    @Mock private ValueOperations<String, String> valueOps;
     @Mock private PlatformTransactionManager transactionManager;
     @Spy private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -422,5 +425,66 @@ class AlertServiceTest {
 
         assertThat(alertService.archiveStale()).isZero();
         verify(alertRepo, never()).closeByIds(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("alertWecom48002 — 系统级低级别、不含员工、文案含次数与交接欢迎语")
+    void shouldCreateSystemLevel48002() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.increment(anyString())).thenReturn(7L);
+        when(alertRepo.findOpenByKey("wechat_48002", null, null, open)).thenReturn(List.of());
+        when(alertRepo.save(any(AgentAlert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        alertService.alertWecom48002();
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        AgentAlert a = captor.getValue();
+        assertThat(a.getAlertType()).isEqualTo("wechat_48002");
+        assertThat(a.getAgentUserid()).isNull();
+        assertThat(a.getSeverity()).isEqualTo(AgentAlert.AlertSeverity.low);
+        // 文案逐字校验：明确“不是员工权限问题”，避免运营误按员工权限逐个恢复
+        assertThat(a.getDetail()).contains("7 次").contains("交接欢迎语")
+            .contains("这不是员工权限问题").doesNotContain("无客户联系权限");
+    }
+
+    @Test
+    @DisplayName("record48002Hit — 首次自增设置 2 天 TTL，后续自增不重复设置")
+    void shouldSetTtlOnlyOnFirstIncrement() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.increment(anyString())).thenReturn(1L);
+
+        assertThat(alertService.record48002Hit()).isEqualTo(1L);
+        verify(redisTemplate).expire(anyString(), eq(Duration.ofDays(2)));
+
+        reset(redisTemplate);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.increment(anyString())).thenReturn(2L);
+
+        assertThat(alertService.record48002Hit()).isEqualTo(2L);
+        verify(redisTemplate, never()).expire(anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("record48002Hit — Redis 异常返回 -1，不抛出")
+    void shouldReturnMinusOneOnRedisFailure() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.increment(anyString())).thenThrow(new RuntimeException("down"));
+        assertThat(alertService.record48002Hit()).isEqualTo(-1L);
+    }
+
+    @Test
+    @DisplayName("alertWecom48002 — 计数不可用时文案不写 0 次")
+    void shouldNotClaimZeroWhenCounterUnavailable() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.increment(anyString())).thenThrow(new RuntimeException("down"));
+        when(alertRepo.findOpenByKey(any(), any(), any(), any())).thenReturn(List.of());
+        when(alertRepo.save(any(AgentAlert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        alertService.alertWecom48002();
+
+        ArgumentCaptor<AgentAlert> captor = ArgumentCaptor.forClass(AgentAlert.class);
+        verify(alertRepo).save(captor.capture());
+        assertThat(captor.getValue().getDetail()).contains("今日").doesNotContain("0 次");
     }
 }

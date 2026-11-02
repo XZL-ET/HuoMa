@@ -1097,6 +1097,11 @@ public class TransferService {
             // 导致下一轮 retryFailedGreetings 又被扫出造成重复发送
             transferRepo.saveAndFlush(transfer);
         } catch (WecomPermanentException e) {
+            // 48002 是本企业能力缺失（非单个员工权限问题），计入系统级每日一条告警；
+            // 交接欢迎语与欢迎语共享同一根因，纳入同一计数便于运营判断影响面
+            if (e.getErrcode() == 48002) {
+                alertService.alertWecom48002();
+            }
             // 永久错误（如 48002 api forbidden）不可恢复，标记已完成避免每 30 分钟无效重试
             // greetingPermanentFail=true 区分"真正发成功"和"放弃重试"，避免误导日志
             transfer.setGreetingSent(true);
