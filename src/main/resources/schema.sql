@@ -143,6 +143,15 @@ CREATE TABLE IF NOT EXISTS global_agent_pool (
     INDEX idx_sort (sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全局员工池';
 
+-- pool_allowed_department：全局员工池部门准入白名单
+CREATE TABLE IF NOT EXISTS pool_allowed_department (
+    dept_id     BIGINT       NOT NULL PRIMARY KEY COMMENT '企微部门ID',
+    dept_name   VARCHAR(100) NOT NULL COMMENT '部门名称快照（展示与审计用）',
+    created_by  VARCHAR(100) COMMENT '创建人',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_allowed_dept_name (dept_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全局员工池允许入池的企微部门';
+
 -- customer：客户
 -- 客户表
 CREATE TABLE IF NOT EXISTS customer (
