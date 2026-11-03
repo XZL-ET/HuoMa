@@ -18,6 +18,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -140,6 +141,39 @@ class AlertPageRenderTest {
         String noLinkRow = rowOf(html, "nolink-row-marker");
         org.assertj.core.api.Assertions.assertThat(noLinkRow)
             .as("无深链的行不渲染链接").doesNotContain("<a ");
+    }
+
+    @Test
+    @WithMockUser
+    @DisplayName("「全部状态」翻页链接继续带上空的 status 参数")
+    void shouldKeepAllStatusFilterOnPagination() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        List<AgentAlert> rows = java.util.stream.IntStream.range(0, 21)
+            .mapToObj(i -> AgentAlert.builder()
+                .id((long) i + 1)
+                .alertType("wechat_48002")
+                .severity(AgentAlert.AlertSeverity.low)
+                .status(AgentAlert.AlertStatus.resolved)
+                .autoAction(AgentAlert.AutoAction.none)
+                .occurrenceCount(1)
+                .createdAt(now)
+                .build())
+            .toList();
+        when(alertService.findAlerts(any(), any(), any(), any(), any(), any(), any(), pageableOfSize(20)))
+            .thenReturn(new PageImpl<>(rows, PageRequest.of(0, 20), 21));
+        when(alertService.findAlerts(any(), any(), any(), any(), any(), any(), any(), pageableOfSize(2000)))
+            .thenReturn(Page.empty());
+        when(alertService.getAlertStats()).thenReturn(stats());
+        when(triageService.buildSummary(any()))
+            .thenReturn(new TriageSummary(List.of(), List.of(), 0, 0));
+
+        String html = mockMvc.perform(get("/alerts").param("status", ""))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(html)
+            .as("翻页链接必须保留 status=all（全部状态），否则会退回默认 open 视图")
+            .containsPattern("href=\"/alerts\\?status=all[^\"]*page=1[^\"]*\"");
     }
 
     private static String rowOf(String html, String marker) {

@@ -602,13 +602,14 @@ public class AlertService {
      *   <li>其他类型不做归档（真实待办永不自动过期）</li>
      * </ul>
      *
-     * <p>归档为 {@code auto_resolved}，解决人记为 {@code auto:stale}。
+     * <p>由定时任务调用时解决人记为 {@code auto:stale}；手工触发时记为操作人。
      * 任何异常都在方法内吞掉并记日志，返回 0。</p>
      *
+     * @param resolvedBy 解决人标记
      * @return 被归档的条数
      */
     @Transactional
-    public int archiveStale() {
+    public int archiveStale(String resolvedBy) {
         try {
             List<AgentAlert> open = alertRepo.findByStatus(AgentAlert.AlertStatus.open);
             if (open == null || open.isEmpty()) {
@@ -624,13 +625,19 @@ public class AlertService {
             if (ids.isEmpty()) {
                 return 0;
             }
-            alertRepo.closeByIds(ids, AgentAlert.AlertStatus.auto_resolved, now, "auto:stale");
-            log.info("归档过期告警 {} 条", ids.size());
+            alertRepo.closeByIds(ids, AgentAlert.AlertStatus.auto_resolved, now, resolvedBy);
+            log.info("归档过期告警 {} 条（by {}）", ids.size(), resolvedBy);
             return ids.size();
         } catch (Exception e) {
             log.error("归档过期告警失败", e);
             return 0;
         }
+    }
+
+    /** 定时任务入口：解决人固定为 {@code auto:stale}。 */
+    @Transactional
+    public int archiveStale() {
+        return archiveStale("auto:stale");
     }
 
     /** 最近命中时间：优先 {@code lastSeenAt}，滚动部署遗留的 NULL 回退 {@code createdAt}。 */

@@ -10,7 +10,7 @@
               onsubmit="return confirm('只会归档 informational（系统级说明性）与已过期项，不会关闭真实待办。确定继续吗？')">
             <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
             <input type="hidden" name="page" th:value="${page}"/>
-            <input type="hidden" name="status" th:value="${statusFilter}"/>
+            <input type="hidden" name="status" th:value="${statusParam}"/>
             <input type="hidden" name="severity" th:value="${severityFilter}"/>
             <input type="hidden" name="type" th:value="${typeFilter}"/>
             <input type="hidden" name="agent" th:value="${agentFilter}"/>
@@ -246,7 +246,7 @@
                                   onsubmit="return confirm('确认将此告警标记为已解决？')">
                                 <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}"/>
                                 <input type="hidden" name="page" th:value="${page}"/>
-                                <input type="hidden" name="status" th:value="${statusFilter}"/>
+                                <input type="hidden" name="status" th:value="${statusParam}"/>
                                 <input type="hidden" name="severity" th:value="${severityFilter}"/>
                                 <input type="hidden" name="type" th:value="${typeFilter}"/>
                                 <input type="hidden" name="agent" th:value="${agentFilter}"/>
@@ -285,7 +285,7 @@
                 <!-- 上一页 -->
                 <li class="page-item" th:classappend="${alertPage.first} ? 'disabled'">
                     <th:block th:if="${!alertPage.first}">
-                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number - 1},size=${size})}">上一页</a>
+                        <a class="page-link" th:href="@{/alerts(status=${statusParam},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number - 1},size=${size})}">上一页</a>
                     </th:block>
                     <th:block th:if="${alertPage.first}">
                         <span class="page-link">上一页</span>
@@ -294,14 +294,14 @@
                 <!-- 页码 -->
                 <th:block th:each="i : ${#numbers.sequence(pageStart, pageEnd)}">
                     <li class="page-item" th:classappend="${i == alertPage.number} ? 'active'">
-                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${i},size=${size})}"
+                        <a class="page-link" th:href="@{/alerts(status=${statusParam},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${i},size=${size})}"
                            th:text="${i + 1}">1</a>
                     </li>
                 </th:block>
                 <!-- 下一页 -->
                 <li class="page-item" th:classappend="${alertPage.last} ? 'disabled'">
                     <th:block th:if="${!alertPage.last}">
-                        <a class="page-link" th:href="@{/alerts(status=${statusFilter},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number + 1},size=${size})}">下一页</a>
+                        <a class="page-link" th:href="@{/alerts(status=${statusParam},severity=${severityFilter},type=${typeFilter},agent=${agentFilter},startDate=${startDate},endDate=${endDate},page=${alertPage.number + 1},size=${size})}">下一页</a>
                     </th:block>
                     <th:block th:if="${alertPage.last}">
                         <span class="page-link">下一页</span>

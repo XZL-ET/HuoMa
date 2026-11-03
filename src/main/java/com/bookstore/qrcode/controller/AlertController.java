@@ -20,6 +20,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -44,6 +46,9 @@ import java.util.stream.Collectors;
 @RequestMapping("/alerts")
 @RequiredArgsConstructor
 public class AlertController {
+
+    /** 「全部状态」的显式参数值；空串会被 Thymeleaf 从链接中丢弃。 */
+    static final String ALL_STATUS_PARAM = "all";
 
     private final AlertService alertService;
     private final AgentRepository agentRepo;
@@ -73,19 +78,23 @@ public class AlertController {
                        @RequestParam(defaultValue = "20") int size,
                        Model model) {
 
-        // status：未传 → 默认只看 open；显式传空 → 全部；非法值当全部
+        // status：未传 → 默认只看 open；显式传空或 all → 全部；非法值当全部
         String statusValue;
         AgentAlert.AlertStatus statusFilter = null;
         if (status == null) {
             statusValue = AgentAlert.AlertStatus.open.name();
             statusFilter = AgentAlert.AlertStatus.open;
-        } else if (status.isBlank()) {
+        } else if (status.isBlank() || ALL_STATUS_PARAM.equals(status)) {
             statusValue = null;
         } else {
             statusValue = status;
             try { statusFilter = AgentAlert.AlertStatus.valueOf(status); }
             catch (IllegalArgumentException e) { /* 非法值当全部 */ }
         }
+
+        // 分页参数钳制：非法负值/超大值不能打到 PageRequest 或生成坏链接
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
 
         // 空字符串 → null
         if (severity != null && severity.isBlank()) severity = null;
@@ -101,7 +110,7 @@ public class AlertController {
         // 查询分页数据
         Page<AgentAlert> alertPage = alertService.findAlerts(
             statusFilter, severityFilter, type, agent, null,
-            startDate, endDate, PageRequest.of(page, size));
+            startDate, endDate, PageRequest.of(safePage, safeSize));
 
         // 批量加载关联数据 — 员工姓名 + 活码名称
         Set<String> userIds = alertPage.getContent().stream()
@@ -151,6 +160,8 @@ public class AlertController {
             .collect(Collectors.toMap(AlertTypeMeta::type, AlertTypeMeta::label,
                 (a, b) -> a, LinkedHashMap::new)));
         model.addAttribute("statusFilter", statusValue);
+        // 「全部状态」时 statusFilter 为 null，用 all 哨兵随分页/表单带回（Thymeleaf 会丢弃空串参数）
+        model.addAttribute("statusParam", statusValue != null ? statusValue : ALL_STATUS_PARAM);
         model.addAttribute("severityFilter", severity);
         model.addAttribute("typeFilter", type);
         model.addAttribute("agentFilter", agent);
@@ -158,8 +169,8 @@ public class AlertController {
         model.addAttribute("endDate", endDate);
         model.addAttribute("pageStart", pageStart);
         model.addAttribute("pageEnd", pageEnd);
-        model.addAttribute("page", page);
-        model.addAttribute("size", size);
+        model.addAttribute("page", safePage);
+        model.addAttribute("size", safeSize);
 
         return "alert/list";
     }
@@ -205,7 +216,8 @@ public class AlertController {
                                @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
                                RedirectAttributes redirect) {
         try {
-            int count = alertService.archiveStale();
+            String adminUser = principal != null ? principal.getName() : "system";
+            int count = alertService.archiveStale(adminUser);
             redirect.addFlashAttribute("message", "已归档 " + count + " 条可自动恢复/过期告警");
         } catch (Exception e) {
             log.error("归档过期告警失败", e);
@@ -214,17 +226,26 @@ public class AlertController {
         return buildRedirect(status, severity, type, agent, startDate, endDate, page);
     }
 
-    /** 构建保留筛选条件的重定向 URL */
+    /**
+     * 构建保留筛选条件的重定向 URL。
+     *
+     * <p>{@code status} 非 null（含空串表示「全部状态」）时必须原样带上，
+     * 否则从「全部状态」视图操作后会被重定向回默认的 open 视图。</p>
+     */
     private String buildRedirect(String status, String severity, String type,
                                   String agent, LocalDate startDate, LocalDate endDate,
                                   int page) {
-        StringBuilder sb = new StringBuilder("redirect:/alerts?page=").append(page);
-        if (status != null && !status.isBlank()) sb.append("&status=").append(status);
-        if (severity != null && !severity.isBlank()) sb.append("&severity=").append(severity);
-        if (type != null && !type.isBlank()) sb.append("&type=").append(type);
-        if (agent != null && !agent.isBlank()) sb.append("&agent=").append(agent);
+        StringBuilder sb = new StringBuilder("redirect:/alerts?page=").append(Math.max(0, page));
+        if (status != null) sb.append("&status=").append(encode(status));
+        if (severity != null && !severity.isBlank()) sb.append("&severity=").append(encode(severity));
+        if (type != null && !type.isBlank()) sb.append("&type=").append(encode(type));
+        if (agent != null && !agent.isBlank()) sb.append("&agent=").append(encode(agent));
         if (startDate != null) sb.append("&startDate=").append(startDate);
         if (endDate != null) sb.append("&endDate=").append(endDate);
         return sb.toString();
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }
