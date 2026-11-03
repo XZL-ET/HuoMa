@@ -7,7 +7,7 @@
 - 核对 SQL：`docs/ops-scripts/2026-10-29-alert-dedup-verify.sql`
 
 > 顺序不能颠倒：**先备份 → 先 ALTER（新增列可空/有默认值，旧版本代码不受影响）→ 回填 → 再部署新版本**。
-> 新版本代码依赖 `last_seen_at` / `occurrence_count` 两列，未 ALTER 就部署会启动失败。
+> 新版本代码依赖 `last_seen_at` / `occurrence_count` 两列。`ddl-auto: none` 不做启动校验，未 ALTER 也能启动并通过健康检查，问题要到运行期才暴露：`/alerts` 读取时 `Unknown column` 报 500，维护/巡检写告警时同样报错（部分被 catch 记为日志，不会让进程退出）。
 
 ## 0. 上线前基线（只读，随时可跑）
 
@@ -52,7 +52,7 @@ ALTER TABLE agent_alert
 要点：
 
 - 两列均可空或有默认值，**旧版本代码不读取它们，不受影响**，因此可以先于部署执行。
-- 新增复合索引供 upsert 查找与每小时分组使用；不加索引，归档累积后会越来越慢。
+- 新增复合索引主要供 upsert 按键查找使用（每小时维护走的是 `status='open'` 扫描，用不上以 `alert_type` 打头的索引）；不加索引，告警量增长后 upsert 会逐条全表查。
 
 ## 3. 回填 `last_seen_at`
 

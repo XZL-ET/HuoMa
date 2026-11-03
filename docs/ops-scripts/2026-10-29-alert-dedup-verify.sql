@@ -3,8 +3,9 @@
 --
 -- 库：bookstore_qrcode（生产 RDS）
 -- 说明：
---   * 本文件只有「ALTER / UPDATE」两段需要用户手工执行；其余均为只读查询，
---     上线前、上线后、日常排查随时可跑。
+--   * 本文件只有「ALTER / UPDATE」两段需要用户手工执行；其余均为只读查询。
+--     注意：涉及 last_seen_at / occurrence_count 的查询只能在 ALTER 之后跑，
+--     上线前请只执行「上线前：基线」与「字段是否已加过」两节。
 --   * ddl-auto: none，应用不会自动建列/索引；新列与新索引必须由用户先手工加，
 --     旧版本代码忽略新列，ALTER 可以先于部署执行。
 --   * 首次维护任务（应用启动即跑一次 + 每小时 :20）完成后，
@@ -65,12 +66,43 @@ FROM agent_alert
 WHERE status = 'open';
 
 -- 同一合并键不应再有多条 open（正常情况下应返回 0 行）。
--- 全局类按 (type, NULL, NULL)，其余按 (type, agent_userid, qr_code_id)。
-SELECT alert_type, agent_userid, qr_code_id, COUNT(*) AS dup_cnt
-FROM agent_alert
-WHERE status = 'open'
-  AND alert_type NOT IN ('add_fail','melt','transfer_fail','transfer_retry_exhausted_svc')
-GROUP BY alert_type, agent_userid, qr_code_id
+-- 合并键必须按代码的归一化规则构造（AlertTypeMeta.normalizeAgent / normalizeQr）：
+--   * 全局类 (type, NULL, NULL)：继承两类、各 *_stream_backlog、transfer_dlq_backlog、
+--     dlq_replay_exhausted、daily_reset_failure、deletion_report_fail、daily_anomaly_heal、wechat_48002
+--   * traffic_spike 丢弃 agent，只用 (type, NULL, qr_code_id)
+--   * 其余条件类保留 (type, agent_userid, qr_code_id)
+-- 事件类（每次发生独立记录）不参与查重；未知类型按事件类处理，若出现可能被列出，属预期。
+SELECT merge_key, COUNT(*) AS dup_cnt
+FROM (
+    SELECT CONCAT(
+        alert_type, '|',
+        COALESCE(CASE
+            WHEN alert_type = 'traffic_spike' THEN NULL
+            WHEN alert_type IN (
+                'inheritance_no_service','inheritance_ambiguous_service',
+                'callback_stream_backlog','tag_stream_backlog','datafill_stream_backlog',
+                'outbound_stream_backlog','transfer_stream_backlog','transfer_dlq_backlog',
+                'dlq_replay_exhausted','daily_reset_failure','deletion_report_fail',
+                'daily_anomaly_heal','wechat_48002'
+            ) THEN NULL
+            ELSE agent_userid
+        END, ''), '|',
+        COALESCE(CASE
+            WHEN alert_type IN (
+                'inheritance_no_service','inheritance_ambiguous_service',
+                'callback_stream_backlog','tag_stream_backlog','datafill_stream_backlog',
+                'outbound_stream_backlog','transfer_stream_backlog','transfer_dlq_backlog',
+                'dlq_replay_exhausted','daily_reset_failure','deletion_report_fail',
+                'daily_anomaly_heal','wechat_48002'
+            ) THEN NULL
+            ELSE qr_code_id
+        END, '')
+    ) AS merge_key
+    FROM agent_alert
+    WHERE status = 'open'
+      AND alert_type NOT IN ('add_fail','melt','transfer_fail','transfer_retry_exhausted_svc')
+) t
+GROUP BY merge_key
 HAVING COUNT(*) > 1
 ORDER BY dup_cnt DESC;
 
