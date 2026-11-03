@@ -134,6 +134,19 @@ public class WecomApiMockConfig {
             throw new RuntimeException(e);
         }
 
+        // listDepartments: 返回部门树（校区 100 含子部门 101/102，后勤 200）
+        try {
+            JsonNode deptResp = objectMapper.readTree(
+                    "{\"department\":[" +
+                    "{\"id\":100,\"name\":\"校区\",\"parentid\":0}," +
+                    "{\"id\":101,\"name\":\"校区A\",\"parentid\":100}," +
+                    "{\"id\":102,\"name\":\"校区B\",\"parentid\":100}," +
+                    "{\"id\":200,\"name\":\"后勤\",\"parentid\":0}]}");
+            when(mock.listDepartments(null)).thenReturn(deptResp);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
         // ---- 标签 API ----
 
         // getCorpTagList: 返回企业标签组
@@ -235,6 +248,14 @@ public class WecomApiMockConfig {
                 "{\"userid\":\"agent4\",\"name\":\"Agent Four\",\"department\":[1],\"status\":1,\"mobile\":\"13800000004\"}," +
                 "{\"userid\":\"agent5\",\"name\":\"Agent Five\",\"department\":[1],\"status\":1,\"mobile\":\"13800000005\"}" +
                 "]}"));
+
+            // listDepartments
+            when(mock.listDepartments(null)).thenReturn(om.readTree(
+                "{\"department\":[" +
+                "{\"id\":100,\"name\":\"校区\",\"parentid\":0}," +
+                "{\"id\":101,\"name\":\"校区A\",\"parentid\":100}," +
+                "{\"id\":102,\"name\":\"校区B\",\"parentid\":100}," +
+                "{\"id\":200,\"name\":\"后勤\",\"parentid\":0}]}"));
 
             // getCorpTagList
             when(mock.getCorpTagList()).thenReturn(om.readTree(

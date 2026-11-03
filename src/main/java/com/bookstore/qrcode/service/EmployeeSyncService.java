@@ -57,6 +57,7 @@ public class EmployeeSyncService {
     private final ObjectMapper objectMapper;
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
     private final ScheduledJobGuard jobGuard;
+    private final DepartmentWhitelistService whitelist;
 
     /** 接待员默认日上限，可通过 app.agent.daily-max-default 配置 */
     @Value("${app.agent.daily-max-default:150}")
@@ -399,6 +400,27 @@ public class EmployeeSyncService {
         // 3. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
         Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
+        // 3.5 白名单启用时清理已漂移到允许部门之外的池记录
+        if (whitelist.isActive() && !pooledUserIds.isEmpty()) {
+            List<GlobalAgentPool> pooled = poolRepo.findByAgentUseridIn(new ArrayList<>(pooledUserIds));
+            Map<String, Employee> empMap = employeeRepo.findByUseridIn(pooledUserIds).stream()
+                .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
+            Set<Long> allowed = whitelist.loadAllowedDeptIds(false);
+            List<GlobalAgentPool> drifted = pooled.stream()
+                .filter(p -> {
+                    Employee e = empMap.get(p.getAgentUserid());
+                    return e == null || !whitelist.isEmployeeAllowed(e, allowed);
+                })
+                .toList();
+            if (!drifted.isEmpty()) {
+                poolRepo.deleteAll(drifted);
+                pooledUserIds.removeAll(drifted.stream()
+                    .map(GlobalAgentPool::getAgentUserid).toList());
+                log.info("全局池同步：移除 {} 个不在部门准入范围的池记录: {}", drifted.size(),
+                    drifted.stream().map(GlobalAgentPool::getAgentUserid).toList());
+            }
+        }
+
         // 在职但不在池中的员工（排除企微侧明确不可用的：已禁用/未激活/已离职）
         List<Employee> activeNotInPool = employeeRepo.findAllByActiveTrueOrderByName().stream()
             .filter(e -> !pooledUserIds.contains(e.getUserid()))
@@ -436,6 +458,12 @@ public class EmployeeSyncService {
             if (activeNotInPool.size() < beforeSvc) {
                 log.info("全局池同步：排除 {} 个纯服务老师员工",
                     beforeSvc - activeNotInPool.size());
+            }
+            // 排除不在部门准入范围的员工（白名单未启用时原样返回）
+            int beforeDept = activeNotInPool.size();
+            activeNotInPool = whitelist.filterAllowedEmployees(activeNotInPool);
+            if (activeNotInPool.size() < beforeDept) {
+                log.info("全局池同步：排除 {} 个不在部门准入范围的员工", beforeDept - activeNotInPool.size());
             }
         }
 
