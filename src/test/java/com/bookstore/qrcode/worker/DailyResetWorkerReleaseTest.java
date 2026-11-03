@@ -1,11 +1,15 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.Agent;
+import com.bookstore.qrcode.entity.Employee;
+import com.bookstore.qrcode.entity.PoolAllowedDepartment;
 import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.integration.BaseIntegrationTest;
 import com.bookstore.qrcode.integration.WecomApiMockConfig;
 import com.bookstore.qrcode.repository.AgentRepository;
+import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +34,8 @@ class DailyResetWorkerReleaseTest extends BaseIntegrationTest {
     @Autowired private QrAgentRepository qrAgentRepo;
     @Autowired private QrCodeRepository qrCodeRepo;
     @Autowired private AgentRepository agentRepo;
+    @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
+    @Autowired private EmployeeRepository employeeRepo;
 
     private QrCode qr;
 
@@ -38,6 +44,8 @@ class DailyResetWorkerReleaseTest extends BaseIntegrationTest {
         qrAgentRepo.deleteAll();
         qrCodeRepo.deleteAll();
         agentRepo.deleteAll();
+        whitelistRepo.deleteAll();
+        employeeRepo.deleteAll();
 
         qr = qrCodeRepo.save(QrCode.builder()
             .schoolName("释放测试学校").schoolId("SCH-RELEASE")
@@ -117,5 +125,27 @@ class DailyResetWorkerReleaseTest extends BaseIntegrationTest {
 
         QrAgent after = qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "agent_temp").orElseThrow();
         assertThat(after.getStatus()).isEqualTo(QrAgent.AgentStatus.removed);
+    }
+
+    @Test
+    @DisplayName("每日重置：无关接待员 full 不复活，服务老师不受影响")
+    void doesNotReviveDisallowedReceptionist() {
+        whitelistRepo.deleteAll();
+        whitelistRepo.save(PoolAllowedDepartment.builder()
+            .deptId(100L).deptName("校区").createdBy("tester").build());
+        employeeRepo.save(Employee.builder().userid("bad").name("bad")
+            .department("[200]").active(true).wechatStatus(1).build());
+        agentRepo.save(Agent.builder().userid("bad").name("bad")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId()).agentUserid("bad")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.full).build());
+
+        dailyResetWorker.recoverFullAgents();
+
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.removed));
     }
 }

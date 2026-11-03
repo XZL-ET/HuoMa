@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.worker;
 
 import com.bookstore.qrcode.entity.AgentAlert;
+import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
@@ -9,6 +10,7 @@ import com.bookstore.qrcode.repository.OperationLogRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
@@ -19,9 +21,13 @@ import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -35,6 +41,7 @@ import static org.mockito.Mockito.*;
  * 同时计数回退（进程重启归零）必须重建基线，否则基线永远高于现值、此后彻底沉默。</p>
  */
 @DisplayName("巡检的漏处理计数增量告警")
+@ExtendWith(MockitoExtension.class)
 class PatrolWorkerTest {
 
     /** 取 LEAK_ALERT_THRESHOLDS 里阈值为 10 的计数作代表，增量好凑 */
@@ -46,6 +53,10 @@ class PatrolWorkerTest {
     private LeakMetrics leakMetrics;
     private PatrolWorker worker;
     private Method alertOnSilentLeaks;
+
+    @Mock private GlobalAgentPoolRepository poolRepo;
+    @Mock private EmployeeSyncService employeeSyncService;
+    @Mock private DepartmentWhitelistService whitelistService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -107,6 +118,20 @@ class PatrolWorkerTest {
             eq(AgentAlert.AlertSeverity.high), any(), any(), any());
     }
 
+    @Test
+    @DisplayName("允许范围内已无人可补时，池枯竭不再告警")
+    void suppressesAlertWhenNoAllowedCandidates() {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
+        when(whitelistService.isActive()).thenReturn(true);
+        when(poolRepo.findAllAgentUserids()).thenReturn(List.of());
+        when(whitelistService.countAllowedCandidatesNotInPool(any())).thenReturn(0L);
+
+        worker.checkGlobalPoolLow();
+
+        verify(alertService, never()).alertEmptyBackup(any(), any());
+    }
+
     // ==================== 小工具 ====================
 
     private void invoke() throws Exception {
@@ -142,12 +167,12 @@ class PatrolWorkerTest {
     private PatrolWorker buildWorker(LeakMetrics metrics) {
         return new PatrolWorker(
             mock(QrAgentRepository.class),
-            mock(GlobalAgentPoolRepository.class),
+            poolRepo,
             mock(QrCodeRepository.class),
             alertService,
             mock(RateLimiterService.class),
             mock(MessageGuardService.class),
-            mock(EmployeeSyncService.class),
+            employeeSyncService,
             mock(EmployeeRepository.class),
             mock(AgentRepository.class),
             mock(WecomApiClient.class),
@@ -155,6 +180,7 @@ class PatrolWorkerTest {
             mock(CustomerTransferRepository.class),
             mock(QrCodeService.class),
             metrics,
-            mock(ScheduledJobGuard.class));
+            mock(ScheduledJobGuard.class),
+            whitelistService);
     }
 }

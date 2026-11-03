@@ -60,6 +60,7 @@ public class PatrolWorker {
     private final QrCodeService qrCodeService;
     private final LeakMetrics leakMetrics;
     private final ScheduledJobGuard jobGuard;
+    private final DepartmentWhitelistService whitelist;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
@@ -382,7 +383,7 @@ public class PatrolWorker {
      *
      * <p>与旧逻辑不同，全局池是所有活码共享的，无需按活码逐条检查。</p>
      */
-    private void checkGlobalPoolLow() {
+    void checkGlobalPoolLow() {
         long standbyCount = poolRepo.countByStatus(
             GlobalAgentPool.PoolStatus.standby);
         if (standbyCount >= 10) {
@@ -402,12 +403,25 @@ public class PatrolWorker {
             log.error("巡检自动补充失败", e);
         }
 
+        // 部门准入门槛下，已无人可补时（白名单内候选为 0）属于预期状态，不再告警
+        boolean whitelistActive = whitelist.isActive();
+        long allowedCandidates = whitelistActive
+            ? whitelist.countAllowedCandidatesNotInPool(new HashSet<>(poolRepo.findAllAgentUserids()))
+            : -1L;
+        String suffix = whitelistActive
+            ? "（受部门准入限制，可入池上限 " + allowedCandidates + " 人）" : "";
+
         // 补充后仍不足，发送告警
         if (standbyCount == 0) {
-            alertService.alertEmptyBackup(null, "全局后备池完全枯竭！已尝试自动补充但无新员工可加");
+            if (whitelistActive && allowedCandidates == 0) {
+                log.info("全局后备池枯竭，但部门准入范围内已无候选可补，跳过告警{}", suffix);
+            } else {
+                alertService.alertEmptyBackup(null,
+                    "全局后备池完全枯竭！已尝试自动补充但无新员工可加" + suffix);
+            }
         } else if (standbyCount < 5) {
             alertService.alertEmptyBackup(null,
-                "全局后备池严重不足: 仅剩 " + standbyCount + " 人，已自动补充");
+                "全局后备池严重不足: 仅剩 " + standbyCount + " 人，已自动补充" + suffix);
         }
     }
 
