@@ -266,11 +266,11 @@ class PatrolWorkerTest {
     }
 
     @Test
-    @DisplayName("DLQ 重放无 exhausted → 关闭 dlq_replay_exhausted")
+    @DisplayName("DLQ 完整扫描且无 exhausted → 关闭 dlq_replay_exhausted")
     void shouldResolveDlqExhausted() throws Exception {
         when(jobGuard.firstWithin(anyString(), any())).thenReturn(true);
         when(messageGuardService.replayAllDlq(anyString(), eq(true)))
-            .thenReturn(new MessageGuardService.ReplaySummary(0, 0, 0));
+            .thenReturn(new MessageGuardService.ReplaySummary(0, 0, 0, true));
 
         invoke("autoReplayDlq");
 
@@ -278,11 +278,23 @@ class PatrolWorkerTest {
     }
 
     @Test
+    @DisplayName("DLQ 扫描不完整（Redis 故障等）→ exhausted=0 不得关闭告警")
+    void shouldKeepDlqExhaustedWhenScanIncomplete() throws Exception {
+        when(jobGuard.firstWithin(anyString(), any())).thenReturn(true);
+        when(messageGuardService.replayAllDlq(anyString(), eq(true)))
+            .thenReturn(new MessageGuardService.ReplaySummary(0, 0, 0, false));
+
+        invoke("autoReplayDlq");
+
+        verify(alertService, never()).resolveOpenByType("dlq_replay_exhausted");
+    }
+
+    @Test
     @DisplayName("DLQ 重放仍有 exhausted → 不关闭 dlq_replay_exhausted")
     void shouldKeepDlqExhaustedWhenStillExhausted() throws Exception {
         when(jobGuard.firstWithin(anyString(), any())).thenReturn(true);
         when(messageGuardService.replayAllDlq(anyString(), eq(true)))
-            .thenReturn(new MessageGuardService.ReplaySummary(0, 2, 0));
+            .thenReturn(new MessageGuardService.ReplaySummary(0, 2, 0, true));
 
         invoke("autoReplayDlq");
 

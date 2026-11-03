@@ -10,7 +10,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -673,8 +672,10 @@ public class AlertService {
         LocalDateTime lastSeen = lastSeenOf(alert);
         LocalDateTime createdAt = alert.getCreatedAt();
         return switch (type) {
-            case "daily_anomaly_heal" -> before(createdAt, now.minusHours(24));
-            case "traffic_spike", "wechat_48002" -> before(lastSeen, now.minusHours(24));
+            // 条件类每天/每轮 upsert 同一行，createdAt 永远停在首次创建；按 createdAt 判定
+            // 会让持续刷新的行在首次创建满 24h 后被归档（隔天的自愈结果 13 分钟后就消失）。
+            case "daily_anomaly_heal", "traffic_spike", "wechat_48002" ->
+                before(lastSeen, now.minusHours(24));
             case "qr_agent_anomaly", "dlq_replay_exhausted", "deletion_report_fail" ->
                 before(lastSeen, now.minusDays(7));
             case "employee_departed_service" -> before(lastSeen, now.minusDays(30));
@@ -921,37 +922,4 @@ public class AlertService {
         });
     }
 
-    /**
-     * 一键解决所有未处理告警，分页遍历直到全部处理完。
-     * <p>
-     * 每批处理 500 条并立即 flush，确保下一轮查询不会重复捞出已解决的记录。
-     * 超大数量（万级）场景下有性能考虑，需注意单次事务时长。
-     * </p>
-     *
-     * @param adminUser 操作的管理员账号
-     * @return 实际解决的告警数量
-     */
-    @Transactional
-    public int resolveAllAlerts(String adminUser) {
-        LocalDateTime now = LocalDateTime.now();
-        int count = 0;
-        int maxIterations = 200; // 安全上限：最多 200 轮 × 500 = 100,000 条
-        Page<AgentAlert> page;
-        do {
-            page = alertRepo.findByStatus(AgentAlert.AlertStatus.open,
-                PageRequest.of(0, 500));
-            for (AgentAlert alert : page.getContent()) {
-                alert.setStatus(AgentAlert.AlertStatus.resolved);
-                alert.setResolvedBy(adminUser);
-                alert.setResolvedAt(now);
-                alertRepo.save(alert);
-                count++;
-            }
-            alertRepo.flush(); // 确保下一轮查询能看到本轮的更新
-        } while (page.hasNext() && --maxIterations > 0);
-        if (count > 0) {
-            log.info("批量解决告警: {} 条，操作人: {}", count, adminUser);
-        }
-        return count;
-    }
 }

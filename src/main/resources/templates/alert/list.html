@@ -33,7 +33,7 @@
                         <span class="badge bg-danger fs-6" th:text="${stats.openCount}">0</span>
                         <small class="text-muted ms-1">未处理</small>
                         <small class="text-muted d-block"
-                               th:text="'需处理 ' + ${triage.actionableCount()} + ' · 可归档 ' + ${triage.informationalCount()}"></small>
+                               th:text="'需处理 ' + ${triage.actionableCount()} + ' · 说明性 ' + ${triage.informationalCount()}"></small>
                     </div>
                     <div>
                         <span class="badge bg-success fs-6" th:text="${stats.resolvedCount}">0</span>
@@ -254,7 +254,7 @@
                                 <input type="hidden" name="endDate" th:value="${endDate}"/>
                                 <button type="submit" class="btn btn-outline-success btn-sm"
                                         th:title="${alertConditional ? '条件仍在时下一轮会重新出现，请确认已处理后标记' : '标记为已解决'}">
-                                    ✔
+                                    ✔ 标记已处理
                                 </button>
                             </form>
                             <span th:unless="${alert.status.name() == 'open'}" class="text-muted small">-</span>

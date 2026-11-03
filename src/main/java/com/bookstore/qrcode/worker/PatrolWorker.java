@@ -205,8 +205,9 @@ public class PatrolWorker {
             if (summary.exhausted() > 0) {
                 log.warn("死信队列 {} 条已达自动重放上限，等待人工处理", summary.exhausted());
                 alertDlqReplayExhausted(summary.exhausted());
-            } else {
-                // 本轮重放后已无「重放耗尽」消息 —— 条件恢复，关闭历史告警
+            } else if (summary.scanComplete()) {
+                // 完整扫过且已无「重放耗尽」消息 —— 条件恢复，关闭历史告警。
+                // 扫描不完整时 exhausted=0 只代表「没看到」，不能据此关闭。
                 alertService.resolveOpenByType("dlq_replay_exhausted");
             }
         } catch (Exception e) {

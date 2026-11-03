@@ -400,6 +400,21 @@ class AlertServiceTest {
     }
 
     @Test
+    @DisplayName("archiveStale — 每日自愈按最近发生判定：持续刷新的行不归档，真正停更的才归档")
+    void shouldJudgeDailyHealByLastSeen() {
+        AgentAlert refreshed = AgentAlert.builder().id(1L).alertType("daily_anomaly_heal").status(open)
+            .occurrenceCount(20).createdAt(LocalDateTime.now().minusDays(10))
+            .lastSeenAt(LocalDateTime.now().minusHours(1)).build();
+        AgentAlert stopped = AgentAlert.builder().id(2L).alertType("daily_anomaly_heal").status(open)
+            .occurrenceCount(3).createdAt(LocalDateTime.now().minusDays(10))
+            .lastSeenAt(LocalDateTime.now().minusDays(2)).build();
+        when(alertRepo.findByStatus(open)).thenReturn(List.of(refreshed, stopped));
+
+        assertThat(alertService.archiveStale()).isEqualTo(1);
+        verify(alertRepo).closeByIds(eq(List.of(2L)), eq(auto_resolved), any(), eq("auto:stale"));
+    }
+
+    @Test
     @DisplayName("archiveStale — 只清旧文案的无权限 48002，不误清自愈告警")
     void shouldArchiveOnlyLegacy48002Text() {
         AgentAlert legacy = AgentAlert.builder().id(1L).alertType("wechat_unavailable").status(open)

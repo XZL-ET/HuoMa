@@ -402,8 +402,11 @@ public class MessageGuardService {
      * @param exhausted 已达自动重放上限、留在 DLQ 等人工处理的条数（本轮额度用尽后仍如实统计，
      *                  调用方据此告警，不能因为「这轮没轮到重放」就被略过）
      * @param deferred  因本轮额度用尽而推迟到下一轮的条数（非零表示 DLQ 还没排空）
+     * @param scanComplete 是否完整扫过 DLQ。读取或逐条处理抛异常时为 {@code false}，
+     *                     此时 {@code exhausted == 0} 只代表「没看到」，不代表「没有达限消息」，
+     *                     调用方不得据此关闭告警。
      */
-    public record ReplaySummary(int replayed, int exhausted, int deferred) {}
+    public record ReplaySummary(int replayed, int exhausted, int deferred, boolean scanComplete) {}
 
     /**
      * 将 DLQ 中的所有消息重放到指定 Stream，然后逐条删除（防丢消息）。
@@ -507,9 +510,10 @@ public class MessageGuardService {
                 gcReplayCounters(presentCounters);
             }
         } catch (Exception e) {
+            scanComplete = false;
             log.error("DLQ 全量重放失败: target={}", targetStreamKey, e);
         }
-        return new ReplaySummary(replayed, exhausted, deferred);
+        return new ReplaySummary(replayed, exhausted, deferred, scanComplete);
     }
 
     /**
