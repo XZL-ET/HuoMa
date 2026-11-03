@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<!-- 部门准入配置页 — 选择允许进入全局员工池的部门，预览影响后确认应用 -->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='员工管理', content=~{::main})}">
+<main>
+    <!-- 页面标题 -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">🏢 部门准入</h4>
+        <a th:href="@{/agents}" class="btn btn-sm btn-outline-secondary">← 返回员工管理</a>
+    </div>
+
+    <!-- 结果消息 -->
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show py-2" role="alert">
+        <span th:text="${message}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- 漂移提示：仍有无关部门接待员在活码上 -->
+    <div th:if="${driftedReceptionistCount != null && driftedReceptionistCount > 0}"
+         class="alert alert-warning" role="alert">
+        ⚠️ 仍有 <strong th:text="${driftedReceptionistCount}">0</strong> 名无关部门接待员在活码上，建议重新预览并应用。
+    </div>
+
+    <!-- 当前白名单状态 -->
+    <div class="card p-3 mb-3">
+        <div class="d-flex align-items-center gap-2">
+            <h5 class="mb-0">白名单状态</h5>
+            <span th:if="${whitelistActive}" class="badge bg-success">已启用</span>
+            <span th:unless="${whitelistActive}" class="badge bg-secondary">未启用（所有员工可入池）</span>
+        </div>
+        <div class="mt-2" th:if="${!allowedDepts.isEmpty()}">
+            <small class="text-muted">当前允许部门：</small>
+            <span th:each="d : ${allowedDepts}" class="badge bg-light text-dark border me-1"
+                  th:text="${d.deptName} + ' (#' + ${d.deptId} + ')'"></span>
+        </div>
+        <div class="mt-2 text-muted small" th:if="${allowedDepts.isEmpty()}">
+            当前未设置准入部门，所有员工均可进入全局员工池。
+        </div>
+    </div>
+
+    <!-- 部门选择 + 确认应用表单 -->
+    <form id="deptForm" class="card p-3 mb-3"
+          th:action="@{/agents/departments/apply}" method="post"
+          onsubmit="return confirm('确认应用部门准入并执行清理？')">
+        <input type="hidden" id="csrfToken" th:value="${_csrf.token}">
+        <input type="hidden" id="csrfHeader" th:value="${_csrf.headerName}">
+
+        <h5>选择部门 <small class="text-muted">（含所选部门的全部子部门）</small></h5>
+        <div class="border rounded p-2 mb-2" style="max-height: 420px; overflow-y: auto;">
+            <div th:if="${deptOptions.isEmpty()}" class="text-muted small">
+                部门树不可用，请确认企微通讯录接口正常后刷新页面。
+            </div>
+            <div th:each="opt : ${deptOptions}" class="form-check"
+                 th:style="|padding-left:${20 + opt.depth * 20}px|">
+                <input class="form-check-input" type="checkbox" name="deptIds"
+                       th:id="'dept-' + ${opt.id}" th:value="${opt.id}"
+                       th:checked="${selectedIds.contains(opt.id)}">
+                <label class="form-check-label" th:for="'dept-' + ${opt.id}">
+                    <span th:text="${opt.name}">部门</span>
+                    <small class="text-muted" th:if="${opt.descendantCount > 0}"
+                           th:text="'（含 ' + ${opt.descendantCount} + ' 个子部门）'"></small>
+                </label>
+            </div>
+        </div>
+
+        <div class="d-flex gap-2">
+            <button type="button" id="previewBtn" class="btn btn-outline-primary">🔍 预览影响</button>
+            <button type="submit" class="btn btn-danger"
+                    th:disabled="${deptOptions.isEmpty()}">✅ 确认应用</button>
+        </div>
+        <small class="text-muted mt-2 d-block">
+            💡 应用后会立即把不在白名单部门内的员工移出员工池，并从活码撤下无关接待员。
+        </small>
+    </form>
+
+    <!-- 预览结果 -->
+    <div id="previewResult" class="card p-3 mb-3" style="display:none;">
+        <h5>预览结果</h5>
+        <div class="alert alert-info py-2 mb-3">
+            ℹ️ 预览与执行可能有偏差，以确认执行时为准。
+        </div>
+        <div id="previewDetails"></div>
+    </div>
+
+    <!-- 清空白名单并停用 -->
+    <div class="mt-4">
+        <form th:action="@{/agents/departments/disable}" method="post" class="d-inline"
+              onsubmit="return confirm('确认清空部门准入白名单？清空后所有员工重新允许进入员工池。')">
+            <button type="submit" class="btn btn-outline-danger"
+                    th:disabled="${!whitelistActive}">🗑️ 清空白名单并停用</button>
+        </form>
+        <small class="text-muted ms-2">清空后部门准入功能停用，所有员工可进入员工池。</small>
+    </div>
+
+    <script th:inline="javascript">
+        (function () {
+            var form = document.getElementById('deptForm');
+            var previewBtn = document.getElementById('previewBtn');
+            var resultBox = document.getElementById('previewResult');
+            var details = document.getElementById('previewDetails');
+            if (!form || !previewBtn || !resultBox || !details) return;
+
+            function selectedIds() {
+                return Array.prototype.map.call(
+                    form.querySelectorAll('input[name="deptIds"]:checked'),
+                    function (el) { return el.value; });
+            }
+
+            function esc(value) {
+                if (value === null || value === undefined) return '';
+                var div = document.createElement('div');
+                div.textContent = String(value);
+                return div.innerHTML;
+            }
+
+            function listHtml(items, renderItem, emptyText) {
+                if (!items || items.length === 0) {
+                    return '<li class="text-muted">' + emptyText + '</li>';
+                }
+                return items.map(function (item) {
+                    return '<li>' + renderItem(item) + '</li>';
+                }).join('');
+            }
+
+            function showError(msg) {
+                details.innerHTML = '<div class="alert alert-danger py-2">'
+                    + esc(msg) + '</div>';
+            }
+
+            function renderPreview(data) {
+                var poolRemovals = data.poolRemovals || [];
+                var qrRemovals = data.qrRemovals || [];
+                var noDept = data.noDepartmentEmployees || [];
+                var warnings = data.warnings || [];
+                var parts = [];
+
+                parts.push('<div class="mb-3">应用后白名单：'
+                    + (data.active
+                        ? '<span class="badge bg-success">启用</span>'
+                        : '<span class="badge bg-secondary">停用</span>')
+                    + '；移出池 <strong>' + poolRemovals.length + '</strong> 人；'
+                    + '撤人活码 <strong>' + qrRemovals.length + '</strong> 个；'
+                    + '无部门员工 <strong>' + noDept.length + '</strong> 人。</div>');
+
+                if (data.serviceBindingsExempt > 0) {
+                    parts.push('<div class="text-muted small mb-2">服务老师豁免：'
+                        + data.serviceBindingsExempt + ' 个绑定不会撤下。</div>');
+                }
+
+                parts.push('<h6>移出员工池（' + poolRemovals.length + '）</h6>');
+                parts.push('<ul class="small">'
+                    + listHtml(poolRemovals, function (p) {
+                        return '• ' + esc(p.name) + '（' + esc(p.userid)
+                            + '，部门 ' + esc(p.departmentId) + '，状态 '
+                            + esc(p.poolStatus) + '）';
+                    }, '无')
+                    + '</ul>');
+
+                parts.push('<h6>活码撤人（' + qrRemovals.length + '）</h6>');
+                parts.push('<ul class="small">'
+                    + listHtml(qrRemovals, function (q) {
+                        var members = (q.members || []).map(function (m) {
+                            return esc(m.name) + '（' + esc(m.userid) + '）';
+                        }).join('、');
+                        var badge = q.needsBackfill
+                            ? (q.poolCanBackfill
+                                ? '<span class="badge bg-warning text-dark ms-1">需补位·池内可补</span>'
+                                : '<span class="badge bg-danger ms-1">需补位·池内无人</span>')
+                            : '';
+                        return '• 活码 ' + esc(q.schoolName) + '（#' + esc(q.qrCodeId) + '）：'
+                            + (members || '无') + badge;
+                    }, '无')
+                    + '</ul>');
+
+                parts.push('<h6>无部门员工（' + noDept.length + '）</h6>');
+                parts.push('<ul class="small">'
+                    + listHtml(noDept, function (e) {
+                        return '• ' + esc(e.name) + '（' + esc(e.userid) + '）';
+                    }, '无')
+                    + '</ul>');
+
+                if (warnings.length > 0) {
+                    parts.push('<div class="alert alert-warning py-2 mt-2"><strong>提示：</strong>'
+                        + '<ul class="mb-0 small">'
+                        + listHtml(warnings, function (w) { return esc(w); }, '')
+                        + '</ul></div>');
+                }
+
+                details.innerHTML = parts.join('');
+            }
+
+            previewBtn.addEventListener('click', function () {
+                var ids = selectedIds();
+                resultBox.style.display = 'block';
+                if (ids.length === 0) {
+                    showError('请至少选择一个部门');
+                    return;
+                }
+
+                var body = new URLSearchParams();
+                ids.forEach(function (id) { body.append('deptIds', id); });
+
+                var csrfToken = document.getElementById('csrfToken').value;
+                var csrfHeader = document.getElementById('csrfHeader').value;
+
+                previewBtn.disabled = true;
+                details.innerHTML = '<div class="text-muted">预览中…</div>';
+
+                var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+                if (csrfHeader && csrfToken) {
+                    headers[csrfHeader] = csrfToken;
+                }
+
+                fetch('/agents/departments/preview', {
+                    method: 'POST',
+                    headers: headers,
+                    body: body.toString()
+                }).then(function (resp) {
+                    return resp.json().then(function (data) {
+                        return { ok: resp.ok, data: data };
+                    });
+                }).then(function (r) {
+                    if (!r.ok) {
+                        showError((r.data && r.data.error) || '预览失败，请稍后重试');
+                        return;
+                    }
+                    renderPreview(r.data);
+                }).catch(function () {
+                    showError('预览请求失败，请稍后重试');
+                }).finally(function () {
+                    previewBtn.disabled = false;
+                });
+            });
+        })();
+    </script>
+</main>
+</html>
