@@ -4,6 +4,7 @@ import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.PoolAllowedDepartment;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
+import com.bookstore.qrcode.wecom.WecomApiException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,9 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -123,5 +126,33 @@ class DepartmentWhitelistServiceTest {
                 && list.get(0).getDeptName().equals("校区")
                 && list.get(0).getCreatedBy().equals("tester");
         }));
+    }
+
+    @Test
+    @DisplayName("部门树 API 失败 → replaceWhitelist 抛 DeptTreeUnavailableException 且不落库")
+    void replaceWhitelistWrapsTreeFailure() {
+        when(departmentService.loadDeptTree())
+            .thenThrow(new WecomApiException(500, "down", null));
+
+        assertThatThrownBy(() -> service.replaceWhitelist(List.of(1L), "tester"))
+            .isInstanceOf(DepartmentWhitelistService.DeptTreeUnavailableException.class);
+
+        verify(repo, never()).deleteAll();
+        verify(repo, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("department 为字面量 \"null\" → 不允许")
+    void literalNullDepartmentIsDisallowed() {
+        Employee emp = Employee.builder().userid("u1").department("null").build();
+
+        assertThat(service.isEmployeeAllowed(emp, Set.of(1L))).isFalse();
+    }
+
+    @Test
+    @DisplayName("未启用时 filter 接受 null 集合 → 返回空集合")
+    void filterAllowsNullWhenInactive() {
+        assertThat(service.filterAllowedEmployees(null)).isEmpty();
+        assertThat(service.filterAllowedUserids(null)).isEmpty();
     }
 }

@@ -166,6 +166,9 @@ public class DepartmentWhitelistService {
      * @return 允许的员工列表；白名单未启用时原样返回副本
      */
     public List<Employee> filterAllowedEmployees(Collection<Employee> employees) {
+        if (employees == null) {
+            return List.of();
+        }
         if (!isActive()) {
             return new ArrayList<>(employees);
         }
@@ -186,6 +189,9 @@ public class DepartmentWhitelistService {
      * @return 允许的 userid 集合；白名单未启用时原样返回副本
      */
     public Set<String> filterAllowedUserids(Collection<String> userids) {
+        if (userids == null) {
+            return Set.of();
+        }
         if (!isActive()) {
             return new LinkedHashSet<>(userids);
         }
@@ -245,7 +251,12 @@ public class DepartmentWhitelistService {
         if (deptIds == null || deptIds.isEmpty()) {
             throw new IllegalArgumentException("至少选择一个部门");
         }
-        Map<Long, DepartmentService.DeptNode> tree = departmentService.loadDeptTree();
+        Map<Long, DepartmentService.DeptNode> tree;
+        try {
+            tree = departmentService.loadDeptTree();
+        } catch (Exception e) {
+            throw new DeptTreeUnavailableException("部门树拉取失败", e);
+        }
         if (tree == null || tree.isEmpty()) {
             throw new DeptTreeUnavailableException("部门树拉取失败: 部门树为空");
         }
