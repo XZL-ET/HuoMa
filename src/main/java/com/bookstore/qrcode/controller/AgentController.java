@@ -3,6 +3,7 @@ package com.bookstore.qrcode.controller;
 import com.bookstore.qrcode.dto.AllEmployeeRow;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
@@ -53,6 +54,7 @@ public class AgentController {
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
     private final OperationLogService operationLogService;
+    private final DepartmentWhitelistService whitelist;
 
     /** 默认接待员日限，与 {@code app.agent.daily-max-default} 对齐 */
     @Value("${app.agent.daily-max-default:150}")
@@ -283,6 +285,7 @@ public class AgentController {
 
         List<String> restoredCodes = new ArrayList<>();      // 本次恢复的活码名称
         List<String> otherCodes = new ArrayList<>();         // 仍在码上的活码名称
+        List<String> skippedByWhitelist = new ArrayList<>(); // 按部门准入跳过的活码名称
         Set<Long> syncedQrIds = new HashSet<>();             // 需要同步到企微的活码 ID
 
         for (QrAgent qa : qrAgents) {
@@ -296,6 +299,11 @@ public class AgentController {
                 // 防止重复：同一活码已有 active 记录则跳过
                 if (alreadyActiveQrIds.contains(qa.getQrCodeId())) {
                     otherCodes.add(qrName + "(已在码上)");
+                    continue;
+                }
+                if (qa.getRole() == QrAgent.AgentRole.receptionist
+                    && whitelist.isActive() && !whitelist.isAllowed(userid)) {
+                    skippedByWhitelist.add(qrName);
                     continue;
                 }
                 QrAgent.AgentStatus prevQaStatus = qa.getStatus();
@@ -353,6 +361,9 @@ public class AgentController {
         if (!otherCodes.isEmpty()) {
             msg.append("；关联活码：");
             msg.append(String.join("、", otherCodes));
+        }
+        if (!skippedByWhitelist.isEmpty()) {
+            msg.append("；按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
         }
         if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
             msg.append("；已自动加入全局池");

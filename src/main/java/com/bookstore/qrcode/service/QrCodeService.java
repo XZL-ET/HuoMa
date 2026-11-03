@@ -101,6 +101,8 @@ public class QrCodeService {
     @Qualifier("batchExecutor")
     private final Executor batchExecutor;
 
+    private final DepartmentWhitelistService whitelist;
+
     // 自注入代理：解决 executeBatchImport → create() 的 @Transactional 自调用失效问题
     @org.springframework.beans.factory.annotation.Autowired
     @Lazy
@@ -796,6 +798,9 @@ public class QrCodeService {
     @Transactional
     public void addAgent(Long qrCodeId, String agentUserid) {
         getById(qrCodeId);
+        if (whitelist.isActive() && !whitelist.isAllowed(agentUserid)) {
+            throw new RuntimeException("该员工所属部门不在部门准入范围内: " + agentUserid);
+        }
 
         // 检查是否已在联系人中（排除已移除的 status=removed）：
         // removed 状态的员工可以重新添加（相当于重新激活）
