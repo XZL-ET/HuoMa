@@ -126,7 +126,7 @@ class AlertControllerTest {
         when(alertService.archiveStale("system")).thenReturn(12);
         RedirectAttributes ra = mock(RedirectAttributes.class);
 
-        String view = controller.archiveStale(null, 0, null, null, null, null, null, null, ra);
+        String view = controller.archiveStale(null, 0, 20, null, null, null, null, null, null, ra);
 
         verify(alertService).archiveStale("system");
         verify(ra).addFlashAttribute(eq("message"), contains("12"));
@@ -139,7 +139,7 @@ class AlertControllerTest {
         when(alertService.archiveStale("alice")).thenReturn(1);
         RedirectAttributes ra = mock(RedirectAttributes.class);
 
-        controller.archiveStale(() -> "alice", 0, null, null, null, null, null, null, ra);
+        controller.archiveStale(() -> "alice", 0, 20, null, null, null, null, null, null, ra);
 
         verify(alertService).archiveStale("alice");
     }
@@ -149,8 +149,27 @@ class AlertControllerTest {
     void shouldBuildEncodedRedirect() {
         RedirectAttributes ra = mock(RedirectAttributes.class);
 
-        String view = controller.resolve(1L, () -> "admin", -5, "", null, null, "a&b=c", null, null, ra);
+        String view = controller.resolve(1L, () -> "admin", -5, 2000, "", null, null, "a&b=c", null, null, ra);
 
-        assertThat(view).isEqualTo("redirect:/alerts?page=0&status=&agent=a%26b%3Dc");
+        assertThat(view).isEqualTo("redirect:/alerts?page=0&size=200&status=&agent=a%26b%3Dc");
+    }
+
+    @Test
+    @DisplayName("超出总页数的请求页码被钳到最后一页，避免页码序列倒序膨胀")
+    void shouldClampOutOfRangePageToLastPage() {
+        Page<AgentAlert> outOfRange =
+            new org.springframework.data.domain.PageImpl<>(List.of(),
+                org.springframework.data.domain.PageRequest.of(2_000_000, 20), 21);
+        when(alertService.findAlerts(any(), any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(outOfRange);
+        when(alertService.getAlertStats()).thenReturn(Map.of());
+        when(triageService.buildSummary(any())).thenReturn(emptySummary());
+
+        ExtendedModelMap model = new ExtendedModelMap();
+        controller.list(open.name(), null, null, null, null, null, 2_000_000, 20, model);
+
+        assertThat(model.get("page")).isEqualTo(1);
+        assertThat(model.get("pageStart")).isEqualTo(0);
+        assertThat(model.get("pageEnd")).isEqualTo(1);
     }
 }

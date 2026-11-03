@@ -142,9 +142,10 @@ public class AlertController {
             AgentAlert.AlertStatus.open, null, null, null, null, null, null,
             PageRequest.of(0, 2000)).getContent();
 
-        // 分页范围（最多展示 5 个页码）
+        // 分页范围（最多展示 5 个页码）；页码钳到最后一页，
+        // 否则超大正数页码会让 #numbers.sequence 倒序展开海量页码。
         int totalPages = alertPage.getTotalPages();
-        int current = alertPage.getNumber();
+        int current = Math.min(alertPage.getNumber(), Math.max(0, totalPages - 1));
         int pageStart = Math.max(0, current - 2);
         int pageEnd = Math.min(totalPages - 1, current + 2);
 
@@ -169,7 +170,7 @@ public class AlertController {
         model.addAttribute("endDate", endDate);
         model.addAttribute("pageStart", pageStart);
         model.addAttribute("pageEnd", pageEnd);
-        model.addAttribute("page", safePage);
+        model.addAttribute("page", current);
         model.addAttribute("size", safeSize);
 
         return "alert/list";
@@ -182,6 +183,7 @@ public class AlertController {
     public String resolve(@PathVariable Long id,
                           Principal principal,
                           @RequestParam(defaultValue = "0") int page,
+                          @RequestParam(defaultValue = "20") int size,
                           @RequestParam(required = false) String status,
                           @RequestParam(required = false) String severity,
                           @RequestParam(required = false) String type,
@@ -197,7 +199,7 @@ public class AlertController {
             log.error("解决告警 #{} 失败", id, e);
             redirect.addFlashAttribute("error", "操作失败: " + e.getMessage());
         }
-        return buildRedirect(status, severity, type, agent, startDate, endDate, page);
+        return buildRedirect(status, severity, type, agent, startDate, endDate, page, size);
     }
 
     /**
@@ -208,6 +210,7 @@ public class AlertController {
     @PostMapping("/archive-stale")
     public String archiveStale(Principal principal,
                                @RequestParam(defaultValue = "0") int page,
+                               @RequestParam(defaultValue = "20") int size,
                                @RequestParam(required = false) String status,
                                @RequestParam(required = false) String severity,
                                @RequestParam(required = false) String type,
@@ -223,7 +226,7 @@ public class AlertController {
             log.error("归档过期告警失败", e);
             redirect.addFlashAttribute("error", "操作失败: " + e.getMessage());
         }
-        return buildRedirect(status, severity, type, agent, startDate, endDate, page);
+        return buildRedirect(status, severity, type, agent, startDate, endDate, page, size);
     }
 
     /**
@@ -234,8 +237,11 @@ public class AlertController {
      */
     private String buildRedirect(String status, String severity, String type,
                                   String agent, LocalDate startDate, LocalDate endDate,
-                                  int page) {
-        StringBuilder sb = new StringBuilder("redirect:/alerts?page=").append(Math.max(0, page));
+                                  int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(size, 200));
+        StringBuilder sb = new StringBuilder("redirect:/alerts?page=").append(safePage)
+            .append("&size=").append(safeSize);
         if (status != null) sb.append("&status=").append(encode(status));
         if (severity != null && !severity.isBlank()) sb.append("&severity=").append(encode(severity));
         if (type != null && !type.isBlank()) sb.append("&type=").append(encode(type));

@@ -145,7 +145,7 @@ class AlertPageRenderTest {
 
     @Test
     @WithMockUser
-    @DisplayName("「全部状态」翻页链接继续带上空的 status 参数")
+    @DisplayName("「全部状态」翻页链接继续带上 status=all")
     void shouldKeepAllStatusFilterOnPagination() throws Exception {
         LocalDateTime now = LocalDateTime.now();
         List<AgentAlert> rows = java.util.stream.IntStream.range(0, 21)
