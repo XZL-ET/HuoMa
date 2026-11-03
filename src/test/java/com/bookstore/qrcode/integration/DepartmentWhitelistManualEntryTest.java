@@ -8,6 +8,7 @@ import com.bookstore.qrcode.entity.QrAgent;
 import com.bookstore.qrcode.entity.QrCode;
 import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
+import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
@@ -36,6 +37,7 @@ class DepartmentWhitelistManualEntryTest extends BaseIntegrationTest {
     @Autowired private QrCodeRepository qrCodeRepo;
     @Autowired private QrAgentRepository qrAgentRepo;
     @Autowired private AgentRepository agentRepo;
+    @Autowired private GlobalAgentPoolRepository poolRepo;
     @Autowired private EmployeeRepository employeeRepo;
     @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
 
@@ -44,6 +46,7 @@ class DepartmentWhitelistManualEntryTest extends BaseIntegrationTest {
     @BeforeEach
     void setUp() {
         qrAgentRepo.deleteAll();
+        poolRepo.deleteAll();
         qrCodeRepo.deleteAll();
         whitelistRepo.deleteAll();
         employeeRepo.deleteAll();
@@ -93,6 +96,66 @@ class DepartmentWhitelistManualEntryTest extends BaseIntegrationTest {
             .hasValueSatisfying(qa -> assertThat(qa.getStatus())
                 .isEqualTo(QrAgent.AgentStatus.removed));
         assertThat(redirect.getFlashAttributes().get("message").toString())
-            .contains("部门准入");
+            .contains("部门准入")
+            // 无关部门员工不会真正入池（ensureInPool 静默拒绝），消息不能声称已加入
+            .doesNotContain("已自动加入全局池");
+    }
+
+    @Test
+    @DisplayName("restore 正常恢复无关部门员工的服务老师/双角色绑定")
+    void restoreKeepsServiceAndDualBindings() {
+        agentRepo.save(Agent.builder().userid("bad").name("bad")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        QrCode qr2 = qrCodeRepo.save(QrCode.builder()
+            .schoolName("准入测试2").schoolId("SCH-WL-2")
+            .regionCity("深圳").regionDistrict("南山区").build());
+        QrCode qr3 = qrCodeRepo.save(QrCode.builder()
+            .schoolName("准入测试3").schoolId("SCH-WL-3")
+            .regionCity("深圳").regionDistrict("南山区").build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr2.getId()).agentUserid("bad")
+            .role(QrAgent.AgentRole.service)
+            .status(QrAgent.AgentStatus.removed).build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr3.getId()).agentUserid("bad")
+            .role(QrAgent.AgentRole.dual)
+            .status(QrAgent.AgentStatus.removed).build());
+
+        var redirect = new org.springframework.web.servlet.mvc.support.RedirectAttributesModelMap();
+        agentController.restoreAgent("bad", "pool", "", redirect);
+
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr2.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.active));
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr3.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.active));
+    }
+
+    @Test
+    @DisplayName("白名单停用时无关部门员工可添加上码并恢复")
+    void inactiveWhitelistAllowsDisallowed() {
+        whitelistRepo.deleteAll();
+        agentRepo.save(Agent.builder().userid("bad").name("bad")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+
+        qrCodeService.addAgent(qr.getId(), "bad");
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.active));
+
+        QrCode qr2 = qrCodeRepo.save(QrCode.builder()
+            .schoolName("准入测试2").schoolId("SCH-WL-2")
+            .regionCity("深圳").regionDistrict("南山区").build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr2.getId()).agentUserid("bad")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.removed).build());
+
+        var redirect = new org.springframework.web.servlet.mvc.support.RedirectAttributesModelMap();
+        agentController.restoreAgent("bad", "pool", "", redirect);
+
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr2.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.active));
     }
 }

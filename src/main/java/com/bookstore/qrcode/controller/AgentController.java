@@ -240,6 +240,8 @@ public class AgentController {
      * 恢复前记录审计日志，恢复后接待员自动回池。
      * 服务老师/双角色自动恢复到原活码（重新激活 full/removed 的 QrAgent 记录），
      * 并同步企微侧联系人列表。</p>
+     *
+     * <p>接待员恢复时按部门准入白名单过滤，不在允许范围的活码绑定不复活（服务老师/双角色不受影响）。</p>
      */
     @Transactional
     @PostMapping("/restore")
@@ -288,6 +290,10 @@ public class AgentController {
         List<String> skippedByWhitelist = new ArrayList<>(); // 按部门准入跳过的活码名称
         Set<Long> syncedQrIds = new HashSet<>();             // 需要同步到企微的活码 ID
 
+        // 白名单只读一次：同一次恢复内的所有判定与回池提示必须一致
+        boolean whitelistActive = whitelist.isActive();
+        boolean whitelistAllowsUser = !whitelistActive || whitelist.isAllowed(userid);
+
         for (QrAgent qa : qrAgents) {
             QrCode qr = qrCodeRepo.findById(qa.getQrCodeId()).orElse(null);
             String qrName = qr != null ? qr.getSchoolName() : "活码#" + qa.getQrCodeId();
@@ -301,8 +307,7 @@ public class AgentController {
                     otherCodes.add(qrName + "(已在码上)");
                     continue;
                 }
-                if (qa.getRole() == QrAgent.AgentRole.receptionist
-                    && whitelist.isActive() && !whitelist.isAllowed(userid)) {
+                if (qa.getRole() == QrAgent.AgentRole.receptionist && !whitelistAllowsUser) {
                     skippedByWhitelist.add(qrName);
                     continue;
                 }
@@ -365,7 +370,8 @@ public class AgentController {
         if (!skippedByWhitelist.isEmpty()) {
             msg.append("；按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
         }
-        if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
+        if (poolService.isPoolEligible(userid) && whitelistAllowsUser
+            && (needsStatusReset || !restoredCodes.isEmpty())) {
             msg.append("；已自动加入全局池");
         }
         if (qrAgents.isEmpty()) {
