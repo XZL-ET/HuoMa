@@ -591,8 +591,8 @@ public class AlertService {
      * <p>按类型与阈值判定（{@code lastSeen = lastSeenAt != null ? lastSeenAt : createdAt}，
      * 兼容滚动部署期间遗留的 NULL 行）：</p>
      * <ul>
-     *   <li>{@code daily_anomaly_heal} — {@code createdAt} 早于 24 小时前</li>
-     *   <li>{@code traffic_spike} / {@code wechat_48002} — {@code lastSeen} 早于 24 小时前</li>
+     *   <li>{@code daily_anomaly_heal} / {@code traffic_spike} / {@code wechat_48002}
+     *       — {@code lastSeen} 早于 24 小时前</li>
      *   <li>{@code qr_agent_anomaly} / {@code dlq_replay_exhausted} /
      *       {@code deletion_report_fail} — {@code lastSeen} 早于 7 天前</li>
      *   <li>{@code employee_departed_service} — {@code lastSeen} 早于 30 天前</li>
