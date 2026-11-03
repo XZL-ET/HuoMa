@@ -12,7 +12,6 @@ import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
-import com.bookstore.qrcode.wecom.WecomApiException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -248,18 +247,19 @@ public class AgentController {
      * GET {@code /agents/departments} — 部门准入配置页。
      *
      * <p>展示当前白名单、部门树多选、漂移接待员提示，并提供预览/应用/停用入口。
-     * 部门树拉取失败时降级为空列表并给出 flash 提示，页面仍可访问。</p>
+     * 部门树拉取失败（含缓存/序列化等运行时异常）时降级为空列表并在当前渲染
+     * 的页面给出错误提示，页面仍可访问。</p>
      */
     @GetMapping("/departments")
-    public String departments(Model model, RedirectAttributes redirect) {
+    public String departments(Model model) {
         List<PoolAllowedDepartment> allowedDepts = whitelistRepo.findAllByOrderByDeptIdAsc();
 
         List<DeptOption> deptOptions;
         try {
             deptOptions = flattenDeptTree(departmentService.loadDeptTree());
-        } catch (WecomApiException e) {
+        } catch (RuntimeException e) {
             log.warn("部门准入页：部门树拉取失败", e);
-            redirect.addFlashAttribute("error", "部门树拉取失败，请稍后重试");
+            model.addAttribute("error", "部门树拉取失败，请稍后重试");
             deptOptions = List.of();
         }
 
@@ -315,10 +315,18 @@ public class AgentController {
             redirect.addFlashAttribute("message", String.format(
                 "部门准入已应用：移出池 %d 人，撤下接待员 %d 人，补位 %d 人",
                 result.poolRemoved(), removedReceptionists, result.backfilled()));
-        } catch (RuntimeException e) {
-            log.warn("部门准入应用失败", e);
+        } catch (DepartmentWhitelistService.DeptTreeUnavailableException e) {
+            log.warn("部门准入应用：部门树不可用", e);
             redirect.addFlashAttribute("error",
-                e.getMessage() != null ? e.getMessage() : "部门准入应用失败，请稍后重试");
+                e.getMessage() != null ? e.getMessage() : "部门树拉取失败，请稍后重试");
+        } catch (IllegalArgumentException e) {
+            log.warn("部门准入应用：参数不合法", e);
+            redirect.addFlashAttribute("error",
+                e.getMessage() != null ? e.getMessage() : "参数不合法");
+        } catch (RuntimeException e) {
+            // 非预期异常不透出原始信息，避免泄漏内部细节
+            log.error("部门准入应用失败", e);
+            redirect.addFlashAttribute("error", "操作失败，请稍后重试");
         }
         return "redirect:/agents/departments";
     }

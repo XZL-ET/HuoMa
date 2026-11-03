@@ -102,6 +102,7 @@
             var previewBtn = document.getElementById('previewBtn');
             var resultBox = document.getElementById('previewResult');
             var details = document.getElementById('previewDetails');
+            var previewUrl = /*[[@{/agents/departments/preview}]]*/ '/agents/departments/preview';
             if (!form || !previewBtn || !resultBox || !details) return;
 
             function selectedIds() {
@@ -215,7 +216,7 @@
                     headers[csrfHeader] = csrfToken;
                 }
 
-                fetch('/agents/departments/preview', {
+                fetch(previewUrl, {
                     method: 'POST',
                     headers: headers,
                     body: body.toString()
