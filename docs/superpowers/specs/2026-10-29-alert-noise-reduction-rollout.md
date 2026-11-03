@@ -110,7 +110,7 @@ grep '告警维护: 合并' /var/log/huoma/application.log | tail -5
 
 制造一次真实异常（例如停用某活码触发 `qr_agent_anomaly`），修复后：
 
-- 巡检类应在 **≤ 1 个维护周期（10 分钟）** 内自动转 `auto_resolved`（`resolved_by='auto:condition-cleared'`）；
+- 巡检类应在 **≤ 5 分钟（巡检任务每 5 分钟一轮）** 内自动转 `auto_resolved`（`resolved_by='auto:condition-cleared'`）；
 - 验证 SQL：
 
 ```sql
