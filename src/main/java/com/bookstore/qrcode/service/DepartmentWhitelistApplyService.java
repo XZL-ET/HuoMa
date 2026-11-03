@@ -238,6 +238,10 @@ public class DepartmentWhitelistApplyService {
             Map<Long, String> schoolNames = loadSchoolNames(disallowedActiveByQr.keySet());
             for (Map.Entry<Long, Set<String>> entry : disallowedActiveByQr.entrySet()) {
                 Long qrCodeId = entry.getKey();
+                String schoolName = schoolNames.get(qrCodeId);
+                String qrLabel = schoolName == null || schoolName.isBlank()
+                    ? "活码#" + qrCodeId
+                    : "活码 " + schoolName;
                 String rotateLockKey =
                     RedisConfig.ROTATE_LOCK_PREFIX + qrCodeId + ":rotate";
                 String rotateLockValue = UUID.randomUUID().toString();
@@ -245,19 +249,17 @@ public class DepartmentWhitelistApplyService {
                     .setIfAbsent(rotateLockKey, rotateLockValue, ROTATE_LOCK_TTL);
                 if (!Boolean.TRUE.equals(rotateLocked)) {
                     qrCodesSkipped++;
-                    failures.add("活码 " + qrCodeId + " 轮换进行中，未处理");
+                    failures.add(qrLabel + " 轮换进行中，未处理");
                     continue;
                 }
                 try {
                     DepartmentWhitelistRemovalService.QrRemovalOutcome outcome =
                         removalService.removeReceptionistsFromQr(qrCodeId, entry.getValue());
-                    qrCodesProcessed++;
                     if (outcome.skipped()) {
                         qrCodesSkipped++;
-                        String schoolName = schoolNames.getOrDefault(
-                            qrCodeId, String.valueOf(qrCodeId));
-                        failures.add("活码 " + schoolName + "：" + outcome.skipReason());
+                        failures.add(qrLabel + "：" + outcome.skipReason());
                     } else {
+                        qrCodesProcessed++;
                         activeRemoved += outcome.removed();
                         backfilled += outcome.backfilled();
                         if (outcome.removed() > 0 || outcome.backfilled() > 0) {

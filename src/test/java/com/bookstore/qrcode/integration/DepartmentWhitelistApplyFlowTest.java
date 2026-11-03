@@ -12,6 +12,7 @@ import com.bookstore.qrcode.repository.OperationLogRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.repository.QrRotateLogRepository;
 import com.bookstore.qrcode.service.DepartmentWhitelistApplyService;
 import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
@@ -42,6 +43,7 @@ class DepartmentWhitelistApplyFlowTest extends BaseIntegrationTest {
     @Autowired private DepartmentWhitelistApplyService applyService;
     @Autowired private QrCodeRepository qrCodeRepo;
     @Autowired private QrAgentRepository qrAgentRepo;
+    @Autowired private QrRotateLogRepository rotateLogRepo;
     @Autowired private AgentRepository agentRepo;
     @Autowired private EmployeeRepository employeeRepo;
     @Autowired private GlobalAgentPoolRepository poolRepo;
@@ -63,6 +65,7 @@ class DepartmentWhitelistApplyFlowTest extends BaseIntegrationTest {
         WecomApiMockConfig.reapplyBaseStubs(wecomApi);
         qrAgentRepo.deleteAll();
         poolRepo.deleteAll();
+        rotateLogRepo.deleteAll();
         qrCodeRepo.deleteAll();
         operationLogRepo.deleteAll();
         whitelistRepo.deleteAll();
@@ -154,19 +157,33 @@ class DepartmentWhitelistApplyFlowTest extends BaseIntegrationTest {
     @Test
     @DisplayName("重复 apply 幂等：第二次不再移除")
     void applyIsIdempotent() {
-        employeeRepo.save(emp("bad", "[200]"));
-        agentRepo.save(Agent.builder().userid("bad").name("bad")
-            .role(Agent.AgentRole.receptionist).build());
-        poolRepo.save(GlobalAgentPool.builder().agentUserid("bad").departmentId(200L)
-            .status(GlobalAgentPool.PoolStatus.standby).build());
+        employeeRepo.saveAll(List.of(emp("bad", "[200]"), emp("good", "[100]")));
+        agentRepo.saveAll(List.of(
+            Agent.builder().userid("bad").name("bad")
+                .role(Agent.AgentRole.receptionist).build(),
+            Agent.builder().userid("good").name("good")
+                .role(Agent.AgentRole.receptionist).build()));
+        poolRepo.saveAll(List.of(
+            GlobalAgentPool.builder().agentUserid("bad").departmentId(200L)
+                .status(GlobalAgentPool.PoolStatus.standby).build(),
+            GlobalAgentPool.builder().agentUserid("good").departmentId(100L)
+                .status(GlobalAgentPool.PoolStatus.standby).build()));
         qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId()).agentUserid("bad")
             .role(QrAgent.AgentRole.receptionist).dailyMax(150).sortOrder(0)
             .status(QrAgent.AgentStatus.active).build());
 
-        applyService.apply(List.of(100L), "tester");
+        var first = applyService.apply(List.of(100L), "tester");
         var second = applyService.apply(List.of(100L), "tester");
+
+        assertThat(first.activeReceptionistsRemoved()).isEqualTo(1);
+        assertThat(first.backfilled()).isEqualTo(1);
+        assertThat(first.poolRemoved()).isEqualTo(1);
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "bad"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                .isEqualTo(QrAgent.AgentStatus.removed));
 
         assertThat(second.poolRemoved()).isZero();
         assertThat(second.activeReceptionistsRemoved()).isZero();
+        assertThat(second.backfilled()).isZero();
     }
 }
