@@ -31,6 +31,7 @@ class GlobalAgentPoolServiceTest {
     @Mock private QrAgentRepository qrAgentRepo;
     @Mock private WecomApiClient wecomApiClient;
     @Mock private ObjectMapper objectMapper;
+    @Mock private DepartmentWhitelistService whitelistService;
 
     @InjectMocks
     private GlobalAgentPoolService poolService;
@@ -117,5 +118,38 @@ class GlobalAgentPoolServiceTest {
         poolService.ensureInPool("user1", 100);
 
         verify(poolRepo).save(any(GlobalAgentPool.class));
+    }
+
+    @Test
+    @DisplayName("ensureInPool — 无关部门员工不入池，并清理已有记录")
+    void ensureInPoolSkipsDisallowed() {
+        when(whitelistService.isActive()).thenReturn(true);
+        when(whitelistService.isAllowed("user1")).thenReturn(false);
+        GlobalAgentPool existing = GlobalAgentPool.builder().id(1L).agentUserid("user1").build();
+        when(poolRepo.findByAgentUserid("user1")).thenReturn(Optional.of(existing));
+
+        poolService.ensureInPool("user1", 100);
+
+        verify(poolRepo).delete(existing);
+        verify(poolRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("takeStandby — 懒清理无关部门候选并跳过")
+    void takeStandbyDeletesDisallowedCandidate() {
+        when(whitelistService.isActive()).thenReturn(true);
+        when(whitelistService.loadAllowedDeptIds(false)).thenReturn(Set.of(100L));
+        GlobalAgentPool p = GlobalAgentPool.builder()
+            .id(1L).agentUserid("user1").sortOrder(1)
+            .status(GlobalAgentPool.PoolStatus.standby).build();
+        Employee bad = Employee.builder().userid("user1")
+            .department("[200]").active(true).wechatStatus(1).build();
+        when(poolRepo.findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby))
+            .thenReturn(List.of(p));
+        when(employeeRepo.findByUserid("user1")).thenReturn(Optional.of(bad));
+        when(whitelistService.isEmployeeAllowed(bad, Set.of(100L))).thenReturn(false);
+
+        assertThat(poolService.takeStandby(Set.of())).isNull();
+        verify(poolRepo).delete(p);
     }
 }
