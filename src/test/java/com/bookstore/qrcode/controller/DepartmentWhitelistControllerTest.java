@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -84,6 +85,22 @@ class DepartmentWhitelistControllerTest {
             .andExpect(flash().attribute("message", containsString("移出池 0 人")));
 
         verify(applyService).apply(eq(List.of(100L)), anyString());
+    }
+
+    @Test
+    @DisplayName("POST apply 有未处理活码时提示数量并透出明细")
+    void applyRedirectsWithUnprocessedFailures() throws Exception {
+        when(applyService.apply(eq(List.of(100L)), anyString())).thenReturn(
+            new DepartmentWhitelistApplyResult(1, 0, 0, 0, 0, 0, 1,
+                List.of("活码 A 轮换进行中，未处理")));
+
+        mockMvc.perform(post("/agents/departments/apply").param("deptIds", "100"))
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrl("/agents/departments"))
+            .andExpect(flash().attribute("message", containsString("移出池 0 人")))
+            .andExpect(flash().attribute("message", containsString("未处理")))
+            .andExpect(flash().attribute("applyFailures",
+                contains("活码 A 轮换进行中，未处理")));
     }
 
     @Test

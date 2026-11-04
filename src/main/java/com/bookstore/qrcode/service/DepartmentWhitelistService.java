@@ -183,12 +183,35 @@ public class DepartmentWhitelistService {
     }
 
     /**
-     * 过滤 userid 集合，仅保留命中白名单部门的员工。
+     * 过滤 userid 集合，仅保留命中白名单部门的员工（非严格模式）。
+     *
+     * <p>部门树不可用时降级为精确白名单 ID 判定，适合「放行」类调用。
+     * 需要区分「树不可用」的调用方（如每日重置）应使用
+     * {@link #filterAllowedUseridsStrict(Collection)}。</p>
      *
      * @param userids 待过滤 userid
      * @return 允许的 userid 集合；白名单未启用时原样返回副本
      */
     public Set<String> filterAllowedUserids(Collection<String> userids) {
+        return filterAllowedUserids(userids, false);
+    }
+
+    /**
+     * 过滤 userid 集合，仅保留命中白名单部门的员工（严格模式）。
+     *
+     * <p>与 {@link #filterAllowedUserids(Collection)} 行为一致，但部门树不可用
+     * （拉取失败或为空）时抛出 {@link DeptTreeUnavailableException}，由调用方决定
+     * 是中止操作还是显式跳过守卫——不能把「树坏了」误当作「都不允许」。</p>
+     *
+     * @param userids 待过滤 userid
+     * @return 允许的 userid 集合；白名单未启用时原样返回副本
+     * @throws DeptTreeUnavailableException 部门树不可用
+     */
+    public Set<String> filterAllowedUseridsStrict(Collection<String> userids) {
+        return filterAllowedUserids(userids, true);
+    }
+
+    private Set<String> filterAllowedUserids(Collection<String> userids, boolean strict) {
         if (userids == null) {
             return Set.of();
         }
@@ -196,11 +219,41 @@ public class DepartmentWhitelistService {
             return new LinkedHashSet<>(userids);
         }
         Set<String> result = new LinkedHashSet<>();
-        if (userids == null || userids.isEmpty()) {
+        if (userids.isEmpty()) {
+            return result;
+        }
+        Set<Long> allowedDeptIds = loadAllowedDeptIds(strict);
+        for (Employee employee : employeeRepository.findByUseridIn(userids)) {
+            if (isEmployeeAllowed(employee, allowedDeptIds)) {
+                result.add(employee.getUserid());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 查找满足准入条件、尚未进入员工池的候选 userid。
+     *
+     * <p>候选条件：在职、企微状态为 null 或已激活（1）、不在当前池中、命中白名单部门。</p>
+     *
+     * @param pooledUserids 当前已在池中的 userid 集合
+     * @return 候选 userid 集合；白名单未启用时返回空集合
+     */
+    public Set<String> findAllowedCandidateUseridsNotInPool(Set<String> pooledUserids) {
+        Set<String> result = new LinkedHashSet<>();
+        if (!isActive()) {
             return result;
         }
         Set<Long> allowedDeptIds = loadAllowedDeptIds(false);
-        for (Employee employee : employeeRepository.findByUseridIn(userids)) {
+        Set<String> pooled = pooledUserids == null ? Set.of() : pooledUserids;
+        for (Employee employee : employeeRepository.findAllByActiveTrueOrderByName()) {
+            Integer wechatStatus = employee.getWechatStatus();
+            if (wechatStatus != null && wechatStatus != 1) {
+                continue;
+            }
+            if (pooled.contains(employee.getUserid())) {
+                continue;
+            }
             if (isEmployeeAllowed(employee, allowedDeptIds)) {
                 result.add(employee.getUserid());
             }
@@ -211,31 +264,12 @@ public class DepartmentWhitelistService {
     /**
      * 统计满足准入条件、尚未进入员工池的候选人数。
      *
-     * <p>候选条件：在职、企微状态为 null 或已激活（1）、不在当前池中、命中白名单部门。</p>
-     *
      * @param pooledUserids 当前已在池中的 userid 集合
      * @return 候选人数；白名单未启用时返回 0
+     * @see #findAllowedCandidateUseridsNotInPool(Set)
      */
     public long countAllowedCandidatesNotInPool(Set<String> pooledUserids) {
-        if (!isActive()) {
-            return 0L;
-        }
-        Set<Long> allowedDeptIds = loadAllowedDeptIds(false);
-        Set<String> pooled = pooledUserids == null ? Set.of() : pooledUserids;
-        long count = 0L;
-        for (Employee employee : employeeRepository.findAllByActiveTrueOrderByName()) {
-            Integer wechatStatus = employee.getWechatStatus();
-            if (wechatStatus != null && wechatStatus != 1) {
-                continue;
-            }
-            if (pooled.contains(employee.getUserid())) {
-                continue;
-            }
-            if (isEmployeeAllowed(employee, allowedDeptIds)) {
-                count++;
-            }
-        }
-        return count;
+        return findAllowedCandidateUseridsNotInPool(pooledUserids).size();
     }
 
     /**

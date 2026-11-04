@@ -278,9 +278,16 @@ public class DepartmentWhitelistApplyService {
             int fullRemoved = 0;
             if (!fullDisallowed.isEmpty()) {
                 List<Long> fullIds = fullDisallowed.stream().map(QrAgent::getId).toList();
-                fullRemoved = removalService.removeFullReceptionists(fullIds);
-                if (fullRemoved > 0) {
-                    fullDisallowed.forEach(qa -> affectedQrIds.add(qa.getQrCodeId()));
+                try {
+                    fullRemoved = removalService.removeFullReceptionists(fullIds);
+                    if (fullRemoved > 0) {
+                        fullDisallowed.forEach(qa -> affectedQrIds.add(qa.getQrCodeId()));
+                    }
+                } catch (RuntimeException e) {
+                    // 撤 full 接待员失败不应吞掉整次应用：白名单已写入，后续同步与审计仍需执行，
+                    // 失败明细交由页面「未处理清单」提示用户重新应用
+                    log.warn("部门准入：撤下 full 接待员失败", e);
+                    failures.add("full 接待员撤下失败：" + e.getMessage());
                 }
             }
 

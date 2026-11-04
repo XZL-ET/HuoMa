@@ -185,5 +185,8 @@ class DepartmentWhitelistApplyFlowTest extends BaseIntegrationTest {
         assertThat(second.poolRemoved()).isZero();
         assertThat(second.activeReceptionistsRemoved()).isZero();
         assertThat(second.backfilled()).isZero();
+
+        // 重复 apply 不应把白名单行写成重复数据
+        assertThat(whitelistRepo.findAllByOrderByDeptIdAsc()).hasSize(1);
     }
 }

@@ -12,13 +12,17 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
+import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Import;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.when;
 
 /**
  * 每日重置释放临时顶替接待员 集成测试。
@@ -36,11 +40,17 @@ class DailyResetWorkerReleaseTest extends BaseIntegrationTest {
     @Autowired private AgentRepository agentRepo;
     @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
     @Autowired private EmployeeRepository employeeRepo;
+    @Autowired private WecomApiClient wecomApi;
+    @Autowired private CacheManager cacheManager;
 
     private QrCode qr;
 
     @BeforeEach
     void setUp() {
+        // departmentTree 无参缓存 key 固定，前一用例缓存后会让部门树故障桩命中缓存而失效
+        var treeCache = cacheManager.getCache("departmentTree");
+        if (treeCache != null) treeCache.clear();
+
         qrAgentRepo.deleteAll();
         qrCodeRepo.deleteAll();
         agentRepo.deleteAll();
@@ -147,5 +157,36 @@ class DailyResetWorkerReleaseTest extends BaseIntegrationTest {
         assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "bad"))
             .hasValueSatisfying(qa -> assertThat(qa.getStatus())
                 .isEqualTo(QrAgent.AgentStatus.removed));
+    }
+
+    @Test
+    @DisplayName("部门树不可用：跳过准入守卫，子孙部门接待员照常复活")
+    void revivesDescendantReceptionistWhenTreeUnavailable() {
+        whitelistRepo.save(PoolAllowedDepartment.builder()
+            .deptId(100L).deptName("校区").createdBy("tester").build());
+        // 员工在 100 的子孙部门 101：降级为精确 ID 匹配时会被误判为不相关，
+        // 只有真正拉到部门树才能判定允许，因此这个用例专门覆盖“树不可用”路径
+        employeeRepo.save(Employee.builder().userid("child").name("child")
+            .department("[101]").active(true).wechatStatus(1).build());
+        agentRepo.save(Agent.builder().userid("child").name("child")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId()).agentUserid("child")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.full).build());
+
+        when(wecomApi.listDepartments(null)).thenThrow(new RuntimeException("down"));
+        try {
+            dailyResetWorker.recoverFullAgents();
+
+            assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "child"))
+                .hasValueSatisfying(qa -> assertThat(qa.getStatus())
+                    .isEqualTo(QrAgent.AgentStatus.active));
+        } finally {
+            // 共享 mock 的 thenThrow 不能泄漏到本类其他用例；thenThrow 桩无法用 when() 直接覆盖，
+            // 必须先 reset 再恢复基础桩
+            reset(wecomApi);
+            WecomApiMockConfig.reapplyBaseStubs(wecomApi);
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.worker;
 
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.repository.AgentRepository;
@@ -12,6 +13,7 @@ import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AlertService;
 import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.QrCodeService;
@@ -29,6 +31,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -57,6 +60,8 @@ class PatrolWorkerTest {
     @Mock private GlobalAgentPoolRepository poolRepo;
     @Mock private EmployeeSyncService employeeSyncService;
     @Mock private DepartmentWhitelistService whitelistService;
+    @Mock private GlobalAgentPoolService poolService;
+    @Mock private AgentRepository agentRepo;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -119,17 +124,36 @@ class PatrolWorkerTest {
     }
 
     @Test
-    @DisplayName("允许范围内已无人可补时，池枯竭不再告警")
+    @DisplayName("可入池上限为 0（候选都被池准入过滤）时，池枯竭不再告警")
     void suppressesAlertWhenNoAllowedCandidates() {
         when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
         when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
         when(whitelistService.isActive()).thenReturn(true);
-        when(poolRepo.findAllAgentUserids()).thenReturn(List.of());
-        when(whitelistService.countAllowedCandidatesNotInPool(any())).thenReturn(0L);
+        when(whitelistService.findAllowedCandidateUseridsNotInPool(any()))
+            .thenReturn(Set.of("svc"));
+        when(poolService.filterPoolEligible(any())).thenReturn(Set.of());
 
         worker.checkGlobalPoolLow();
 
         verify(alertService, never()).alertEmptyBackup(any(), any());
+    }
+
+    @Test
+    @DisplayName("允许范围内仍有真正可入池候选人时，池枯竭必须告警（防过度抑制）")
+    void alertsWhenAllowedCandidatesRemain() {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
+        when(whitelistService.isActive()).thenReturn(true);
+        when(whitelistService.findAllowedCandidateUseridsNotInPool(any()))
+            .thenReturn(Set.of("ok"));
+        when(poolService.filterPoolEligible(any())).thenReturn(Set.of("ok"));
+        when(agentRepo.findAllById(anyIterable())).thenReturn(List.of(
+            Agent.builder().userid("ok").name("ok")
+                .overallStatus(Agent.OverallStatus.normal).build()));
+
+        worker.checkGlobalPoolLow();
+
+        verify(alertService, times(1)).alertEmptyBackup(any(), any());
     }
 
     // ==================== 小工具 ====================
@@ -174,13 +198,14 @@ class PatrolWorkerTest {
             mock(MessageGuardService.class),
             employeeSyncService,
             mock(EmployeeRepository.class),
-            mock(AgentRepository.class),
+            agentRepo,
             mock(WecomApiClient.class),
             mock(OperationLogRepository.class),
             mock(CustomerTransferRepository.class),
             mock(QrCodeService.class),
             metrics,
             mock(ScheduledJobGuard.class),
-            whitelistService);
+            whitelistService,
+            poolService);
     }
 }

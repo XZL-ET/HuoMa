@@ -312,9 +312,14 @@ public class AgentController {
             DepartmentWhitelistApplyResult result = whitelistApplyService.apply(deptIds, operator);
             int removedReceptionists = result.activeReceptionistsRemoved()
                 + result.fullReceptionistsRemoved();
-            redirect.addFlashAttribute("message", String.format(
+            String message = String.format(
                 "部门准入已应用：移出池 %d 人，撤下接待员 %d 人，补位 %d 人",
-                result.poolRemoved(), removedReceptionists, result.backfilled()));
+                result.poolRemoved(), removedReceptionists, result.backfilled());
+            if (result.qrCodesSkipped() > 0) {
+                message += "；" + result.qrCodesSkipped() + " 个活码未处理，详见未处理清单";
+            }
+            redirect.addFlashAttribute("message", message);
+            redirect.addFlashAttribute("applyFailures", result.failures());
         } catch (DepartmentWhitelistService.DeptTreeUnavailableException e) {
             log.warn("部门准入应用：部门树不可用", e);
             redirect.addFlashAttribute("error",
@@ -559,7 +564,10 @@ public class AgentController {
             msg.append(String.join("、", otherCodes));
         }
         if (!skippedByWhitelist.isEmpty()) {
-            msg.append("；按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
+            if (msg.length() > 0) {
+                msg.append("；");
+            }
+            msg.append("按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
         }
         if (poolService.isPoolEligible(userid) && whitelistAllowsUser
             && (needsStatusReset || !restoredCodes.isEmpty())) {

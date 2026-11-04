@@ -19,6 +19,16 @@
         <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
     </div>
 
+    <!-- 未处理清单：应用时因轮换锁冲突/池枯竭/full 撤人失败等未能处理的活码 -->
+    <div th:if="${applyFailures != null && !applyFailures.isEmpty()}"
+         class="alert alert-warning alert-dismissible fade show py-2" role="alert">
+        <strong>未处理清单（可重新应用以继续收敛）</strong>
+        <ul class="mb-0 small mt-1">
+            <li th:each="failure : ${applyFailures}" th:text="${failure}"></li>
+        </ul>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
     <!-- 漂移提示：仍有无关部门接待员在活码上 -->
     <div th:if="${driftedReceptionistCount != null && driftedReceptionistCount > 0}"
          class="alert alert-warning" role="alert">
