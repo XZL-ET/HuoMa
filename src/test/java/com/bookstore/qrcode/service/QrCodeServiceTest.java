@@ -40,6 +40,7 @@ class QrCodeServiceTest {
     @Mock private WecomApiClient wecomApiClient;
     @Mock private ObjectMapper objectMapper;
     @Mock private StringRedisTemplate redisTemplate;
+    @Mock private DepartmentWhitelistService whitelist;
 
     @InjectMocks
     private QrCodeService qrCodeService;

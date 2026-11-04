@@ -122,9 +122,8 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public GlobalAgentPool takeStandby(Set<String> excludeUserids) {
-        boolean whitelistActive = whitelist.isActive();
-        Set<Long> allowedDeptIds = whitelistActive
-            ? whitelist.loadAllowedDeptIds(false) : Set.of();
+        DepartmentWhitelistService.AllowedDeptResult deptAccess =
+            whitelist.loadAllowedDeptIdsWithTreeStatus();
         List<GlobalAgentPool> standbys = poolRepo
             .findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby);
         if (standbys.isEmpty()) {
@@ -139,10 +138,17 @@ public class GlobalAgentPoolService {
             }
             // 过滤已离职员工（企微通讯录已标记 inactive）→ 懒清理出池
             Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
-            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池
-            if (whitelistActive && (emp == null || !whitelist.isEmployeeAllowed(emp, allowedDeptIds))) {
-                poolRepo.delete(p);
-                log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池。
+            // 部门树不可用时允许集合只剩精确 ID，只能跳过本次取人，不能删除——
+            // 否则子部门员工会被当成「无关」误删。
+            if (deptAccess.isEnabled()
+                && (emp == null || !whitelist.isEmployeeAllowed(emp, deptAccess.ids()))) {
+                if (deptAccess.treeAvailable()) {
+                    poolRepo.delete(p);
+                    log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+                } else {
+                    log.warn("部门树不可用，暂不清理疑似无关部门员工 userid={}", p.getAgentUserid());
+                }
                 continue;
             }
             if (emp != null && !emp.getActive()) {
@@ -238,9 +244,8 @@ public class GlobalAgentPoolService {
      */
     private GlobalAgentPool selectFromDeptCandidates(List<GlobalAgentPool> candidates,
                                                       Set<String> excludeUserids) {
-        boolean whitelistActive = whitelist.isActive();
-        Set<Long> allowedDeptIds = whitelistActive
-            ? whitelist.loadAllowedDeptIds(false) : Set.of();
+        DepartmentWhitelistService.AllowedDeptResult deptAccess =
+            whitelist.loadAllowedDeptIdsWithTreeStatus();
         int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
         for (GlobalAgentPool p : candidates) {
             if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
@@ -248,10 +253,16 @@ public class GlobalAgentPoolService {
             }
             // 过滤已离职员工 → 懒清理出池
             Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
-            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池
-            if (whitelistActive && (emp == null || !whitelist.isEmployeeAllowed(emp, allowedDeptIds))) {
-                poolRepo.delete(p);
-                log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池。
+            // 树不可用时只跳过不删除（精确 ID 会把子部门员工误判为无关）。
+            if (deptAccess.isEnabled()
+                && (emp == null || !whitelist.isEmployeeAllowed(emp, deptAccess.ids()))) {
+                if (deptAccess.treeAvailable()) {
+                    poolRepo.delete(p);
+                    log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+                } else {
+                    log.warn("部门树不可用，暂不清理疑似无关部门员工 userid={}", p.getAgentUserid());
+                }
                 continue;
             }
             if (emp != null && !emp.getActive()) {
@@ -368,17 +379,26 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void ensureInPool(String userid, int dailyMax) {
-        if (whitelist.isActive() && !whitelist.isAllowed(userid)) {
-            poolRepo.findByAgentUserid(userid).ifPresent(pool -> {
-                poolRepo.delete(pool);
-                log.info("部门准入：移出池记录 userid={}", userid);
-            });
-            return;
+        DepartmentWhitelistService.AllowedDeptResult deptAccess =
+            whitelist.loadAllowedDeptIdsWithTreeStatus();
+        // 优先从本地 Employee 表取部门（每 30 分钟从企微同步，命中率极高）
+        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
+        if (deptAccess.isEnabled()) {
+            if (emp == null || !whitelist.isEmployeeAllowed(emp, deptAccess.ids())) {
+                if (deptAccess.treeAvailable()) {
+                    poolRepo.findByAgentUserid(userid).ifPresent(pool -> {
+                        poolRepo.delete(pool);
+                        log.info("部门准入：移出池记录 userid={}", userid);
+                    });
+                } else {
+                    // 精确 ID 降级会误判子部门员工，树不可用时既不删除也不新增
+                    log.warn("部门树不可用，暂缓入池 userid={}", userid);
+                }
+                return;
+            }
         }
         GlobalAgentPool existing = poolRepo.findByAgentUserid(userid).orElse(null);
 
-        // 优先从本地 Employee 表取部门（每 30 分钟从企微同步，命中率极高）
-        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
         Long deptId = emp != null ? extractPrimaryDeptId(emp.getDepartment()) : null;
 
         // 已有记录但 departmentId 为空 → 回填

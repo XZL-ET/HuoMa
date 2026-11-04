@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.integration;
 
+import com.bookstore.qrcode.dto.DepartmentWhitelistPreview;
 import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.Employee;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
@@ -132,6 +133,27 @@ class DepartmentWhitelistApplyFlowTest extends BaseIntegrationTest {
         assertThat(preview.poolRemovals().get(0).userid()).isEqualTo("bad");
         assertThat(whitelistRepo.count()).isZero();
         assertThat(poolRepo.findByAgentUserid("bad")).isPresent();
+    }
+
+    @Test
+    @DisplayName("preview 包含将被撤下的 full 接待员")
+    void previewIncludesDisallowedFullReceptionists() {
+        employeeRepo.save(emp("badFull", "[200]"));
+        agentRepo.save(Agent.builder().userid("badFull").name("badFull")
+            .role(Agent.AgentRole.receptionist).build());
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId()).agentUserid("badFull")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.full).build());
+
+        var preview = applyService.preview(List.of(100L));
+
+        assertThat(preview.qrRemovals()).hasSize(1);
+        assertThat(preview.qrRemovals().get(0).members())
+            .extracting(DepartmentWhitelistPreview.Member::userid)
+            .containsExactly("badFull");
+        // full 不占 active 名额，不应误报需要补位
+        assertThat(preview.qrRemovals().get(0).needsBackfill()).isFalse();
+        assertThat(whitelistRepo.count()).isZero();
     }
 
     @Test

@@ -933,6 +933,16 @@ public class QrCodeService {
         if (role != null) {
             try {
                 QrAgent.AgentRole newRole = QrAgent.AgentRole.valueOf(role);
+                // 编辑接口是唯一的角色变更入口；不拦住这里，
+                // 无关部门员工可绕过 addAgent 的准入校验被直接提为接待员接客户
+                if (newRole == QrAgent.AgentRole.receptionist
+                    && agent.getRole() != QrAgent.AgentRole.receptionist
+                    && whitelist.isActive()
+                    && !whitelist.isAllowed(agent.getAgentUserid())) {
+                    throw new RuntimeException(
+                        "该员工所属部门不在部门准入范围内，不能设为接待员: "
+                            + agent.getAgentUserid());
+                }
                 // 禁止将唯一的 service/dual 降级为 receptionist（会绕过所有保护）
                 if (newRole == QrAgent.AgentRole.receptionist
                     && (agent.getRole() == QrAgent.AgentRole.service

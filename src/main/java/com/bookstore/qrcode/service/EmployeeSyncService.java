@@ -413,24 +413,30 @@ public class EmployeeSyncService {
         // 3. 已在池中的 userid 集合（轻量投影，仅查 userid 列）
         Set<String> pooledUserIds = new HashSet<>(poolRepo.findAllAgentUserids());
 
-        // 3.5 白名单启用时清理已漂移到允许部门之外的池记录
-        if (whitelist.isActive() && !pooledUserIds.isEmpty()) {
+        // 3.5 白名单启用时清理已漂移到允许部门之外的池记录。
+        // 启用判定与允许集合必须来自同一次读取，否则白名单在两次查询之间被清空时，
+        // 空允许集合会把全部池记录误判为漂移。
+        DepartmentWhitelistService.AllowedDeptResult deptAccess =
+            whitelist.loadAllowedDeptIdsWithTreeStatus();
+        if (deptAccess.isEnabled() && !pooledUserIds.isEmpty()) {
             List<GlobalAgentPool> pooled = poolRepo.findByAgentUseridIn(new ArrayList<>(pooledUserIds));
             Map<String, Employee> empMap = employeeRepo.findByUseridIn(pooledUserIds).stream()
                 .collect(Collectors.toMap(Employee::getUserid, e -> e, (a, b) -> a));
-            Set<Long> allowed = whitelist.loadAllowedDeptIds(false);
             List<GlobalAgentPool> drifted = pooled.stream()
                 .filter(p -> {
                     Employee e = empMap.get(p.getAgentUserid());
-                    return e == null || !whitelist.isEmployeeAllowed(e, allowed);
+                    return e == null || !whitelist.isEmployeeAllowed(e, deptAccess.ids());
                 })
                 .toList();
-            if (!drifted.isEmpty()) {
+            if (!drifted.isEmpty() && deptAccess.treeAvailable()) {
                 poolRepo.deleteAll(drifted);
                 pooledUserIds.removeAll(drifted.stream()
                     .map(GlobalAgentPool::getAgentUserid).toList());
                 log.info("全局池同步：移除 {} 个不在部门准入范围的池记录: {}", drifted.size(),
                     drifted.stream().map(GlobalAgentPool::getAgentUserid).toList());
+            } else if (!drifted.isEmpty()) {
+                // 树不可用时精确 ID 会把子部门员工误判为漂移，只跳过清理
+                log.warn("部门树不可用，跳过 {} 条疑似漂移池记录的清理", drifted.size());
             }
         }
 

@@ -62,29 +62,87 @@ public class DepartmentWhitelistService {
         if (rows.isEmpty()) {
             return Set.of();
         }
-
-        Set<Long> whitelistIds = new LinkedHashSet<>();
-        for (PoolAllowedDepartment row : rows) {
-            whitelistIds.add(row.getDeptId());
-        }
-
-        Map<Long, DepartmentService.DeptNode> tree;
+        Set<Long> whitelistIds = whitelistIds(rows);
         try {
-            tree = departmentService.loadDeptTree();
-        } catch (Exception e) {
+            return expandWithTree(whitelistIds);
+        } catch (DeptTreeUnavailableException e) {
             if (strict) {
-                throw new DeptTreeUnavailableException("部门树拉取失败", e);
+                throw e;
             }
             log.warn("部门树拉取失败，白名单降级为精确部门 ID 判定", e);
             return whitelistIds;
         }
+    }
 
+    /**
+     * 允许部门集合及部门树可用性。
+     *
+     * <p>{@code treeAvailable = false} 时 {@code ids} 只包含精确的白名单部门 ID，
+     * 不能据此执行任何删除——子部门员工会被误判为「无关」。</p>
+     *
+     * <p>{@code ids} 为空表示白名单未启用（功能关闭，所有人允许）。
+     * 启用的白名单至少有一行，因此空集合不会与「启用但无人允许」混淆。</p>
+     *
+     * @param ids           允许的部门 ID（树不可用时为精确白名单 ID）
+     * @param treeAvailable 部门树是否可用
+     */
+    public record AllowedDeptResult(Set<Long> ids, boolean treeAvailable) {
+
+        /** 白名单是否启用。 */
+        public boolean isEnabled() {
+            return !ids.isEmpty();
+        }
+    }
+
+    /**
+     * 供破坏性清理场景读取允许集合。
+     *
+     * <p>与 {@link #loadAllowedDeptIds(boolean)} 的区别：部门树不可用时额外返回
+     * {@code treeAvailable = false}，调用方必须跳过删除动作，仅可据此「少放人」。
+     * 日常入池/取人/添加接待员的降级语义不变。</p>
+     *
+     * <p>白名单行与允许集合来自同一次读取，调用方不要再用 {@link #isActive()}
+     * 另行判断——两次查询之间白名单可能被清空，会把「功能已关闭」误判成
+     * 「一人都不允许」而误删全部池记录。</p>
+     *
+     * @return 允许集合与部门树可用性；白名单未启用时返回空集合且标记可用
+     */
+    public AllowedDeptResult loadAllowedDeptIdsWithTreeStatus() {
+        List<PoolAllowedDepartment> rows = poolAllowedDepartmentRepository.findAll();
+        if (rows.isEmpty()) {
+            return new AllowedDeptResult(Set.of(), true);
+        }
+        Set<Long> whitelistIds = whitelistIds(rows);
+        try {
+            return new AllowedDeptResult(expandWithTree(whitelistIds), true);
+        } catch (DeptTreeUnavailableException e) {
+            log.warn("部门树不可用，允许集合降级为精确部门 ID，本轮跳过破坏性清理", e);
+            return new AllowedDeptResult(whitelistIds, false);
+        }
+    }
+
+    private Set<Long> whitelistIds(List<PoolAllowedDepartment> rows) {
+        Set<Long> whitelistIds = new LinkedHashSet<>();
+        for (PoolAllowedDepartment row : rows) {
+            whitelistIds.add(row.getDeptId());
+        }
+        return whitelistIds;
+    }
+
+    /**
+     * 展开白名单部门及其全部子孙部门。
+     *
+     * @throws DeptTreeUnavailableException 部门树拉取失败或为空
+     */
+    private Set<Long> expandWithTree(Set<Long> whitelistIds) {
+        Map<Long, DepartmentService.DeptNode> tree;
+        try {
+            tree = departmentService.loadDeptTree();
+        } catch (Exception e) {
+            throw new DeptTreeUnavailableException("部门树拉取失败", e);
+        }
         if (tree == null || tree.isEmpty()) {
-            if (strict) {
-                throw new DeptTreeUnavailableException("部门树拉取失败: 部门树为空");
-            }
-            log.warn("部门树为空，白名单降级为精确部门 ID 判定");
-            return whitelistIds;
+            throw new DeptTreeUnavailableException("部门树拉取失败: 部门树为空");
         }
 
         Map<Long, List<Long>> childrenByParent = new HashMap<>();

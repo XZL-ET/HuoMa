@@ -80,6 +80,48 @@ class DepartmentWhitelistManualEntryTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("updateAgent 拒绝把无关部门员工提为接待员")
+    void updateAgentRejectsPromotionToReceptionistForDisallowed() {
+        agentRepo.save(Agent.builder().userid("bad").name("bad")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        QrAgent qa = qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId())
+            .agentUserid("bad").role(QrAgent.AgentRole.service)
+            .status(QrAgent.AgentStatus.active).build());
+
+        assertThatThrownBy(() -> qrCodeService.updateAgent(
+            qr.getId(), qa.getId(), null, "receptionist", null))
+            .hasMessageContaining("部门准入");
+        assertThat(qrAgentRepo.findById(qa.getId()))
+            .hasValueSatisfying(saved -> assertThat(saved.getRole())
+                .isEqualTo(QrAgent.AgentRole.service));
+    }
+
+    @Test
+    @DisplayName("updateAgent 允许部门员工提为接待员")
+    void updateAgentAllowsPromotionForEligible() {
+        agentRepo.save(Agent.builder().userid("ok").name("ok")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        agentRepo.save(Agent.builder().userid("other").name("other")
+            .role(Agent.AgentRole.receptionist)
+            .overallStatus(Agent.OverallStatus.normal).build());
+        // 活码上另有服务老师，避免命中「不能降级唯一服务老师」的既有校验
+        qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId())
+            .agentUserid("other").role(QrAgent.AgentRole.service)
+            .status(QrAgent.AgentStatus.active).build());
+        QrAgent qa = qrAgentRepo.save(QrAgent.builder().qrCodeId(qr.getId())
+            .agentUserid("ok").role(QrAgent.AgentRole.service)
+            .status(QrAgent.AgentStatus.active).build());
+
+        qrCodeService.updateAgent(qr.getId(), qa.getId(), null, "receptionist", null);
+
+        assertThat(qrAgentRepo.findById(qa.getId()))
+            .hasValueSatisfying(saved -> assertThat(saved.getRole())
+                .isEqualTo(QrAgent.AgentRole.receptionist));
+    }
+
+    @Test
     @DisplayName("restore 不复活无关部门接待员的 removed 绑定")
     void restoreSkipsDisallowedRemovedBinding() {
         agentRepo.save(Agent.builder().userid("bad").name("bad")

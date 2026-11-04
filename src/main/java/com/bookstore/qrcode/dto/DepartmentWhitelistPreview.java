@@ -10,7 +10,7 @@ import java.util.List;
  *
  * @param active               应用后白名单是否启用
  * @param poolRemovals         将被移出全局员工池的员工
- * @param qrRemovals           将从活码撤下接待员的活码及明细
+ * @param qrRemovals           将从活码撤下接待员的活码及明细（含已满 full 的接待员，名称后缀「（已满）」）
  * @param noDepartmentEmployees 本地无员工记录或部门为空的员工
  * @param serviceBindingsExempt 因服务老师角色豁免、不会被撤下的活跃绑定数
  * @param warnings             预览阶段提示（补位不可行、无部门员工等）

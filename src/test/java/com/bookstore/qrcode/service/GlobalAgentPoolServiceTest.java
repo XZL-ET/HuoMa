@@ -9,6 +9,7 @@ import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,6 +36,13 @@ class GlobalAgentPoolServiceTest {
 
     @InjectMocks
     private GlobalAgentPoolService poolService;
+
+    /** 默认白名单未启用（空集合即未启用）；启用用例各自覆盖。 */
+    @BeforeEach
+    void whitelistDisabledByDefault() {
+        lenient().when(whitelistService.loadAllowedDeptIdsWithTreeStatus())
+            .thenReturn(new DepartmentWhitelistService.AllowedDeptResult(Set.of(), true));
+    }
 
     @Test
     @DisplayName("takeStandby — 从池中取优先级最高待命员工")
@@ -123,8 +131,12 @@ class GlobalAgentPoolServiceTest {
     @Test
     @DisplayName("ensureInPool — 无关部门员工不入池，并清理已有记录")
     void ensureInPoolSkipsDisallowed() {
-        when(whitelistService.isActive()).thenReturn(true);
-        when(whitelistService.isAllowed("user1")).thenReturn(false);
+        when(whitelistService.loadAllowedDeptIdsWithTreeStatus())
+            .thenReturn(new DepartmentWhitelistService.AllowedDeptResult(Set.of(100L), true));
+        Employee bad = Employee.builder().userid("user1")
+            .department("[200]").active(true).wechatStatus(1).build();
+        when(employeeRepo.findByUserid("user1")).thenReturn(Optional.of(bad));
+        when(whitelistService.isEmployeeAllowed(bad, Set.of(100L))).thenReturn(false);
         GlobalAgentPool existing = GlobalAgentPool.builder().id(1L).agentUserid("user1").build();
         when(poolRepo.findByAgentUserid("user1")).thenReturn(Optional.of(existing));
 
@@ -135,10 +147,26 @@ class GlobalAgentPoolServiceTest {
     }
 
     @Test
+    @DisplayName("ensureInPool — 部门树不可用时暂缓入池且不删除已有记录")
+    void ensureInPoolKeepsRowWhenTreeUnavailable() {
+        when(whitelistService.loadAllowedDeptIdsWithTreeStatus())
+            .thenReturn(new DepartmentWhitelistService.AllowedDeptResult(Set.of(100L), false));
+        Employee child = Employee.builder().userid("user1")
+            .department("[101]").active(true).wechatStatus(1).build();
+        when(employeeRepo.findByUserid("user1")).thenReturn(Optional.of(child));
+        when(whitelistService.isEmployeeAllowed(child, Set.of(100L))).thenReturn(false);
+
+        poolService.ensureInPool("user1", 100);
+
+        verify(poolRepo, never()).delete(any());
+        verify(poolRepo, never()).save(any());
+    }
+
+    @Test
     @DisplayName("takeStandby — 懒清理无关部门候选并跳过")
     void takeStandbyDeletesDisallowedCandidate() {
-        when(whitelistService.isActive()).thenReturn(true);
-        when(whitelistService.loadAllowedDeptIds(false)).thenReturn(Set.of(100L));
+        when(whitelistService.loadAllowedDeptIdsWithTreeStatus())
+            .thenReturn(new DepartmentWhitelistService.AllowedDeptResult(Set.of(100L), true));
         GlobalAgentPool p = GlobalAgentPool.builder()
             .id(1L).agentUserid("user1").sortOrder(1)
             .status(GlobalAgentPool.PoolStatus.standby).build();
@@ -151,5 +179,24 @@ class GlobalAgentPoolServiceTest {
 
         assertThat(poolService.takeStandby(Set.of())).isNull();
         verify(poolRepo).delete(p);
+    }
+
+    @Test
+    @DisplayName("takeStandby — 部门树不可用时跳过候选但不删除池记录")
+    void takeStandbyKeepsCandidateWhenTreeUnavailable() {
+        when(whitelistService.loadAllowedDeptIdsWithTreeStatus())
+            .thenReturn(new DepartmentWhitelistService.AllowedDeptResult(Set.of(100L), false));
+        GlobalAgentPool p = GlobalAgentPool.builder()
+            .id(1L).agentUserid("user1").sortOrder(1)
+            .status(GlobalAgentPool.PoolStatus.standby).build();
+        Employee child = Employee.builder().userid("user1")
+            .department("[101]").active(true).wechatStatus(1).build();
+        when(poolRepo.findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby))
+            .thenReturn(List.of(p));
+        when(employeeRepo.findByUserid("user1")).thenReturn(Optional.of(child));
+        when(whitelistService.isEmployeeAllowed(child, Set.of(100L))).thenReturn(false);
+
+        assertThat(poolService.takeStandby(Set.of())).isNull();
+        verify(poolRepo, never()).delete(any());
     }
 }

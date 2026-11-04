@@ -89,12 +89,17 @@ public class DepartmentWhitelistApplyService {
         List<GlobalAgentPool> poolRows = poolRepo.findAll();
         List<QrAgent> allActive =
             qrAgentRepo.findByStatus(QrAgent.AgentStatus.active);
+        // full 接待员同样会被 apply 撤下，预览必须一并展示，否则确认页漏报实际影响
+        List<QrAgent> allFull = qrAgentRepo.findByStatus(QrAgent.AgentStatus.full);
 
         Set<String> userids = new LinkedHashSet<>();
         for (GlobalAgentPool row : poolRows) {
             userids.add(row.getAgentUserid());
         }
         for (QrAgent qa : allActive) {
+            userids.add(qa.getAgentUserid());
+        }
+        for (QrAgent qa : allFull) {
             userids.add(qa.getAgentUserid());
         }
         Map<String, Employee> employees = loadEmployees(userids);
@@ -110,6 +115,7 @@ public class DepartmentWhitelistApplyService {
         }
 
         Map<Long, List<QrAgent>> disallowedActiveByQr = new LinkedHashMap<>();
+        Map<Long, List<QrAgent>> disallowedFullByQr = new LinkedHashMap<>();
         int serviceBindingsExempt = 0;
         for (QrAgent qa : allActive) {
             boolean employeeAllowed = isAllowed(employees.get(qa.getAgentUserid()), allowed);
@@ -124,24 +130,38 @@ public class DepartmentWhitelistApplyService {
                 serviceBindingsExempt++;
             }
         }
+        for (QrAgent qa : allFull) {
+            if (qa.getRole() == QrAgent.AgentRole.receptionist
+                && !isAllowed(employees.get(qa.getAgentUserid()), allowed)) {
+                disallowedFullByQr
+                    .computeIfAbsent(qa.getQrCodeId(), k -> new ArrayList<>())
+                    .add(qa);
+            }
+        }
 
-        Map<Long, String> schoolNames = loadSchoolNames(disallowedActiveByQr.keySet());
-        Map<Long, List<QrAgent>> allBindingsByQr = loadAllBindings(disallowedActiveByQr.keySet());
+        Set<Long> affectedQrIds = new LinkedHashSet<>(disallowedActiveByQr.keySet());
+        affectedQrIds.addAll(disallowedFullByQr.keySet());
+        Map<Long, String> schoolNames = loadSchoolNames(affectedQrIds);
+        Map<Long, List<QrAgent>> allBindingsByQr = loadAllBindings(affectedQrIds);
         List<GlobalAgentPool> standbys = poolRows.stream()
             .filter(row -> row.getStatus() == GlobalAgentPool.PoolStatus.standby)
             .toList();
 
         List<DepartmentWhitelistPreview.QrRemoval> qrRemovals = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        for (Map.Entry<Long, List<QrAgent>> entry : disallowedActiveByQr.entrySet()) {
-            Long qrCodeId = entry.getKey();
-            List<QrAgent> doomed = entry.getValue();
+        for (Long qrCodeId : affectedQrIds) {
+            List<QrAgent> doomedActive =
+                disallowedActiveByQr.getOrDefault(qrCodeId, List.of());
+            List<QrAgent> doomedFull =
+                disallowedFullByQr.getOrDefault(qrCodeId, List.of());
             List<QrAgent> allOnQr = allBindingsByQr.getOrDefault(qrCodeId, List.of());
 
             long activeTotal = allOnQr.stream()
                 .filter(qa -> qa.getStatus() == QrAgent.AgentStatus.active)
                 .count();
-            boolean needsBackfill = activeTotal - doomed.size() < 1;
+            // full 不占 active 名额，补位判断只看撤掉的 active 接待员
+            boolean needsBackfill = !doomedActive.isEmpty()
+                && activeTotal - doomedActive.size() < 1;
 
             Set<String> boundUserids = allOnQr.stream()
                 .map(QrAgent::getAgentUserid)
@@ -151,10 +171,17 @@ public class DepartmentWhitelistApplyService {
                     && isAllowed(employees.get(pool.getAgentUserid()), allowed));
 
             List<DepartmentWhitelistPreview.Member> members = new ArrayList<>();
-            for (QrAgent qa : doomed) {
+            for (QrAgent qa : doomedActive) {
                 Employee employee = employees.get(qa.getAgentUserid());
                 members.add(new DepartmentWhitelistPreview.Member(
                     qa.getAgentUserid(), displayName(employee, qa.getAgentUserid()),
+                    firstDepartmentId(employee)));
+            }
+            for (QrAgent qa : doomedFull) {
+                Employee employee = employees.get(qa.getAgentUserid());
+                members.add(new DepartmentWhitelistPreview.Member(
+                    qa.getAgentUserid(),
+                    displayName(employee, qa.getAgentUserid()) + "（已满）",
                     firstDepartmentId(employee)));
             }
 
@@ -166,8 +193,10 @@ public class DepartmentWhitelistApplyService {
             }
         }
 
+        List<QrAgent> allReceptionistBindings = new ArrayList<>(allActive);
+        allReceptionistBindings.addAll(allFull);
         List<DepartmentWhitelistPreview.NoDeptEmployee> noDepartmentEmployees =
-            collectNoDepartmentEmployees(poolRows, allActive, employees);
+            collectNoDepartmentEmployees(poolRows, allReceptionistBindings, employees);
         if (!noDepartmentEmployees.isEmpty()) {
             warnings.add("存在 " + noDepartmentEmployees.size() + " 名员工无部门信息，将按不允许处理");
         }
@@ -318,13 +347,22 @@ public class DepartmentWhitelistApplyService {
     /**
      * 统计当前白名单下仍在活码上担任接待员的无关人数。
      *
-     * @return 漂移人数；白名单未启用时返回 0
+     * <p>部门树不可用时返回 0：此时允许集合退化为精确白名单 ID，
+     * 子部门接待员会被误判为「无关」，据此展示漂移提示会误导运营。</p>
+     *
+     * @return 漂移人数；白名单未启用或部门树不可用时返回 0
      */
     public long countDriftedActiveReceptionists() {
-        if (!whitelist.isActive()) {
+        DepartmentWhitelistService.AllowedDeptResult deptAccess =
+            whitelist.loadAllowedDeptIdsWithTreeStatus();
+        if (!deptAccess.isEnabled()) {
             return 0L;
         }
-        Set<Long> allowed = whitelist.loadAllowedDeptIds(false);
+        if (!deptAccess.treeAvailable()) {
+            log.warn("部门树不可用，跳过无关接待员漂移统计");
+            return 0L;
+        }
+        Set<Long> allowed = deptAccess.ids();
         List<QrAgent> activeReceptionists =
             qrAgentRepo.findByStatusAndRole(
                 QrAgent.AgentStatus.active, QrAgent.AgentRole.receptionist);

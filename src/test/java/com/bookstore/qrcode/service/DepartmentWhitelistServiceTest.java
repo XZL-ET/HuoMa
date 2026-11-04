@@ -82,6 +82,50 @@ class DepartmentWhitelistServiceTest {
     }
 
     @Test
+    @DisplayName("带树状态的允许集合：白名单为空 → 空集合且树可用")
+    void treeStatusEmptyWhitelist() {
+        when(repo.findAll()).thenReturn(List.of());
+
+        DepartmentWhitelistService.AllowedDeptResult result =
+            service.loadAllowedDeptIdsWithTreeStatus();
+
+        assertThat(result.ids()).isEmpty();
+        assertThat(result.treeAvailable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("带树状态的允许集合：部门树失败 → 精确 ID 且标记树不可用")
+    void treeStatusDegradesWhenTreeFails() {
+        when(repo.findAll()).thenReturn(List.of(row(100L)));
+        when(departmentService.loadDeptTree()).thenThrow(new RuntimeException("down"));
+
+        DepartmentWhitelistService.AllowedDeptResult result =
+            service.loadAllowedDeptIdsWithTreeStatus();
+
+        assertThat(result.ids()).containsExactly(100L);
+        assertThat(result.treeAvailable()).isFalse();
+        // 启用判定与允许集合必须同源：只读一次白名单表
+        verify(repo, times(1)).findAll();
+    }
+
+    @Test
+    @DisplayName("带树状态的允许集合：部门树可用 → 含子孙部门且标记可用")
+    void treeStatusExpandsWhenTreeAvailable() {
+        when(repo.findAll()).thenReturn(List.of(row(100L)));
+        when(departmentService.loadDeptTree()).thenReturn(Map.of(
+            100L, new DepartmentService.DeptNode(100, "校区", 0L),
+            101L, new DepartmentService.DeptNode(101, "校区A", 100L),
+            200L, new DepartmentService.DeptNode(200, "后勤", 0L)));
+
+        DepartmentWhitelistService.AllowedDeptResult result =
+            service.loadAllowedDeptIdsWithTreeStatus();
+
+        assertThat(result.ids()).containsExactlyInAnyOrder(100L, 101L);
+        assertThat(result.treeAvailable()).isTrue();
+        verify(repo, times(1)).findAll();
+    }
+
+    @Test
     @DisplayName("兼属多部门：任一命中即允许")
     void anyDepartmentMembershipAllows() {
         Employee emp = Employee.builder().userid("u1").department("[200,100]").build();

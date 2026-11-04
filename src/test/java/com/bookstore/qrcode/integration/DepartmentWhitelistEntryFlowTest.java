@@ -9,15 +9,19 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Import;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.when;
 
 /**
  * 部门准入：入池过滤与漂移清理。
@@ -35,6 +39,8 @@ class DepartmentWhitelistEntryFlowTest extends BaseIntegrationTest {
     @Autowired private GlobalAgentPoolRepository poolRepo;
     @Autowired private AgentRepository agentRepo;
     @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
+    @Autowired private WecomApiClient wecomApi;
+    @Autowired private CacheManager cacheManager;
 
     @BeforeEach
     void setUp() {
@@ -70,6 +76,33 @@ class DepartmentWhitelistEntryFlowTest extends BaseIntegrationTest {
         assertThat(poolRepo.findByAgentUserid("mixed")).isPresent();
         assertThat(poolRepo.findByAgentUserid("bad")).isEmpty();
         assertThat(poolRepo.findByAgentUserid("none")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("部门树不可用时不删除子部门池记录，只跳过本次入池")
+    void doesNotDeleteChildDeptPoolRowsWhenTreeUnavailable() {
+        // 白名单只配了父部门 100，员工在子部门 101 —— 正常应视为允许
+        employeeRepo.save(emp("child", "[101]"));
+        agentRepo.save(Agent.builder().userid("child").name("child")
+            .role(Agent.AgentRole.receptionist).build());
+        poolRepo.save(GlobalAgentPool.builder().agentUserid("child")
+            .departmentId(101L).status(GlobalAgentPool.PoolStatus.standby).build());
+
+        var treeCache = cacheManager.getCache("departmentTree");
+        if (treeCache != null) treeCache.clear();
+        when(wecomApi.listDepartments(null)).thenThrow(new RuntimeException("dept api down"));
+        try {
+            employeeSyncService.syncToGlobalPool();
+        } finally {
+            // 旧 stub 是 thenThrow，直接 when(...) 重设会先触发异常，必须先 reset
+            reset(wecomApi);
+            WecomApiMockConfig.reapplyBaseStubs(wecomApi);
+            if (treeCache != null) treeCache.clear();
+        }
+
+        // 降级为精确 ID 后 101 会被判成「不在允许范围」；
+        // 但树不可用不能据此删除合法池成员（只可少放人，不可误删）
+        assertThat(poolRepo.findByAgentUserid("child")).isPresent();
     }
 
     @Test
