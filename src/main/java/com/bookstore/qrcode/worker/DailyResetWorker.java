@@ -3,6 +3,7 @@ package com.bookstore.qrcode.worker;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.ScheduledJobGuard;
@@ -66,6 +67,7 @@ public class DailyResetWorker {
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
     private final ScheduledJobGuard jobGuard;
+    private final DepartmentWhitelistService whitelist;
 
     /** 跨机互斥：双机同刻触发会撞 daily_report 唯一键、每天白吃一个自增 ID */
     private static final String DAILY_RESET_LOCK_KEY = "lock:job:daily-reset";
@@ -234,7 +236,34 @@ public class DailyResetWorker {
         // 2. full → active
         var fullAgents = qrAgentRepo.findByStatus(QrAgent.AgentStatus.full);
         Set<Long> affectedQrIds = new HashSet<>();
+
+        // 部门准入：无关接待员即使 full 也不再复活，直接移除；白名单未启用时不做限制。
+        // 严格模式：部门树不可用时不能把「树坏了」当成「都不允许」，否则会误删所有 full
+        // 接待员。此时跳过本轮准入守卫，按原逻辑复活。
+        Set<String> allowedReceptionists = null;
+        if (whitelist.isActive()) {
+            List<String> receptionistIds = fullAgents.stream()
+                .filter(qa -> qa.getRole() == QrAgent.AgentRole.receptionist)
+                .map(QrAgent::getAgentUserid).toList();
+            try {
+                allowedReceptionists = whitelist.filterAllowedUseridsStrict(receptionistIds);
+            } catch (DepartmentWhitelistService.DeptTreeUnavailableException e) {
+                log.warn("部门树不可用，本次每日重置跳过部门准入守卫，按原逻辑复活", e);
+                allowedReceptionists = null;
+            }
+        }
+
         for (var qa : fullAgents) {
+            if (qa.getRole() == QrAgent.AgentRole.receptionist
+                && allowedReceptionists != null
+                && !allowedReceptionists.contains(qa.getAgentUserid())) {
+                qa.setStatus(QrAgent.AgentStatus.removed);
+                qrAgentRepo.save(qa);
+                affectedQrIds.add(qa.getQrCodeId());
+                log.info("部门准入：每日重置不复活无关接待员 qr={}, userid={}",
+                    qa.getQrCodeId(), qa.getAgentUserid());
+                continue;
+            }
             var agent = agentRepo.findById(qa.getAgentUserid()).orElse(null);
             if (agent != null
                 && agent.getOverallStatus() != Agent.OverallStatus.blocked

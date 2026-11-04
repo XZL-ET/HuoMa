@@ -10,6 +10,7 @@ import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AgentDailyCountService;
 import com.bookstore.qrcode.service.AgentRotationService;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.ScheduledJobGuard;
@@ -58,6 +59,7 @@ class DailyResetWorkerTest {
     @Mock private AlertService alertService;
     @Mock private ObjectMapper objectMapper;
     @Mock private ScheduledJobGuard jobGuard;
+    @Mock private DepartmentWhitelistService whitelist;
     @Mock private Cursor<String> cursor;
 
     @InjectMocks

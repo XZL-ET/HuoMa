@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,5 +52,31 @@ class DepartmentServiceTest {
         Map<Long, String> map = departmentService.loadDeptIdNameMap();
 
         assertThat(map).isEmpty();
+    }
+
+    @Test
+    @DisplayName("解析部门树：id → 名称 + parentId")
+    void parsesDeptTree() throws Exception {
+        when(wecomApiClient.listDepartments(null)).thenReturn(objectMapper.readTree(
+                "{\"department\":[" +
+                "{\"id\":100,\"name\":\"校区\",\"parentid\":0}," +
+                "{\"id\":101,\"name\":\"校区A\",\"parentid\":100}]}"));
+
+        Map<Long, DepartmentService.DeptNode> tree = departmentService.loadDeptTree();
+
+        assertThat(tree).containsKeys(100L, 101L);
+        assertThat(tree.get(101L).name()).isEqualTo("校区A");
+        assertThat(tree.get(101L).parentId()).isEqualTo(100L);
+        assertThat(tree.get(100L).parentId()).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("部门树 API 失败时向上抛出，不吞异常")
+    void loadDeptTreePropagatesFailure() throws Exception {
+        when(wecomApiClient.listDepartments(null)).thenThrow(new RuntimeException("api down"));
+
+        assertThatThrownBy(() -> departmentService.loadDeptTree())
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("api down");
     }
 }

@@ -28,7 +28,8 @@ public class CacheConfig {
                 buildCache("cities", 5),
                 buildCache("districts", 5),
                 buildCache("dashboard-stats", 1),
-                buildCache("departments", 30)
+                buildCache("departments", 30),
+                buildCache("departmentTree", 30)
         ));
         return manager;
     }

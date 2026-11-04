@@ -1,8 +1,13 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.AllEmployeeRow;
+import com.bookstore.qrcode.dto.DepartmentWhitelistApplyResult;
+import com.bookstore.qrcode.dto.DeptOption;
 import com.bookstore.qrcode.entity.*;
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.DepartmentService;
+import com.bookstore.qrcode.service.DepartmentWhitelistApplyService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
@@ -14,6 +19,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +30,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.*;
@@ -53,6 +60,10 @@ public class AgentController {
     private final EmployeeRepository employeeRepo;
     private final AgentRepository agentRepo;
     private final OperationLogService operationLogService;
+    private final DepartmentWhitelistService whitelist;
+    private final DepartmentWhitelistApplyService whitelistApplyService;
+    private final DepartmentService departmentService;
+    private final PoolAllowedDepartmentRepository whitelistRepo;
 
     /** 默认接待员日限，与 {@code app.agent.daily-max-default} 对齐 */
     @Value("${app.agent.daily-max-default:150}")
@@ -230,6 +241,193 @@ public class AgentController {
         return "redirect:/agents";
     }
 
+    // ── 部门准入配置页 ──
+
+    /**
+     * GET {@code /agents/departments} — 部门准入配置页。
+     *
+     * <p>展示当前白名单、部门树多选、漂移接待员提示，并提供预览/应用/停用入口。
+     * 部门树拉取失败（含缓存/序列化等运行时异常）时降级为空列表并在当前渲染
+     * 的页面给出错误提示，页面仍可访问。</p>
+     */
+    @GetMapping("/departments")
+    public String departments(Model model) {
+        List<PoolAllowedDepartment> allowedDepts = whitelistRepo.findAllByOrderByDeptIdAsc();
+
+        List<DeptOption> deptOptions;
+        try {
+            deptOptions = flattenDeptTree(departmentService.loadDeptTree());
+        } catch (RuntimeException e) {
+            log.warn("部门准入页：部门树拉取失败", e);
+            model.addAttribute("error", "部门树拉取失败，请稍后重试");
+            deptOptions = List.of();
+        }
+
+        List<Long> selectedIds = allowedDepts.stream()
+            .map(PoolAllowedDepartment::getDeptId)
+            .collect(Collectors.toList());
+
+        model.addAttribute("view", "departments");
+        model.addAttribute("whitelistActive", whitelist.isActive());
+        model.addAttribute("allowedDepts", allowedDepts);
+        model.addAttribute("deptOptions", deptOptions);
+        model.addAttribute("selectedIds", selectedIds);
+        model.addAttribute("driftedReceptionistCount",
+            whitelistApplyService.countDriftedActiveReceptionists());
+        model.addAttribute("title", "部门准入");
+        return "agent/departments";
+    }
+
+    /**
+     * POST {@code /agents/departments/preview} — 只读预览切换白名单后的影响面（JSON）。
+     */
+    @PostMapping("/departments/preview")
+    @ResponseBody
+    public ResponseEntity<?> previewDepartments(
+            @RequestParam(name = "deptIds", required = false) List<Long> deptIds) {
+        if (deptIds == null || deptIds.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "请至少选择一个部门"));
+        }
+        try {
+            return ResponseEntity.ok(whitelistApplyService.preview(deptIds));
+        } catch (DepartmentWhitelistService.DeptTreeUnavailableException e) {
+            log.warn("部门准入预览：部门树拉取失败", e);
+            return ResponseEntity.status(409)
+                .body(Map.of("error", "部门树拉取失败，请稍后重试"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                .body(Map.of("error", e.getMessage() != null ? e.getMessage() : "参数不合法"));
+        }
+    }
+
+    /**
+     * POST {@code /agents/departments/apply} — 确认应用部门准入：写白名单、清理池与活码。
+     */
+    @PostMapping("/departments/apply")
+    public String applyDepartments(
+            @RequestParam(name = "deptIds", required = false) List<Long> deptIds,
+            RedirectAttributes redirect) {
+        String operator = currentOperator();
+        try {
+            DepartmentWhitelistApplyResult result = whitelistApplyService.apply(deptIds, operator);
+            int removedReceptionists = result.activeReceptionistsRemoved()
+                + result.fullReceptionistsRemoved();
+            String message = String.format(
+                "部门准入已应用：移出池 %d 人，撤下接待员 %d 人，补位 %d 人",
+                result.poolRemoved(), removedReceptionists, result.backfilled());
+            if (result.qrCodesSkipped() > 0) {
+                message += "；" + result.qrCodesSkipped() + " 个活码未处理，详见未处理清单";
+            }
+            redirect.addFlashAttribute("message", message);
+            redirect.addFlashAttribute("applyFailures", result.failures());
+        } catch (DepartmentWhitelistService.DeptTreeUnavailableException e) {
+            log.warn("部门准入应用：部门树不可用", e);
+            redirect.addFlashAttribute("error",
+                e.getMessage() != null ? e.getMessage() : "部门树拉取失败，请稍后重试");
+        } catch (IllegalArgumentException e) {
+            log.warn("部门准入应用：参数不合法", e);
+            redirect.addFlashAttribute("error",
+                e.getMessage() != null ? e.getMessage() : "参数不合法");
+        } catch (RuntimeException e) {
+            // 非预期异常不透出原始信息，避免泄漏内部细节
+            log.error("部门准入应用失败", e);
+            redirect.addFlashAttribute("error", "操作失败，请稍后重试");
+        }
+        return "redirect:/agents/departments";
+    }
+
+    /**
+     * POST {@code /agents/departments/disable} — 清空白名单并停用部门准入。
+     */
+    @PostMapping("/departments/disable")
+    public String disableDepartments(RedirectAttributes redirect) {
+        String operator = currentOperator();
+        try {
+            whitelist.clearWhitelist();
+            operationLogService.log(operator, "dept_whitelist_disable",
+                "agent_pool_department", "-", "清空部门准入白名单");
+            redirect.addFlashAttribute("message", "部门准入已停用，白名单已清空");
+        } catch (RuntimeException e) {
+            log.warn("部门准入停用失败", e);
+            redirect.addFlashAttribute("error",
+                e.getMessage() != null ? e.getMessage() : "停用失败，请稍后重试");
+        }
+        return "redirect:/agents/departments";
+    }
+
+    /** 当前登录操作人；无认证上下文（如单测）回退为 {@code system}。 */
+    private String currentOperator() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null ? authentication.getName() : "system";
+    }
+
+    /**
+     * 将部门树按父子关系扁平化，根节点在 depth 0，子节点依次递增。
+     *
+     * <p>根 = parentId 为 null 或父部门不在树中的节点。使用 visited 集合防御
+     * 环状引用，避免无限递归；未被根遍历覆盖的节点（如环路）会在末尾按 depth 0 补出。</p>
+     */
+    private List<DeptOption> flattenDeptTree(Map<Long, DepartmentService.DeptNode> tree) {
+        if (tree == null || tree.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, List<DepartmentService.DeptNode>> childrenByParent = new HashMap<>();
+        for (DepartmentService.DeptNode node : tree.values()) {
+            if (node.parentId() != null && tree.containsKey(node.parentId())) {
+                childrenByParent.computeIfAbsent(node.parentId(), k -> new ArrayList<>())
+                    .add(node);
+            }
+        }
+        Comparator<DepartmentService.DeptNode> byId =
+            Comparator.comparingLong(DepartmentService.DeptNode::id);
+        childrenByParent.values().forEach(list -> list.sort(byId));
+
+        List<DepartmentService.DeptNode> ordered = new ArrayList<>(tree.values());
+        ordered.sort(byId);
+
+        List<DeptOption> result = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        for (DepartmentService.DeptNode node : ordered) {
+            if (node.parentId() == null || !tree.containsKey(node.parentId())) {
+                walkDept(node, 0, childrenByParent, visited, result);
+            }
+        }
+        // 环状/孤立节点兜底：以 depth 0 输出，visited 保证不会重复或死循环
+        for (DepartmentService.DeptNode node : ordered) {
+            if (!visited.contains(node.id())) {
+                walkDept(node, 0, childrenByParent, visited, result);
+            }
+        }
+        return result;
+    }
+
+    private void walkDept(DepartmentService.DeptNode node, int depth,
+                          Map<Long, List<DepartmentService.DeptNode>> childrenByParent,
+                          Set<Long> visited, List<DeptOption> out) {
+        if (!visited.add(node.id())) {
+            return;
+        }
+        int descendantCount = countDescendants(node.id(), childrenByParent, new HashSet<>());
+        out.add(new DeptOption(node.id(), node.name(), depth, descendantCount));
+        for (DepartmentService.DeptNode child :
+                childrenByParent.getOrDefault(node.id(), List.of())) {
+            walkDept(child, depth + 1, childrenByParent, visited, out);
+        }
+    }
+
+    private int countDescendants(long id,
+                                 Map<Long, List<DepartmentService.DeptNode>> childrenByParent,
+                                 Set<Long> seen) {
+        int count = 0;
+        for (DepartmentService.DeptNode child : childrenByParent.getOrDefault(id, List.of())) {
+            if (seen.add(child.id())) {
+                count += 1 + countDescendants(child.id(), childrenByParent, seen);
+            }
+        }
+        return count;
+    }
+
     /**
      * POST {@code /agents/restore} — 一键恢复：将熔断/停用员工恢复为正常状态。
      *
@@ -238,6 +436,8 @@ public class AgentController {
      * 恢复前记录审计日志，恢复后接待员自动回池。
      * 服务老师/双角色自动恢复到原活码（重新激活 full/removed 的 QrAgent 记录），
      * 并同步企微侧联系人列表。</p>
+     *
+     * <p>接待员恢复时按部门准入白名单过滤，不在允许范围的活码绑定不复活（服务老师/双角色不受影响）。</p>
      */
     @Transactional
     @PostMapping("/restore")
@@ -283,7 +483,12 @@ public class AgentController {
 
         List<String> restoredCodes = new ArrayList<>();      // 本次恢复的活码名称
         List<String> otherCodes = new ArrayList<>();         // 仍在码上的活码名称
+        List<String> skippedByWhitelist = new ArrayList<>(); // 按部门准入跳过的活码名称
         Set<Long> syncedQrIds = new HashSet<>();             // 需要同步到企微的活码 ID
+
+        // 白名单只读一次：同一次恢复内的所有判定与回池提示必须一致
+        boolean whitelistActive = whitelist.isActive();
+        boolean whitelistAllowsUser = !whitelistActive || whitelist.isAllowed(userid);
 
         for (QrAgent qa : qrAgents) {
             QrCode qr = qrCodeRepo.findById(qa.getQrCodeId()).orElse(null);
@@ -296,6 +501,10 @@ public class AgentController {
                 // 防止重复：同一活码已有 active 记录则跳过
                 if (alreadyActiveQrIds.contains(qa.getQrCodeId())) {
                     otherCodes.add(qrName + "(已在码上)");
+                    continue;
+                }
+                if (qa.getRole() == QrAgent.AgentRole.receptionist && !whitelistAllowsUser) {
+                    skippedByWhitelist.add(qrName);
                     continue;
                 }
                 QrAgent.AgentStatus prevQaStatus = qa.getStatus();
@@ -354,7 +563,14 @@ public class AgentController {
             msg.append("；关联活码：");
             msg.append(String.join("、", otherCodes));
         }
-        if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
+        if (!skippedByWhitelist.isEmpty()) {
+            if (msg.length() > 0) {
+                msg.append("；");
+            }
+            msg.append("按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
+        }
+        if (poolService.isPoolEligible(userid) && whitelistAllowsUser
+            && (needsStatusReset || !restoredCodes.isEmpty())) {
             msg.append("；已自动加入全局池");
         }
         if (qrAgents.isEmpty()) {

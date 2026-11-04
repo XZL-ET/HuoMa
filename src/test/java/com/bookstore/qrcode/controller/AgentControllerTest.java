@@ -1,6 +1,9 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.repository.*;
+import com.bookstore.qrcode.service.DepartmentService;
+import com.bookstore.qrcode.service.DepartmentWhitelistApplyService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
@@ -33,7 +36,11 @@ class AgentControllerTest {
                 mock(EmployeeSyncService.class),
                 mock(EmployeeRepository.class),
                 mock(AgentRepository.class),
-                mock(OperationLogService.class));
+                mock(OperationLogService.class),
+                mock(DepartmentWhitelistService.class),
+                mock(DepartmentWhitelistApplyService.class),
+                mock(DepartmentService.class),
+                mock(PoolAllowedDepartmentRepository.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

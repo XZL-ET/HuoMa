@@ -131,6 +131,15 @@ CREATE INDEX IF NOT EXISTS idx_pool_status ON global_agent_pool (status);
 CREATE INDEX IF NOT EXISTS idx_pool_sort ON global_agent_pool (sort_order);
 CREATE INDEX IF NOT EXISTS idx_pool_status_sort ON global_agent_pool (status, sort_order);
 
+-- pool_allowed_department：全局员工池部门准入白名单
+CREATE TABLE IF NOT EXISTS pool_allowed_department (
+    dept_id BIGINT PRIMARY KEY,
+    dept_name VARCHAR(100) NOT NULL,
+    created_by VARCHAR(100),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_allowed_dept_name ON pool_allowed_department (dept_name);
+
 -- customer：客户
 CREATE TABLE IF NOT EXISTS customer (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

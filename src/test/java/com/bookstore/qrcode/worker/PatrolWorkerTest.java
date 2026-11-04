@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.worker;
 
+import com.bookstore.qrcode.entity.Agent;
 import com.bookstore.qrcode.entity.AgentAlert;
 import com.bookstore.qrcode.entity.GlobalAgentPool;
 import com.bookstore.qrcode.entity.QrAgent;
@@ -12,7 +13,9 @@ import com.bookstore.qrcode.repository.OperationLogRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AlertService;
+import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.EmployeeSyncService;
+import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.LeakMetrics;
 import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.QrCodeService;
@@ -61,6 +64,8 @@ class PatrolWorkerTest {
     private MessageGuardService messageGuardService;
     private QrCodeService qrCodeService;
     private ScheduledJobGuard jobGuard;
+    private DepartmentWhitelistService whitelistService;
+    private GlobalAgentPoolService poolService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -122,6 +127,39 @@ class PatrolWorkerTest {
             eq(AgentAlert.AlertSeverity.high), any(), any(), any());
     }
 
+    @Test
+    @DisplayName("可入池上限为 0（候选都被池准入过滤）时，池枯竭不再告警")
+    void suppressesAlertWhenNoAllowedCandidates() {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
+        when(whitelistService.isActive()).thenReturn(true);
+        when(whitelistService.findAllowedCandidateUseridsNotInPool(any()))
+            .thenReturn(Set.of("svc"));
+        when(poolService.filterPoolEligible(any())).thenReturn(Set.of());
+
+        worker.checkGlobalPoolLow();
+
+        verify(alertService, never()).alertEmptyBackup(any(), any());
+    }
+
+    @Test
+    @DisplayName("允许范围内仍有真正可入池候选人时，池枯竭必须告警（防过度抑制）")
+    void alertsWhenAllowedCandidatesRemain() {
+        when(poolRepo.countByStatus(GlobalAgentPool.PoolStatus.standby)).thenReturn(0L);
+        when(employeeSyncService.syncToGlobalPool()).thenReturn(0);
+        when(whitelistService.isActive()).thenReturn(true);
+        when(whitelistService.findAllowedCandidateUseridsNotInPool(any()))
+            .thenReturn(Set.of("ok"));
+        when(poolService.filterPoolEligible(any())).thenReturn(Set.of("ok"));
+        when(agentRepo.findAllById(anyIterable())).thenReturn(List.of(
+            Agent.builder().userid("ok").name("ok")
+                .overallStatus(Agent.OverallStatus.normal).build()));
+
+        worker.checkGlobalPoolLow();
+
+        verify(alertService, times(1)).alertEmptyBackup(any(), any());
+    }
+
     // ==================== 小工具 ====================
 
     private void invoke() throws Exception {
@@ -164,6 +202,8 @@ class PatrolWorkerTest {
         agentRepo = mock(AgentRepository.class);
         qrCodeService = mock(QrCodeService.class);
         jobGuard = mock(ScheduledJobGuard.class);
+        whitelistService = mock(DepartmentWhitelistService.class);
+        poolService = mock(GlobalAgentPoolService.class);
         return new PatrolWorker(
             qrAgentRepo,
             poolRepo,
@@ -179,7 +219,9 @@ class PatrolWorkerTest {
             mock(CustomerTransferRepository.class),
             qrCodeService,
             metrics,
-            jobGuard);
+            jobGuard,
+            whitelistService,
+            poolService);
     }
 
     // ==================== 条件恢复后自动关闭 ====================

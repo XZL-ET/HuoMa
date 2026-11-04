@@ -54,6 +54,7 @@ public class GlobalAgentPoolService {
     private final QrAgentRepository qrAgentRepo;
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
+    private final DepartmentWhitelistService whitelist;
 
     /** 部门树缓存：parentId → 所有子孙部门 ID。企微部门结构很少变动，实例级缓存即可。 */
     private final Map<Long, Collection<Long>> deptTreeCache = new ConcurrentHashMap<>();
@@ -121,6 +122,9 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public GlobalAgentPool takeStandby(Set<String> excludeUserids) {
+        boolean whitelistActive = whitelist.isActive();
+        Set<Long> allowedDeptIds = whitelistActive
+            ? whitelist.loadAllowedDeptIds(false) : Set.of();
         List<GlobalAgentPool> standbys = poolRepo
             .findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby);
         if (standbys.isEmpty()) {
@@ -135,6 +139,12 @@ public class GlobalAgentPoolService {
             }
             // 过滤已离职员工（企微通讯录已标记 inactive）→ 懒清理出池
             Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池
+            if (whitelistActive && (emp == null || !whitelist.isEmployeeAllowed(emp, allowedDeptIds))) {
+                poolRepo.delete(p);
+                log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+                continue;
+            }
             if (emp != null && !emp.getActive()) {
                 skippedInactive++;
                 poolRepo.delete(p);
@@ -228,6 +238,9 @@ public class GlobalAgentPoolService {
      */
     private GlobalAgentPool selectFromDeptCandidates(List<GlobalAgentPool> candidates,
                                                       Set<String> excludeUserids) {
+        boolean whitelistActive = whitelist.isActive();
+        Set<Long> allowedDeptIds = whitelistActive
+            ? whitelist.loadAllowedDeptIds(false) : Set.of();
         int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
         for (GlobalAgentPool p : candidates) {
             if (excludeUserids != null && excludeUserids.contains(p.getAgentUserid())) {
@@ -235,6 +248,12 @@ public class GlobalAgentPoolService {
             }
             // 过滤已离职员工 → 懒清理出池
             Employee emp = employeeRepo.findByUserid(p.getAgentUserid()).orElse(null);
+            // 部门准入：启用态下无关部门员工（含本地无记录者）→ 懒清理出池
+            if (whitelistActive && (emp == null || !whitelist.isEmployeeAllowed(emp, allowedDeptIds))) {
+                poolRepo.delete(p);
+                log.info("部门准入：懒清理无关部门员工 userid={}", p.getAgentUserid());
+                continue;
+            }
             if (emp != null && !emp.getActive()) {
                 skippedInactive++;
                 poolRepo.delete(p);
@@ -349,6 +368,13 @@ public class GlobalAgentPoolService {
      */
     @Transactional
     public void ensureInPool(String userid, int dailyMax) {
+        if (whitelist.isActive() && !whitelist.isAllowed(userid)) {
+            poolRepo.findByAgentUserid(userid).ifPresent(pool -> {
+                poolRepo.delete(pool);
+                log.info("部门准入：移出池记录 userid={}", userid);
+            });
+            return;
+        }
         GlobalAgentPool existing = poolRepo.findByAgentUserid(userid).orElse(null);
 
         // 优先从本地 Employee 表取部门（每 30 分钟从企微同步，命中率极高）

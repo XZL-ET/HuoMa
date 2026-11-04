@@ -104,6 +104,17 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
     List<QrAgent> findByStatus(QrAgent.AgentStatus status);
 
     /**
+     * 根据状态和角色查询所有符合条件的记录。
+     * <p>用于部门准入清理：一次性取出全部 active/full 接待员绑定，
+     * 再按员工部门是否命中白名单决定是否撤下。</p>
+     *
+     * @param status 接待员状态
+     * @param role   接待员角色
+     * @return 符合条件的接待员记录列表
+     */
+    List<QrAgent> findByStatusAndRole(QrAgent.AgentStatus status, QrAgent.AgentRole role);
+
+    /**
      * 根据活码 ID 和接待员角色查询记录。
      * <p>
      * 用于区分同一活码下不同角色的接待员（如「服务老师」和「后备接待员」），
