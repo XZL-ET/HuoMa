@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -55,6 +56,7 @@ public class ServiceTeacherDailyMaxService {
      * @param value 目标日限值
      * @return 实际更新的服务老师行数
      */
+    @Transactional
     public int applyToAll(int value) {
         validateDailyMax(value);
         backupServiceTeachers();
