@@ -36,8 +36,10 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -74,6 +76,9 @@ class AdminSystemConfigControllerWebTest {
                 .andExpect(view().name("admin/system-config"))
                 .andExpect(model().attribute("serviceTeacherDailyMax", 300))
                 .andExpect(model().attribute("receptionistDailyMax", 200))
+                .andExpect(content().string(containsString("接待员日限")))
+                .andExpect(content().string(containsString("/admin/system-config/receptionist-daily-max")))
+                .andExpect(content().string(containsString("保存并应用到全部接待员")))
                 .andExpect(model().attribute("deletionReportRecipients", "admin1,admin2"))
                 .andExpect(model().attribute("deletionReportTime", "09:00"));
     }
