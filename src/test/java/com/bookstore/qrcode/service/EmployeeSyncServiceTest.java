@@ -20,7 +20,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -51,6 +50,7 @@ class EmployeeSyncServiceTest {
     @Mock private AlertService alertService;
     @Mock private ObjectMapper objectMapper;
     @Mock private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    @Mock private ReceptionistDailyMaxService receptionistDailyMaxService;
     @Mock private ScheduledJobGuard jobGuard;
 
     @InjectMocks
@@ -107,7 +107,7 @@ class EmployeeSyncServiceTest {
     @Test
     @DisplayName("回填偏小 daily_max：接待员抬到 150，服务老师/双角色抬到 300，只升不降")
     void shouldRaiseLowDailyMaxToRoleDefault() {
-        ReflectionTestUtils.setField(service, "dailyMaxDefault", 150);
+        when(receptionistDailyMaxService.resolveDefault()).thenReturn(150);
         when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
 
         GlobalAgentPool receptionist = GlobalAgentPool.builder()

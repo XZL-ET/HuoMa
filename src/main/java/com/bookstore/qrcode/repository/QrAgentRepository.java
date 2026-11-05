@@ -181,6 +181,21 @@ public interface QrAgentRepository extends JpaRepository<QrAgent, Long> {
     int applyDailyMaxToServiceTeachers(@Param("value") int value);
 
     /**
+     * 批量将接待员的活码级日限统一设置为指定值。
+     * <p>用于「一键应用」：只改 role=receptionist 且未移除的绑定，
+     * 服务老师/双角色不动。全局池日限需另行同步（见
+     * {@link GlobalAgentPoolRepository#applyDailyMaxToReceptionists(int)}）。</p>
+     *
+     * @param value 目标日限值
+     * @return 实际更新的行数
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE QrAgent qa SET qa.dailyMax = :value, qa.updatedAt = CURRENT_TIMESTAMP "
+         + "WHERE qa.role = 'receptionist' AND qa.status <> 'removed'")
+    int applyDailyMaxToReceptionists(@Param("value") int value);
+
+    /**
      * 查找指定员工中担任服务老师/双角色的活码关联。
      * <p>用于离职级联清理时区分处理：服务老师不下码只告警。</p>
      */

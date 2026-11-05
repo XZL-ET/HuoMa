@@ -8,6 +8,7 @@ import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
+import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
@@ -40,7 +41,8 @@ class AgentControllerTest {
                 mock(DepartmentWhitelistService.class),
                 mock(DepartmentWhitelistApplyService.class),
                 mock(DepartmentService.class),
-                mock(PoolAllowedDepartmentRepository.class));
+                mock(PoolAllowedDepartmentRepository.class),
+                mock(ReceptionistDailyMaxService.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

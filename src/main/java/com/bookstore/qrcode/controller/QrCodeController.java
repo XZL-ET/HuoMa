@@ -29,6 +29,7 @@ import com.bookstore.qrcode.service.FormTemplateService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.QrImageService;
+import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
 import com.bookstore.qrcode.service.SchoolSelectionService;
 import com.bookstore.qrcode.service.TagService;
 import com.bookstore.qrcode.util.QrUrlAllowlist;
@@ -132,9 +133,7 @@ public class QrCodeController {
     private final ObjectMapper objectMapper;
     private final SceneConfigProperties sceneConfig;
     private final FormTemplateService formTemplateService;
-
-    @Value("${app.agent.daily-max-default:150}")
-    private int dailyMaxDefault;
+    private final ReceptionistDailyMaxService receptionistDailyMaxService;
 
     @Value("${app.inheritance.day-start-hour:8}")
     private int dayStartHour;
@@ -423,7 +422,7 @@ public class QrCodeController {
         loadRegionOptions(model);
 
         model.addAttribute("sceneConfig", sceneConfig);
-        model.addAttribute("dailyMaxDefault", dailyMaxDefault);
+        model.addAttribute("dailyMaxDefault", receptionistDailyMaxService.resolveDefault());
         model.addAttribute("categories", categoryRepo.findAllByOrderBySortOrderAscName());
 
         // 加载企微部门列表
@@ -2062,7 +2061,7 @@ public class QrCodeController {
             scenes.put(s.name(), cfg);
         }
         result.put("scenes", scenes);
-        result.put("dailyMax", dailyMaxDefault);
+        result.put("dailyMax", receptionistDailyMaxService.resolveDefault());
         return result;
     }
 

@@ -15,7 +15,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -56,12 +55,9 @@ public class EmployeeSyncService {
     private final AlertService alertService;
     private final ObjectMapper objectMapper;
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    private final ReceptionistDailyMaxService receptionistDailyMaxService;
     private final ScheduledJobGuard jobGuard;
     private final DepartmentWhitelistService whitelist;
-
-    /** 接待员默认日上限，可通过 app.agent.daily-max-default 配置 */
-    @Value("${app.agent.daily-max-default:150}")
-    private int dailyMaxDefault;
 
     /** 跨机互斥：双机同刻全量拉通讯录，与企微 API 配额和级联清理都在白跑 */
     private static final String SYNC_LOCK_KEY = "lock:job:employee-sync";
@@ -348,7 +344,8 @@ public class EmployeeSyncService {
                 agent.setMeltedCount24h(0);
                 agentRepo.save(agent);
                 if (poolService.isPoolEligible(agent.getUserid())) {
-                    poolService.ensureInPool(agent.getUserid(), dailyMaxDefault);
+                    poolService.ensureInPool(agent.getUserid(),
+                        receptionistDailyMaxService.resolveDefault());
                 }
                 unblocked++;
                 log.info("自动解封已恢复员工: userid={}, name={}, role={}",
@@ -501,6 +498,7 @@ public class EmployeeSyncService {
 
         List<GlobalAgentPool> batch = new ArrayList<>();
         List<Agent> agentBatch = new ArrayList<>();
+        int receptionistDefault = receptionistDailyMaxService.resolveDefault();
 
         for (Employee emp : activeNotInPool) {
             // 确保 Agent 主数据表有记录（用本地 employee 表的 name，不调企微 API）
@@ -520,7 +518,7 @@ public class EmployeeSyncService {
             Long primaryDeptId = extractPrimaryDeptId(emp.getDepartment());
             batch.add(GlobalAgentPool.builder()
                 .agentUserid(emp.getUserid())
-                .dailyMax(dailyMaxDefault)
+                .dailyMax(receptionistDefault)
                 .sortOrder(maxOrder)
                 .departmentId(primaryDeptId)
                 .status(GlobalAgentPool.PoolStatus.standby)
@@ -655,7 +653,7 @@ public class EmployeeSyncService {
      * @return 本次抬升的记录数
      */
     int backfillLowDailyMax() {
-        int receptionistDefault = dailyMaxDefault;
+        int receptionistDefault = receptionistDailyMaxService.resolveDefault();
         int serviceDefault = serviceTeacherDailyMaxService.resolveDefault();
         int threshold = Math.max(receptionistDefault, serviceDefault);
 

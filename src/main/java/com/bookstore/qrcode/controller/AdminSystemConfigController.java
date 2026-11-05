@@ -5,6 +5,7 @@ import com.bookstore.qrcode.job.DeletionReportJob;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.service.DeletionReportService;
 import com.bookstore.qrcode.service.FormTemplateService;
+import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
 import com.bookstore.qrcode.service.ServiceTeacherDailyMaxService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
@@ -35,6 +36,7 @@ public class AdminSystemConfigController {
 
     private final SystemConfigRepository configRepository;
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    private final ReceptionistDailyMaxService receptionistDailyMaxService;
     private final DeletionReportService deletionReportService;
     private final DeletionReportJob deletionReportJob;
     private final FormTemplateService formTemplateService;
@@ -47,6 +49,7 @@ public class AdminSystemConfigController {
         model.addAttribute("configs", configRepository.findAll());
         model.addAllAttributes(formTemplateService.resolveImageCopy());
         model.addAttribute("serviceTeacherDailyMax", serviceTeacherDailyMaxService.resolveDefault());
+        model.addAttribute("receptionistDailyMax", receptionistDailyMaxService.resolveDefault());
         model.addAttribute("deletionReportRecipients", deletionReportService.getEffectiveRecipients());
         model.addAttribute("deletionReportTime",
                 deletionReportService.resolvePushTime().format(DateTimeFormatter.ofPattern("HH:mm")));
@@ -155,6 +158,29 @@ public class AdminSystemConfigController {
                     "服务老师日限已设为 " + value + "，并应用到 " + affected + " 个服务老师");
         } else {
             ra.addFlashAttribute("message", "服务老师日限默认值已设为 " + value);
+        }
+        return "redirect:/admin/system-config";
+    }
+
+    /**
+     * 接待员日限：保存默认值，可选应用到全部接待员。
+     */
+    @PostMapping("/receptionist-daily-max")
+    public String updateReceptionistDailyMax(@RequestParam int value,
+                                             @RequestParam(required = false, defaultValue = "false") boolean apply,
+                                             RedirectAttributes ra) {
+        if (value <= 0 || value > ReceptionistDailyMaxService.MAX_DAILY_MAX) {
+            ra.addFlashAttribute("error",
+                    "日限必须在 1~" + ReceptionistDailyMaxService.MAX_DAILY_MAX + " 之间");
+            return "redirect:/admin/system-config";
+        }
+        receptionistDailyMaxService.saveDefault(value);
+        if (apply) {
+            int affected = receptionistDailyMaxService.applyToAll(value);
+            ra.addFlashAttribute("message",
+                    "接待员日限已设为 " + value + "，并应用到 " + affected + " 条活码接待员绑定");
+        } else {
+            ra.addFlashAttribute("message", "接待员日限默认值已设为 " + value);
         }
         return "redirect:/admin/system-config";
     }

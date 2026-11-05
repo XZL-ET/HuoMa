@@ -41,6 +41,7 @@ class QrCodeServiceTest {
     @Mock private ObjectMapper objectMapper;
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private DepartmentWhitelistService whitelist;
+    @Mock private ReceptionistDailyMaxService receptionistDailyMaxService;
 
     @InjectMocks
     private QrCodeService qrCodeService;

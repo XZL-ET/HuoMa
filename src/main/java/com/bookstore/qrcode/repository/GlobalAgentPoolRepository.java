@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -153,4 +154,19 @@ public interface GlobalAgentPoolRepository
     /** 查询 daily_max 低于指定阈值的池记录（存量日限回填用） */
     @Query("SELECT p FROM GlobalAgentPool p WHERE p.dailyMax < :threshold")
     List<GlobalAgentPool> findWithDailyMaxBelow(@Param("threshold") int threshold);
+
+    /**
+     * 批量将接待员的全局池日限统一设置为指定值。
+     * <p>接待员日限判定读本表 {@code dailyMax}，故必须与
+     * {@link QrAgentRepository#applyDailyMaxToReceptionists(int)} 同批执行。
+     * 仅更新 agent.role=receptionist 的池成员，服务老师/双角色不动。</p>
+     *
+     * @param value 目标日限值
+     * @return 实际更新的行数
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE GlobalAgentPool p SET p.dailyMax = :value "
+         + "WHERE p.agentUserid IN (SELECT a.userid FROM Agent a WHERE a.role = 'receptionist')")
+    int applyDailyMaxToReceptionists(@Param("value") int value);
 }

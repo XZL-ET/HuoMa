@@ -43,6 +43,7 @@ class DepartmentWhitelistPageRenderTest {
     @MockBean private DepartmentWhitelistApplyService applyService;
     @MockBean private DepartmentService departmentService;
     @MockBean private PoolAllowedDepartmentRepository whitelistRepo;
+    @MockBean private ReceptionistDailyMaxService receptionistDailyMaxService;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
     @MockBean private LoginSuccessHandler loginSuccessHandler;
 

@@ -12,9 +12,9 @@ import com.bookstore.qrcode.service.EmployeeSyncService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
+import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -64,10 +64,7 @@ public class AgentController {
     private final DepartmentWhitelistApplyService whitelistApplyService;
     private final DepartmentService departmentService;
     private final PoolAllowedDepartmentRepository whitelistRepo;
-
-    /** 默认接待员日限，与 {@code app.agent.daily-max-default} 对齐 */
-    @Value("${app.agent.daily-max-default:150}")
-    private int dailyMaxDefault;
+    private final ReceptionistDailyMaxService receptionistDailyMaxService;
 
     /**
      * GET {@code /agents} — 全局员工池列表（分页 + 筛选）。
@@ -522,7 +519,7 @@ public class AgentController {
         // ── 接待员回池（熔断恢复时确保入池；仅重新上码时可能已在池中，ensureInPool 幂等）──
         // 角色漂移员工（在他码仍担任接待员）也应回池，故用 isPoolEligible 而非 agent.role
         if (poolService.isPoolEligible(userid) && (needsStatusReset || !restoredCodes.isEmpty())) {
-            poolService.ensureInPool(userid, dailyMaxDefault);
+            poolService.ensureInPool(userid, receptionistDailyMaxService.resolveDefault());
             log.info("接待员恢复后入池: userid={}", userid);
         }
 

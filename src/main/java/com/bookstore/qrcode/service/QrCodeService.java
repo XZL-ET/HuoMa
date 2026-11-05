@@ -13,7 +13,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
@@ -94,6 +93,7 @@ public class QrCodeService {
     private final WechatSyncHealingService healingService;
     private final SceneConfigProperties sceneConfig;
     private final ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    private final ReceptionistDailyMaxService receptionistDailyMaxService;
 
     @Qualifier("taskExecutor")
     private final Executor taskExecutor;
@@ -107,10 +107,6 @@ public class QrCodeService {
     @org.springframework.beans.factory.annotation.Autowired
     @Lazy
     private QrCodeService self;
-
-    /** 默认日接待上限，可通过 app.agent.daily-max-default 配置 */
-    @Value("${app.agent.daily-max-default:150}")
-    private int dailyMaxDefault;
 
     // ==================== 查询 ====================
 
@@ -237,7 +233,7 @@ public class QrCodeService {
             SceneConfigProperties.ScenePreset preset = sceneConfig.getPreset(scene);
             int expectedScans = (int) Math.ceil(req.getStudentCount() * preset.getScanRatio());
             int need = Math.max(1, Math.min(100,
-                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
+                (int) Math.ceil((double) expectedScans / receptionistDailyMaxService.resolveDefault())));
             req.setInitialAgentCount(need);
             log.info("学校人数={}, 场景={}, 扫码率={}, 自动计算 initialAgentCount={}",
                 req.getStudentCount(), scene.name(), preset.getScanRatio(), need);
@@ -778,7 +774,7 @@ public class QrCodeService {
     @Transactional
     public void addBackup(Long qrCodeId, String agentUserid) {
         getById(qrCodeId); // 校验活码存在
-        poolService.ensureInPool(agentUserid, dailyMaxDefault);
+        poolService.ensureInPool(agentUserid, receptionistDailyMaxService.resolveDefault());
         log.info("全局池员工已添加: userid={}", agentUserid);
     }
 
@@ -822,7 +818,7 @@ public class QrCodeService {
             .qrCodeId(qrCodeId)
             .agentUserid(agentUserid)
             .role(QrAgent.AgentRole.receptionist)   // 手动添加的默认为接待员角色
-            .dailyMax(dailyMaxDefault)                            // 默认日接待上限，可通过 app.agent.daily-max-default 配置
+            .dailyMax(receptionistDailyMaxService.resolveDefault())   // 接待员日限默认值，可在系统配置页调整
             .sortOrder(maxOrder + 1)
             .status(QrAgent.AgentStatus.active)       // 添加即启用
             .build());
@@ -1237,7 +1233,7 @@ public class QrCodeService {
         if (qr.getStudentCount() != null && qr.getStudentCount() > 0) {
             int expectedScans = (int) Math.ceil(qr.getStudentCount() * preset.getScanRatio());
             int need = Math.max(1, Math.min(100,
-                (int) Math.ceil((double) expectedScans / dailyMaxDefault)));
+                (int) Math.ceil((double) expectedScans / receptionistDailyMaxService.resolveDefault())));
 
             List<QrAgent> activeAgents = qrAgentRepo.findByQrCodeIdAndStatus(qrCodeId, QrAgent.AgentStatus.active);
             int current = activeAgents.size();
@@ -2180,10 +2176,13 @@ public class QrCodeService {
             if (replacementUserid != null) {
                 excludeUserids.add(replacementUserid);
                 maxSortOrder++;
+                int replacementDailyMax = qa.getRole() == QrAgent.AgentRole.receptionist
+                    ? receptionistDailyMaxService.resolveDefault()
+                    : serviceTeacherDailyMaxService.resolveDefault();
                 qrAgentRepo.save(QrAgent.builder()
                     .qrCodeId(qrCodeId).agentUserid(replacementUserid)
                     .role(qa.getRole())
-                    .dailyMax(dailyMaxDefault)
+                    .dailyMax(replacementDailyMax)
                     .sortOrder(maxSortOrder)
                     .status(QrAgent.AgentStatus.active).build());
                 replaced++;

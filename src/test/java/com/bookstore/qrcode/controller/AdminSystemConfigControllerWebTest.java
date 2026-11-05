@@ -8,6 +8,7 @@ import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.service.DeletionReportService;
 import com.bookstore.qrcode.service.FormTemplateService;
+import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
 import com.bookstore.qrcode.service.ServiceTeacherDailyMaxService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,7 @@ class AdminSystemConfigControllerWebTest {
 
     @MockBean private SystemConfigRepository configRepository;
     @MockBean private ServiceTeacherDailyMaxService serviceTeacherDailyMaxService;
+    @MockBean private ReceptionistDailyMaxService receptionistDailyMaxService;
     @MockBean private DeletionReportService deletionReportService;
     @MockBean private DeletionReportJob deletionReportJob;
     @MockBean private FormTemplateService formTemplateService;
@@ -62,6 +64,7 @@ class AdminSystemConfigControllerWebTest {
     void indexExposesDefaultValue() throws Exception {
         when(configRepository.findAll()).thenReturn(Collections.emptyList());
         when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
+        when(receptionistDailyMaxService.resolveDefault()).thenReturn(200);
         when(deletionReportService.getEffectiveRecipients()).thenReturn("admin1,admin2");
         when(deletionReportService.resolvePushTime()).thenReturn(LocalTime.of(9, 0));
         when(formTemplateService.resolveImageCopy()).thenReturn(Collections.emptyMap());
@@ -70,6 +73,7 @@ class AdminSystemConfigControllerWebTest {
                 .andExpect(status().isOk())
                 .andExpect(view().name("admin/system-config"))
                 .andExpect(model().attribute("serviceTeacherDailyMax", 300))
+                .andExpect(model().attribute("receptionistDailyMax", 200))
                 .andExpect(model().attribute("deletionReportRecipients", "admin1,admin2"))
                 .andExpect(model().attribute("deletionReportTime", "09:00"));
     }
@@ -159,6 +163,51 @@ class AdminSystemConfigControllerWebTest {
 
         verify(serviceTeacherDailyMaxService).saveDefault(800);
         verify(serviceTeacherDailyMaxService, never()).applyToAll(anyInt());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("POST 接待员日限：只保存默认值")
+    void savesReceptionistDefaultOnly() throws Exception {
+        mockMvc.perform(post("/admin/system-config/receptionist-daily-max")
+                        .param("value", "200")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/system-config"));
+
+        verify(receptionistDailyMaxService).saveDefault(200);
+        verify(receptionistDailyMaxService, never()).applyToAll(anyInt());
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("POST 接待员日限：apply=true 保存并应用到全部")
+    void savesAndAppliesReceptionistDefault() throws Exception {
+        when(receptionistDailyMaxService.applyToAll(200)).thenReturn(1200);
+
+        mockMvc.perform(post("/admin/system-config/receptionist-daily-max")
+                        .param("value", "200")
+                        .param("apply", "true")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/system-config"));
+
+        verify(receptionistDailyMaxService).saveDefault(200);
+        verify(receptionistDailyMaxService).applyToAll(200);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("POST 接待员日限：越界值拒绝保存")
+    void rejectsInvalidReceptionistValue() throws Exception {
+        mockMvc.perform(post("/admin/system-config/receptionist-daily-max")
+                        .param("value", "801")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/admin/system-config"));
+
+        verify(receptionistDailyMaxService, never()).saveDefault(anyInt());
+        verify(receptionistDailyMaxService, never()).applyToAll(anyInt());
     }
 
     @Test
