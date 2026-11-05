@@ -645,7 +645,7 @@ public class EmployeeSyncService {
      * <p>历史员工在"默认值还是 100"的年代入池，字段落库为 100。后来默认值上调，
      * 但 {@code syncToGlobalPool} / {@code ensureInPool} 只写新增记录、从不回填存量，
      * 导致接待员日限判定（读 {@code GlobalAgentPool.dailyMax}）长期停留在 100。
-     * 此方法按角色把低于默认值的记录抬升：接待员 → {@link #dailyMaxDefault}，
+     * 此方法按角色把低于默认值的记录抬升：接待员 → {@link ReceptionistDailyMaxService#resolveDefault()}，
      * 服务老师/双角色 → {@link ServiceTeacherDailyMaxService#resolveDefault()}。</p>
      *
      * <p>只升不降：仅抬升低于目标值的记录，不覆盖已配置的更高值。</p>
