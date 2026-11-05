@@ -7,7 +7,7 @@
 #   DEPLOY_ECS2_IP      ECS-2 内网 IP（可选，部署到两台）
 #   SSHPASS             ECS 密码（可选，设置后全程无需输入）
 
-set -e
+set -eE  # -E: 函数内失败也触发回滚提示 trap
 
 PROFILE="prod"
 ECS2_IP="${DEPLOY_ECS2_IP}"
@@ -124,11 +124,35 @@ ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "
 ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "systemctl daemon-reload"
 echo "  ✅ 配置文件已同步"
 
+# 回滚提示：保留上一版 jar，仅在上线出问题后使用
+rollback_hint() {
+    echo ""
+    echo "  ⚠️  部署中断，可回滚到上一版（app.jar.bak）:"
+    echo "    ssh root@${SERVER_IP} 'cd ${APP_DIR} && systemctl stop huoma && mv -f app.jar.bak app.jar && systemctl restart huoma'"
+    if [ -n "${ECS2_IP}" ]; then
+        echo "    ECS-2（在 ECS-1 上执行）: ssh root@${ECS2_IP} 'cd ${APP_DIR} && systemctl stop huoma && mv -f app.jar.bak app.jar && systemctl restart huoma'"
+    fi
+    echo "    注意: 含库表变更的版本回退前先确认与当前库结构兼容。"
+}
+
 # =============================================
-# [3/6] 停止 ECS-1
+# [3/6] 备份旧版并停止 ECS-1
 # =============================================
 echo ""
-echo "[3/6] 停止 ECS-1 服务..."
+echo "[3/6] 备份旧版并停止 ECS-1 服务..."
+# 只有当前版本健康才把它当回滚点；不健康时保留更早的 app.jar.bak
+HEALTH_BEFORE=$(${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" \
+    "curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8080/actuator/health" 2>/dev/null || true)
+# curl 失败时会自己输出 000；连不上 ssh 时输出为空，统一兜底
+HEALTH_BEFORE=${HEALTH_BEFORE:-000}
+if [ "$HEALTH_BEFORE" = "200" ]; then
+    ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" \
+        "if [ -f ${APP_DIR}/app.jar ]; then mv -f ${APP_DIR}/app.jar ${APP_DIR}/app.jar.bak && echo '  ✅ 旧版本已备份为 app.jar.bak'; else echo '  ℹ️  没有旧版 jar，跳过备份'; fi"
+else
+    echo "  ⚠️  现版本健康检查为 ${HEALTH_BEFORE}，跳过备份（保留更早的回滚点）"
+fi
+# 从停服这一步开始才可能影响线上，此前的失败不需要回滚提示
+trap rollback_hint ERR
 ${SSH_CMD} "${SERVER_USER}@${SERVER_IP}" "systemctl stop huoma || true"
 echo "  ✅ ECS-1 已停止"
 
@@ -166,6 +190,9 @@ if [ -n "${ECS2_IP}" ]; then
     echo "  → 同步到 ECS-2 (${ECS2_IP})..."
 
     ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ECS2_IP} "systemctl stop huoma || true"
+
+    ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@${ECS2_IP} \
+        "if [ -f ${APP_DIR}/app.jar ]; then mv -f ${APP_DIR}/app.jar ${APP_DIR}/app.jar.bak; fi"
 
     cat ${APP_DIR}/app.jar | ${ECS2_SSH_PREFIX} ssh -o StrictHostKeyChecking=no root@${ECS2_IP} "cat > ${APP_DIR}/app.jar"
 
@@ -244,4 +271,9 @@ echo "========================================="
 echo " 部署完成！"
 echo " 管理后台: https://huoma.gsxhsd.com/"
 [ -n "$ECS2_IP" ] && echo " ECS-2 后台: http://${ECS2_IP}/"
+echo "-----------------------------------------"
+echo " 回滚到上一版（app.jar.bak，只保留上一次部署）:"
+echo "   ssh root@${SERVER_IP} 'cd ${APP_DIR} && systemctl stop huoma && mv -f app.jar.bak app.jar && systemctl restart huoma'"
+[ -n "$ECS2_IP" ] && echo "   ECS-2（在 ECS-1 上执行）: ssh root@${ECS2_IP} 'cd ${APP_DIR} && systemctl stop huoma && mv -f app.jar.bak app.jar && systemctl restart huoma'"
+echo " 注意: 含库表变更的版本回退前先确认与当前库结构兼容。"
 echo "========================================="
