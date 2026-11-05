@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='版本更新', content=~{::main})}">
+<main>
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">📝 版本更新</h4>
+    <span class="text-muted small" th:if="${runningVersion != null}"
+          th:text="'当前运行版本 · ' + ${runningVersion}">当前运行版本 · 2026-11-05 22:40</span>
+</div>
+
+<div th:if="${#lists.isEmpty(timeline)}" class="alert alert-secondary">
+    还没有更新记录。
+</div>
+
+<div th:each="entry : ${timeline}" class="card mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap align-items-center mb-2">
+            <h6 class="mb-0 me-2" th:text="${#temporals.format(entry.date, 'yyyy-MM-dd')}">2026-11-05</h6>
+            <span th:if="${entry.curated and entry.title != null}" class="badge bg-primary"
+                  th:text="${entry.title}">版本标题</span>
+            <span th:unless="${entry.curated}" class="badge bg-secondary">开发记录（未整理）</span>
+        </div>
+
+        <ul th:if="${entry.curated}" class="mb-0">
+            <li th:each="item : ${entry.items}" class="mb-1">
+                <span th:if="${item.kind != null}" class="badge bg-light text-dark border me-1"
+                      th:text="${item.kind}">新增</span>
+                <span th:text="${item.text}">更新内容</span>
+            </li>
+        </ul>
+
+        <details th:unless="${entry.curated}">
+            <summary class="text-muted small"
+                     th:text="'查看 ' + ${#lists.size(entry.rawCommits)} + ' 条提交'">查看提交</summary>
+            <ul class="mt-2 mb-0 small text-muted">
+                <li th:each="commit : ${entry.rawCommits}" th:text="${commit}">提交内容</li>
+            </ul>
+        </details>
+    </div>
+</div>
+
+<div th:if="${!showAll and !#lists.isEmpty(timeline)}" class="text-center mb-4">
+    <a class="btn btn-outline-secondary btn-sm" th:href="@{/release-notes(all=true)}">查看更早的更新</a>
+</div>
+</main>
+</html>

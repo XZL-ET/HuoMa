@@ -198,4 +198,46 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- 打包前把 git 提交写进 jar：版本更新页的兜底数据，生产机无需安装 git。
+             只在存在 .git 时启用，源码导出包/无 git 的构建环境不会因此失败。 -->
+        <profile>
+            <id>git-changelog</id>
+            <activation>
+                <file>
+                    <exists>${project.basedir}/.git</exists>
+                </file>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.1</version>
+                        <executions>
+                            <execution>
+                                <id>generate-changelog</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>git</executable>
+                                    <workingDirectory>${project.basedir}</workingDirectory>
+                                    <arguments>
+                                        <argument>log</argument>
+                                        <argument>--no-merges</argument>
+                                        <argument>--date=short</argument>
+                                        <argument>--pretty=format:%cd%x09%s</argument>
+                                        <argument>--output=${project.build.outputDirectory}/changelog.txt</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
