@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.repository.SystemConfigRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,16 @@ class StrictDeptConfigServiceTest {
 
     @BeforeEach
     void cleanStrictDeptConfig() {
+        deleteIfPresent(MODE_KEY);
+        deleteIfPresent(EXEMPT_KEY);
+    }
+
+    /**
+     * 清理写回 system_config 的键：多个 {@code @SpringBootTest} 共享同一 H2 上下文，
+     * 若把 strict_dept_mode 留给后续测试，会让清理/取人类测试意外进入严格模式。
+     */
+    @AfterEach
+    void restoreStrictDeptConfig() {
         deleteIfPresent(MODE_KEY);
         deleteIfPresent(EXEMPT_KEY);
     }
