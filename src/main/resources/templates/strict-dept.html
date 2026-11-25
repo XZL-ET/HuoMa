@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<!-- 严格同部门清退页 — 开关、只读预览、确认执行与漂移统计 -->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: layout(title='严格同部门清退', content=~{::main})}">
+<main>
+    <meta name="_csrf" th:content="${_csrf.token}">
+    <meta name="_csrf_header" th:content="${_csrf.headerName}">
+
+    <!-- 页面标题 -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">严格同部门清退</h4>
+        <a th:href="@{/agents}" class="btn btn-sm btn-outline-secondary">返回员工管理</a>
+    </div>
+
+    <!-- 结果消息 -->
+    <div th:if="${message}" class="alert alert-success alert-dismissible fade show py-2" role="alert">
+        <span th:text="${message}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger alert-dismissible fade show py-2" role="alert">
+        <span th:text="${error}"></span>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- 未处理清单：apply 返回的跳过原因与真实失败，独立展示，不参与统计推导 -->
+    <div th:if="${applyFailures != null && !applyFailures.isEmpty()}"
+         class="alert alert-warning alert-dismissible fade show py-2" role="alert">
+        <strong>未处理清单（可重新预览并再次执行以继续收敛）</strong>
+        <ul class="mb-0 small mt-1">
+            <li th:each="failure : ${applyFailures}" th:text="${failure}"></li>
+        </ul>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
+    </div>
+
+    <!-- 概览：开关、漂移统计、豁免名单 -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-5">
+            <div class="card p-3 h-100">
+                <div class="d-flex align-items-center gap-2">
+                    <h5 class="mb-0">开关状态</h5>
+                    <span th:if="${strictModeEnabled}" class="badge bg-success">已开启</span>
+                    <span th:unless="${strictModeEnabled}" class="badge bg-secondary">已关闭</span>
+                </div>
+                <p class="text-muted small mt-2 mb-2">
+                    开启后，活码取人只会从本县接待员中选取；关闭后回退为跨县取人。
+                </p>
+                <form th:action="@{/strict-dept/toggle}" method="post"
+                      onsubmit="return confirm('确认切换严格同部门取人开关？')">
+                    <input type="hidden" name="enabled" th:value="${!strictModeEnabled}">
+                    <button type="submit" class="btn btn-sm"
+                            th:classappend="${strictModeEnabled} ? 'btn-outline-danger' : 'btn-success'"
+                            th:text="${strictModeEnabled} ? '关闭严格同部门取人' : '开启严格同部门取人'">
+                        切换开关
+                    </button>
+                </form>
+            </div>
+        </div>
+        <div class="col-lg-3">
+            <div class="card p-3 h-100">
+                <h5 class="mb-2">漂移统计</h5>
+                <div class="display-6"
+                     th:classappend="${driftedReceptionistCount != null && driftedReceptionistCount > 0} ? 'text-danger' : 'text-success'"
+                     th:text="${driftedReceptionistCount}">0</div>
+                <small class="text-muted">当前仍在活码上的跨县 active 接待员数</small>
+                <div th:if="${driftedReceptionistCount != null && driftedReceptionistCount > 0}"
+                     class="alert alert-warning py-1 px-2 small mt-2 mb-0">
+                    建议重新预览并执行清退。
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card p-3 h-100">
+                <h5 class="mb-2">豁免服务老师（只读）</h5>
+                <div th:if="${exemptUserids != null && !exemptUserids.isEmpty()}">
+                    <span th:each="uid : ${exemptUserids}"
+                          class="badge bg-light text-dark border me-1 mb-1" th:text="${uid}"></span>
+                </div>
+                <div th:if="${exemptUserids == null || exemptUserids.isEmpty()}"
+                     class="text-muted small">当前无豁免人员。</div>
+                <small class="text-muted d-block mt-2">豁免人员不会被清退，修改请在系统配置中进行。</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 预览 -->
+    <div class="card p-3 mb-3">
+        <h5 class="mb-2">只读预览</h5>
+        <p class="text-muted small mb-2">
+            预览为实时快照，仅展示将受影响的跨县接待员，不会写入任何数据；最终以 apply 时判定为准。
+        </p>
+        <div class="row g-2 align-items-end">
+            <div class="col-md-6">
+                <label for="previewDeptFilter" class="form-label small mb-1">
+                    区县根部门过滤（可选，留空表示全部活码；多个 deptId 用逗号分隔）
+                </label>
+                <input type="text" id="previewDeptFilter" class="form-control form-control-sm"
+                       placeholder="例如：100,200">
+            </div>
+            <div class="col-md-6">
+                <button type="button" id="previewBtn" class="btn btn-outline-primary btn-sm">
+                    预览影响
+                </button>
+            </div>
+        </div>
+
+        <!-- 预览结果 -->
+        <div id="previewResult" class="mt-3" style="display:none;">
+            <div class="alert alert-info py-2 mb-3">
+                预览为实时快照，以 apply 时判定为准。
+            </div>
+            <div id="previewDetails"></div>
+        </div>
+    </div>
+
+    <!-- 确认执行 -->
+    <div class="card p-3 mb-3">
+        <h5 class="mb-2">确认执行清退</h5>
+        <p class="text-muted small mb-2">
+            执行会立即从活码上撤下非本县接待员，必要时从本县池补位。
+            处理与跳过数量来自本次实际执行结果；「未处理清单」独立列示，不用作统计推导。
+        </p>
+        <form id="applyForm" th:action="@{/strict-dept/apply}" method="post"
+              onsubmit="return confirmApply()">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-6">
+                    <label for="applyDeptFilter" class="form-label small mb-1">
+                        区县根部门过滤（可选，留空表示全部活码；多个 deptId 用逗号分隔）
+                    </label>
+                    <input type="text" id="applyDeptFilter" name="deptIds"
+                           class="form-control form-control-sm" placeholder="例如：100,200">
+                </div>
+                <div class="col-md-6">
+                    <button type="submit" class="btn btn-danger btn-sm">确认执行清退</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script th:inline="javascript">
+        (function () {
+            var previewBtn = document.getElementById('previewBtn');
+            var previewInput = document.getElementById('previewDeptFilter');
+            var applyForm = document.getElementById('applyForm');
+            var applyInput = document.getElementById('applyDeptFilter');
+            var resultBox = document.getElementById('previewResult');
+            var details = document.getElementById('previewDetails');
+            var previewUrl = /*[[@{/strict-dept/preview}]]*/ '/strict-dept/preview';
+            var csrfToken = document.querySelector('meta[name="_csrf"]');
+            var csrfHeader = document.querySelector('meta[name="_csrf_header"]');
+
+            // 执行前把预览过滤条件带入 apply 表单，避免两处填写不一致
+            window.confirmApply = function () {
+                if (applyInput && !applyInput.value) {
+                    applyInput.value = previewInput ? previewInput.value : '';
+                }
+                return confirm('确认执行严格同部门清退？该操作会立即从活码撤下跨县接待员。');
+            };
+
+            if (!previewBtn || !previewInput || !resultBox || !details) return;
+
+            function parseDeptIds(raw) {
+                if (!raw) return [];
+                return raw.split(',').map(function (s) { return s.trim(); })
+                    .filter(function (s) { return s.length > 0; });
+            }
+
+            function esc(value) {
+                if (value === null || value === undefined) return '';
+                var div = document.createElement('div');
+                div.textContent = String(value);
+                return div.innerHTML;
+            }
+
+            function listHtml(items, renderItem, emptyText) {
+                if (!items || items.length === 0) {
+                    return '<li class="text-muted">' + esc(emptyText) + '</li>';
+                }
+                return items.map(function (item) {
+                    return '<li>' + renderItem(item) + '</li>';
+                }).join('');
+            }
+
+            function showError(msg) {
+                details.innerHTML = '<div class="alert alert-danger py-2">' + esc(msg) + '</div>';
+            }
+
+            function renderCodes(codes) {
+                var actionable = codes.filter(function (c) { return !c.skipReason; });
+                var skipped = codes.filter(function (c) { return c.skipReason; });
+                var parts = [];
+
+                parts.push('<h6>可处理活码（' + actionable.length + '）</h6>');
+                parts.push('<ul class="small">' + listHtml(actionable, function (c) {
+                    var members = (c.members || []).map(function (m) {
+                        return esc(m.name) + '（' + esc(m.userid) + '）';
+                    }).join('、');
+                    var badges = '';
+                    if (c.needsBackfill) {
+                        badges += c.localStandbyAvailable
+                            ? '<span class="badge bg-warning text-dark ms-1">需补位·本县池可补</span>'
+                            : '<span class="badge bg-danger ms-1">需补位·本县池无人</span>';
+                    }
+                    if (c.localStandbyAvailable && !c.needsBackfill) {
+                        badges += '<span class="badge bg-light text-dark border ms-1">本县池有备选</span>';
+                    }
+                    return '活码 ' + esc(c.schoolName) + '（#' + esc(c.qrCodeId) + '，'
+                        + esc(c.district) + '）：待撤 ' + (members || '无') + badges;
+                }, '无可处理活码') + '</ul>');
+
+                parts.push('<h6>被跳过的活码（' + skipped.length + '）</h6>');
+                if (skipped.length === 0) {
+                    parts.push('<div class="text-muted small mb-2">无</div>');
+                } else {
+                    parts.push('<div class="alert alert-warning py-2 mb-2"><ul class="mb-0 small">'
+                        + listHtml(skipped, function (c) {
+                            return '活码 ' + esc(c.schoolName) + '（#' + esc(c.qrCodeId)
+                                + '）：' + esc(c.skipReason) + '（本次不参与清退）';
+                        }, '无')
+                        + '</ul></div>');
+                }
+                return parts.join('');
+            }
+
+            function renderPreview(data) {
+                var districts = data.districts || [];
+                var codes = data.codes || [];
+                var warnings = data.warnings || [];
+                var parts = [];
+
+                parts.push('<div class="mb-3">严格开关：'
+                    + (data.strictModeEnabled
+                        ? '<span class="badge bg-success">已开启</span>'
+                        : '<span class="badge bg-secondary">已关闭</span>')
+                    + '；可处理活码 <strong>' + esc(data.codeCount) + '</strong> 个；'
+                    + '待撤接待员 <strong>' + esc(data.receptionistCount) + '</strong> 人。</div>');
+
+                parts.push('<h6>按区县影响面（' + districts.length + '）</h6>');
+                if (districts.length === 0) {
+                    parts.push('<div class="text-muted small mb-2">无</div>');
+                } else {
+                    parts.push('<table class="table table-sm table-bordered small mb-3"><thead><tr>'
+                        + '<th>区县</th><th>活码数</th><th>待撤接待员</th></tr></thead><tbody>');
+                    districts.forEach(function (d) {
+                        parts.push('<tr><td>' + esc(d.district) + '</td><td>' + esc(d.codeCount)
+                            + '</td><td>' + esc(d.memberCount) + '</td></tr>');
+                    });
+                    parts.push('</tbody></table>');
+                }
+
+                parts.push(renderCodes(codes));
+
+                if (warnings.length > 0) {
+                    parts.push('<div class="alert alert-warning py-2 mt-2"><strong>提示：</strong>'
+                        + '<ul class="mb-0 small">'
+                        + listHtml(warnings, function (w) { return esc(w); }, '')
+                        + '</ul></div>');
+                }
+
+                details.innerHTML = parts.join('');
+            }
+
+            previewBtn.addEventListener('click', function () {
+                var ids = parseDeptIds(previewInput.value);
+                resultBox.style.display = 'block';
+
+                var body = new URLSearchParams();
+                ids.forEach(function (id) { body.append('deptIds', id); });
+
+                var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+                if (csrfHeader && csrfToken) {
+                    headers[csrfHeader.getAttribute('content')] = csrfToken.getAttribute('content');
+                }
+
+                previewBtn.disabled = true;
+                details.innerHTML = '<div class="text-muted">预览中…</div>';
+
+                fetch(previewUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: body.toString()
+                }).then(function (resp) {
+                    return resp.json().then(function (data) {
+                        return { ok: resp.ok, data: data };
+                    });
+                }).then(function (r) {
+                    if (!r.ok) {
+                        showError((r.data && r.data.error) || '预览失败，请稍后重试');
+                        return;
+                    }
+                    renderPreview(r.data);
+                }).catch(function () {
+                    showError('预览请求失败，请稍后重试');
+                }).finally(function () {
+                    previewBtn.disabled = false;
+                });
+            });
+        })();
+    </script>
+</main>
+</html>
