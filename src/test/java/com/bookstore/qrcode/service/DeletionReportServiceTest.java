@@ -106,6 +106,30 @@ class DeletionReportServiceTest {
     }
 
     @Test
+    @DisplayName("report — 同一客户重复删除同一员工按客户去重计数")
+    void reportCountsRepeatedDeletionsOnce() {
+        LocalDateTime t = date.atTime(9, 0);
+        List<CustomerDeletionEvent> events = java.util.stream.IntStream.range(0, 6)
+                .mapToObj(i -> event("wm-" + i, "agent1", t))
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        // 客户 wm-0 二次删除同一员工：事件 7 条，去重后 6 人
+        events.add(event("wm-0", "agent1", t.plusMinutes(10)));
+        when(deletionRepo.findByDirectionAndDeletedAtBetween(any(), any(), any()))
+                .thenReturn(events);
+        when(employeeRepo.findByUserid("agent1"))
+                .thenReturn(Optional.of(Employee.builder().name("王老师").build()));
+
+        reportService.report(date);
+
+        verify(wecomApi).sendReportMessage(eq("admin1"),
+                org.mockito.ArgumentMatchers.contains("昨日 共 6 位客户删除员工，涉及 1 名员工"));
+        verify(wecomApi).sendReportMessage(eq("admin1"),
+                org.mockito.ArgumentMatchers.contains("1. 王老师：6 人"));
+        verify(wecomApi).sendReportMessage(eq("admin1"),
+                org.mockito.ArgumentMatchers.contains("共合并 1 条重复记录"));
+    }
+
+    @Test
     @DisplayName("report — 刚好被删 5 人不算超过，归入其余")
     void fiveDeletionsGoesToRest() {
         List<CustomerDeletionEvent> events = new java.util.ArrayList<>();

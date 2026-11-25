@@ -141,8 +141,14 @@
 <div class="card p-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h5>🗑️ 删除记录</h5>
-        <span class="text-muted small" th:if="${events.size() >= maxRows}">仅显示最近 <span th:text="${maxRows}"></span> 条</span>
+        <span class="text-muted small">
+            共 <strong th:text="${totalGroups}"></strong> 组删除关系（<span th:text="${totalEvents}"></span> 条事件）
+            <span th:if="${totalGroups > groups.size()}">，仅显示最近 <span th:text="${maxRows}"></span> 组</span>
+        </span>
     </div>
+    <p class="text-muted small mb-3">
+        同一客户对同一员工的多次删除已合并为一行，点击「次数」查看每次删除时间。
+    </p>
 
     <!-- 时间范围 + 方向 + 关键字筛选 -->
     <form id="filter-form" class="row g-2 align-items-end mb-3" method="get" th:action="@{/deletion-records}">
@@ -226,29 +232,53 @@
         <table class="table table-hover align-middle">
             <thead class="table-light">
                 <tr>
-                    <th>时间</th>
-                    <th>方向</th>
                     <th>客户</th>
                     <th>员工</th>
+                    <th>方向</th>
+                    <th>次数</th>
+                    <th>首次删除</th>
+                    <th>最近删除</th>
                     <th>单位</th>
                     <th>来源</th>
                 </tr>
             </thead>
             <tbody>
-                <tr th:each="e : ${events}">
-                    <td class="text-nowrap" th:text="${#temporals.format(e.deletedAt, 'yyyy-MM-dd HH:mm')}"></td>
-                    <td>
-                        <span class="badge"
-                              th:classappend="${e.direction.name() == 'CUSTOMER_DELETED_AGENT' ? 'bg-danger' : 'bg-secondary'}"
-                              th:text="${e.direction.name() == 'CUSTOMER_DELETED_AGENT' ? '客户删除员工' : '员工删除客户'}"></span>
-                    </td>
-                    <td th:text="${customerNameMap.get(e.externalUserid)}"></td>
-                    <td><code th:text="${employeeNameMap.get(e.userid)}"></code></td>
-                    <td th:text="${employeeDeptMap.get(e.userid) ?: '—'}"></td>
-                    <td th:text="${sourceMap.get(e.externalUserid) ?: '—'}"></td>
-                </tr>
-                <tr th:if="${#lists.isEmpty(events)}">
-                    <td colspan="6" class="text-center text-muted py-4">该时间段内暂无删除记录</td>
+                <th:block th:each="g, gi : ${groups}">
+                    <tr>
+                        <td th:text="${customerNameMap.get(g.externalUserid)}"></td>
+                        <td><code th:text="${employeeNameMap.get(g.userid)}"></code></td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${g.direction.name() == 'CUSTOMER_DELETED_AGENT' ? 'bg-danger' : 'bg-secondary'}"
+                                  th:text="${g.direction.name() == 'CUSTOMER_DELETED_AGENT' ? '客户删除员工' : '员工删除客户'}"></span>
+                        </td>
+                        <td>
+                            <button type="button" th:if="${g.count > 1}"
+                                    class="btn btn-link btn-sm p-0 text-decoration-none"
+                                    th:attr="onclick=|toggleGroupDetail(${gi.index})|"
+                                    th:text="'×' + ${g.count}">×1</button>
+                            <span th:if="${g.count == 1}">1</span>
+                        </td>
+                        <td class="text-nowrap"
+                            th:text="${g.firstDeletedAt != null ? #temporals.format(g.firstDeletedAt, 'yyyy-MM-dd HH:mm') : '—'}"></td>
+                        <td class="text-nowrap"
+                            th:text="${g.lastDeletedAt != null ? #temporals.format(g.lastDeletedAt, 'yyyy-MM-dd HH:mm') : '—'}"></td>
+                        <td th:text="${employeeDeptMap.get(g.userid) ?: '—'}"></td>
+                        <td th:text="${sourceMap.get(g.externalUserid) ?: '—'}"></td>
+                    </tr>
+                    <tr th:if="${g.count > 1}" class="d-none" th:id="|detail-${gi.index}|">
+                        <td colspan="8" class="bg-light">
+                            <div class="small text-muted mb-1">
+                                每次删除时间（共 <span th:text="${g.count}"></span> 次，倒序）：
+                            </div>
+                            <span class="badge bg-light text-dark border me-1 mb-1"
+                                  th:each="t : ${g.times}"
+                                  th:text="${#temporals.format(t, 'yyyy-MM-dd HH:mm:ss')}"></span>
+                        </td>
+                    </tr>
+                </th:block>
+                <tr th:if="${#lists.isEmpty(groups)}">
+                    <td colspan="8" class="text-center text-muted py-4">该时间段内暂无删除记录</td>
                 </tr>
             </tbody>
         </table>
@@ -335,6 +365,11 @@
             document.getElementById('export-keyword').value =
                 filterForm.querySelector('input[name="keyword"]').value;
         });
+
+        window.toggleGroupDetail = function (index) {
+            var el = document.getElementById('detail-' + index);
+            if (el) el.classList.toggle('d-none');
+        };
 
         window.doExportDeletion = function () {
             var range = checkedRange(exportModal, 'exportRange');

@@ -1,5 +1,6 @@
 package com.bookstore.qrcode.controller;
 
+import com.bookstore.qrcode.dto.DeletionGroupRow;
 import com.bookstore.qrcode.entity.Customer;
 import com.bookstore.qrcode.entity.CustomerDeletionEvent;
 import com.bookstore.qrcode.entity.Employee;
@@ -23,7 +24,6 @@ import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.xssf.streaming.SXSSFWorkbook;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -37,22 +37,26 @@ import java.net.URLEncoder;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * 删除记录列表页 —— 跨方向查看「客户删除员工」与「员工删除客户」的历史记录。
  *
- * <p>展示维度：时间、方向、客户（微信名）、员工（姓名）、来源。
- * 支持时间范围预设（今天 / 近7天 / 近30天 / 自定义）、删除方向过滤与关键字
- * 筛选（匹配客户名、external_userid、员工姓名、userid、来源）。
- * 另提供 Excel 导出（导出当前筛选条件下的全部记录，不受列表页 500 条截断限制）。</p>
+ * <p>展示维度：客户（微信名）、员工（姓名）、方向、删除次数、首次/最近删除时间、来源。
+ * 同一客户对同一员工在同一时间窗内的多次删除聚合为一行（事件流水表不改结构），
+ * 展开可看每次删除时间。支持时间范围预设（今天 / 近7天 / 近30天 / 自定义）、
+ * 删除方向过滤与关键字筛选（匹配客户名、external_userid、员工姓名、userid、来源）。
+ * 另提供 Excel 导出（按同样口径聚合，导出当前筛选条件下的全部记录，不受列表页 500 组截断限制）。</p>
  */
 @Slf4j
 @Controller
@@ -78,9 +82,14 @@ public class DeletionRecordController {
                        @RequestParam(defaultValue = "CUSTOMER_DELETED_AGENT") String direction,
                        @RequestParam(required = false) String keyword,
                        Model model) {
-        LoadResult r = loadEvents(range, start, end, direction, keyword, true);
+        LoadResult r = loadEvents(range, start, end, direction, keyword);
+        List<DeletionGroupRow> groups = r.groups();
+        int totalGroups = groups.size();
 
-        model.addAttribute("events", r.events());
+        model.addAttribute("groups", totalGroups > MAX_ROWS
+                ? new ArrayList<>(groups.subList(0, MAX_ROWS)) : groups);
+        model.addAttribute("totalGroups", totalGroups);
+        model.addAttribute("totalEvents", r.totalEvents());
         model.addAttribute("customerNameMap", r.customerNameMap());
         model.addAttribute("employeeNameMap", r.employeeNameMap());
         model.addAttribute("employeeDeptMap", r.employeeDeptMap());
@@ -136,8 +145,8 @@ public class DeletionRecordController {
         log.info("导出删除记录: operator={}, range={}, direction={}, keyword={}",
                 operator, range, direction, keyword);
 
-        LoadResult r = loadEvents(range, start, end, direction, keyword, false);
-        List<CustomerDeletionEvent> events = r.events();
+        LoadResult r = loadEvents(range, start, end, direction, keyword);
+        List<DeletionGroupRow> groups = r.groups();
         Map<String, String> customerNameMap = r.customerNameMap();
         Map<String, String> employeeNameMap = r.employeeNameMap();
         Map<String, String> employeeDeptMap = r.employeeDeptMap();
@@ -160,7 +169,8 @@ public class DeletionRecordController {
             headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             headerStyle.setAlignment(HorizontalAlignment.CENTER);
 
-            String[] headers = {"删除时间", "方向", "客户", "员工", "单位", "来源"};
+            String[] headers = {"客户", "客户ID", "员工", "员工ID", "方向", "删除次数",
+                    "首次删除", "最近删除", "单位", "来源"};
             Row header = sheet.createRow(0);
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = header.createCell(i);
@@ -170,18 +180,24 @@ public class DeletionRecordController {
 
             DateTimeFormatter dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
             int rowIdx = 1;
-            for (CustomerDeletionEvent e : events) {
+            for (DeletionGroupRow g : groups) {
                 Row row = sheet.createRow(rowIdx++);
-                row.createCell(0).setCellValue(e.getDeletedAt() != null ? e.getDeletedAt().format(dateFmt) : "");
-                row.createCell(1).setCellValue(
-                        e.getDirection() == CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT
-                                ? "客户删除员工" : "员工删除客户");
+                row.createCell(0).setCellValue(
+                        customerNameMap.getOrDefault(g.externalUserid(), g.externalUserid()));
+                row.createCell(1).setCellValue(g.externalUserid());
                 row.createCell(2).setCellValue(
-                        customerNameMap.getOrDefault(e.getExternalUserid(), e.getExternalUserid()));
-                row.createCell(3).setCellValue(
-                        employeeNameMap.getOrDefault(e.getUserid(), e.getUserid()));
-                row.createCell(4).setCellValue(employeeDeptMap.getOrDefault(e.getUserid(), ""));
-                row.createCell(5).setCellValue(sourceMap.getOrDefault(e.getExternalUserid(), ""));
+                        employeeNameMap.getOrDefault(g.userid(), g.userid()));
+                row.createCell(3).setCellValue(g.userid());
+                row.createCell(4).setCellValue(
+                        g.direction() == CustomerDeletionEvent.Direction.CUSTOMER_DELETED_AGENT
+                                ? "客户删除员工" : "员工删除客户");
+                row.createCell(5).setCellValue(g.count());
+                row.createCell(6).setCellValue(g.firstDeletedAt() != null
+                        ? g.firstDeletedAt().format(dateFmt) : "");
+                row.createCell(7).setCellValue(g.lastDeletedAt() != null
+                        ? g.lastDeletedAt().format(dateFmt) : "");
+                row.createCell(8).setCellValue(employeeDeptMap.getOrDefault(g.userid(), ""));
+                row.createCell(9).setCellValue(sourceMap.getOrDefault(g.externalUserid(), ""));
             }
 
             sheet.createFreezePane(0, 1);
@@ -192,7 +208,8 @@ public class DeletionRecordController {
 
             try {
                 wb.write(response.getOutputStream());
-                log.info("导出完成: {} 条删除记录已写入 {}", events.size(), filename);
+                log.info("导出完成: {} 组删除关系（{} 条事件）已写入 {}",
+                        groups.size(), r.totalEvents(), filename);
             } finally {
                 wb.dispose();
                 wb.close();
@@ -204,23 +221,56 @@ public class DeletionRecordController {
         }
     }
 
-    /** 加载并过滤记录：解析窗口 → 查询 → 名称映射 → 方向过滤 → 关键字过滤。 */
+    /**
+     * 加载并聚合记录：解析窗口 → 查询全部事件 → 名称映射 → 方向过滤 → 关键字过滤 → 聚合。
+     * <p>必须加载窗口内的全部事件（而非先截断），否则聚合计数与员工排序都会失真。</p>
+     */
     private LoadResult loadEvents(String range, String start, String end,
-                                  String direction, String keyword, boolean limit) {
+                                  String direction, String keyword) {
         Window window = resolveWindow(range, start, end);
-        List<CustomerDeletionEvent> events = limit
-                ? deletionRepo.findByDeletedAtBetweenOrderByDeletedAtDesc(
-                        window.start(), window.end(), PageRequest.of(0, MAX_ROWS))
-                : deletionRepo.findByDeletedAtBetweenOrderByDeletedAtDesc(
-                        window.start(), window.end());
+        List<CustomerDeletionEvent> events = deletionRepo.findByDeletedAtBetweenOrderByDeletedAtDesc(
+                window.start(), window.end());
 
         CustomerMaps customerMaps = buildCustomerMaps(events);
         EmployeeMaps employeeMaps = buildEmployeeMaps(events);
         events = filterByDirection(events, direction);
         events = filterByKeyword(events, keyword, customerMaps.customerNameMap(), employeeMaps.employeeNameMap(), customerMaps.sourceMap());
+        List<DeletionGroupRow> groups = aggregate(events);
         Map<String, Long> deptSummary = buildDeptSummary(events, employeeMaps.employeeDeptMap());
-        return new LoadResult(events, customerMaps.customerNameMap(), employeeMaps.employeeNameMap(),
-                employeeMaps.employeeDeptMap(), deptSummary, customerMaps.sourceMap(), window);
+        return new LoadResult(groups, events.size(), customerMaps.customerNameMap(),
+                employeeMaps.employeeNameMap(), employeeMaps.employeeDeptMap(),
+                deptSummary, customerMaps.sourceMap(), window);
+    }
+
+    /**
+     * 按「客户 + 员工 + 方向」聚合删除事件。
+     * <p>同一客户对同一员工在同一时间窗内的多次删除合并为一行，
+     * 保留次数、首次/最近删除时间与每次删除明细，避免重复删除虚增记录行数。</p>
+     */
+    private List<DeletionGroupRow> aggregate(List<CustomerDeletionEvent> events) {
+        Map<GroupKey, List<CustomerDeletionEvent>> grouped = new LinkedHashMap<>();
+        for (CustomerDeletionEvent e : events) {
+            GroupKey key = new GroupKey(e.getDirection(), e.getExternalUserid(), e.getUserid());
+            grouped.computeIfAbsent(key, k -> new ArrayList<>()).add(e);
+        }
+
+        List<DeletionGroupRow> rows = new ArrayList<>(grouped.size());
+        for (Map.Entry<GroupKey, List<CustomerDeletionEvent>> entry : grouped.entrySet()) {
+            GroupKey key = entry.getKey();
+            List<CustomerDeletionEvent> groupEvents = entry.getValue();
+            List<LocalDateTime> times = groupEvents.stream()
+                    .map(CustomerDeletionEvent::getDeletedAt)
+                    .filter(Objects::nonNull)
+                    .sorted(Comparator.reverseOrder())
+                    .toList();
+            LocalDateTime first = times.isEmpty() ? null : times.get(times.size() - 1);
+            LocalDateTime last = times.isEmpty() ? null : times.get(0);
+            rows.add(new DeletionGroupRow(key.externalUserid(), key.userid(), key.direction(),
+                    groupEvents.size(), first, last, times));
+        }
+        rows.sort(Comparator.comparing(DeletionGroupRow::lastDeletedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return rows;
     }
 
     /** 今日推送接收人 userid → 姓名映射，供前端 chips 回显；查不到时回退 userid。 */
@@ -303,15 +353,21 @@ public class DeletionRecordController {
         return new EmployeeMaps(employeeNameMap, employeeDeptMap);
     }
 
-    /** 按单位汇总删除人数（deptName → count），降序。 */
+    /**
+     * 按单位汇总「被删人数」（deptName → 去重后的客户数），降序。
+     * <p>同一客户重复删除同一员工只计 1 人，与列表页的聚合口径一致；
+     * 同一客户若删了不同单位的员工，则分别计入各单位。</p>
+     */
     private Map<String, Long> buildDeptSummary(List<CustomerDeletionEvent> events,
                                                Map<String, String> employeeDeptMap) {
-        Map<String, Long> counts = new LinkedHashMap<>();
+        Map<String, Set<String>> deptCustomers = new HashMap<>();
         for (CustomerDeletionEvent e : events) {
             String dept = employeeDeptMap.get(e.getUserid());
             if (dept == null || dept.isBlank()) continue;
-            counts.merge(dept, 1L, Long::sum);
+            deptCustomers.computeIfAbsent(dept, k -> new HashSet<>()).add(e.getExternalUserid());
         }
+        Map<String, Long> counts = new LinkedHashMap<>();
+        deptCustomers.forEach((dept, customers) -> counts.put(dept, (long) customers.size()));
         return counts.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
@@ -405,7 +461,11 @@ public class DeletionRecordController {
 
     private record Window(LocalDateTime start, LocalDateTime end) {}
 
-    private record LoadResult(List<CustomerDeletionEvent> events,
+    private record GroupKey(CustomerDeletionEvent.Direction direction,
+                            String externalUserid, String userid) {}
+
+    private record LoadResult(List<DeletionGroupRow> groups,
+                              int totalEvents,
                               Map<String, String> customerNameMap,
                               Map<String, String> employeeNameMap,
                               Map<String, String> employeeDeptMap,

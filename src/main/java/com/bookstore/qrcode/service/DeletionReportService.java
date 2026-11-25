@@ -24,9 +24,11 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -325,10 +327,21 @@ public class DeletionReportService {
     }
 
     private String buildMessage(LocalDate date, String period, List<CustomerDeletionEvent> events) {
-        Map<String, Long> countByUserid = new LinkedHashMap<>();
+        // 同一客户对同一员工的多次删除合并计 1 人：事件表逐条记录回调，
+        // 客户「删了又加、加了又删」时若按事件计数会虚增被删人数。
+        Map<String, Set<String>> customersByUserid = new LinkedHashMap<>();
         for (CustomerDeletionEvent e : events) {
-            countByUserid.merge(e.getUserid(), 1L, Long::sum);
+            customersByUserid.computeIfAbsent(e.getUserid(), k -> new HashSet<>())
+                    .add(e.getExternalUserid());
         }
+        Map<String, Long> countByUserid = new LinkedHashMap<>();
+        customersByUserid.forEach((userid, customers) -> countByUserid.put(userid, (long) customers.size()));
+        long distinctCustomers = events.stream()
+                .map(CustomerDeletionEvent::getExternalUserid)
+                .distinct()
+                .count();
+        long distinctPairs = countByUserid.values().stream().mapToLong(Long::longValue).sum();
+
         List<Map.Entry<String, Long>> sorted = countByUserid.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .toList();
@@ -344,7 +357,7 @@ public class DeletionReportService {
 
         StringBuilder sb = new StringBuilder();
         sb.append("【客户删除员工日报】").append(date).append("\n");
-        sb.append(period).append(" 共 ").append(events.size()).append(" 位客户删除员工，涉及 ")
+        sb.append(period).append(" 共 ").append(distinctCustomers).append(" 位客户删除员工，涉及 ")
                 .append(sorted.size()).append(" 名员工：\n");
         int i = 1;
         for (Map.Entry<String, Long> entry : shown) {
@@ -359,6 +372,11 @@ public class DeletionReportService {
         if (restCount > 0) {
             sb.append("其余 ").append(restCount).append(" 名员工各被删除不超过 ")
                     .append(HIGHLIGHT_MIN_DELETIONS).append(" 人。\n");
+        }
+        long collapsed = events.size() - distinctPairs;
+        if (collapsed > 0) {
+            sb.append("（同一客户对同一员工的重复删除已合并计数，共合并 ")
+                    .append(collapsed).append(" 条重复记录）\n");
         }
         sb.append("明细请登录火马平台「数据分析 → 删除记录」查看。");
         return sb.toString();

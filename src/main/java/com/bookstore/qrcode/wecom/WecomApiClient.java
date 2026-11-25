@@ -489,7 +489,8 @@ public class WecomApiClient {
      * 响应:
      *   {"errcode": 0, "errmsg": "ok"}
      * </pre>
-     * <b>注意：</b>目前仅支持「添加标签」操作，暂不支持移除标签（需调用时传 del_tag 参数）。
+     * <b>注意：</b>本方法仅支持「添加标签」；接口的移除参数是同级的 {@code remove_tag}
+     * （不是 {@code del_tag}，传错不报错但不会移除）。
      *
      * @param externalUserId 外部联系人（客户）的 UserID
      * @param userId         企业成员（服务人员）的 UserID
