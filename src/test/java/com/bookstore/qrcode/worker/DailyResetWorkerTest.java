@@ -5,6 +5,7 @@ import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.CustomerRepository;
 import com.bookstore.qrcode.repository.CustomerTransferRepository;
 import com.bookstore.qrcode.repository.DailyReportRepository;
+import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.service.AgentDailyCountService;
@@ -14,6 +15,8 @@ import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.ScheduledJobGuard;
+import com.bookstore.qrcode.service.StrictDeptConfigService;
+import com.bookstore.qrcode.service.StrictDeptService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -60,6 +63,9 @@ class DailyResetWorkerTest {
     @Mock private ObjectMapper objectMapper;
     @Mock private ScheduledJobGuard jobGuard;
     @Mock private DepartmentWhitelistService whitelist;
+    @Mock private StrictDeptConfigService strictDeptConfig;
+    @Mock private StrictDeptService strictDeptService;
+    @Mock private EmployeeRepository employeeRepo;
     @Mock private Cursor<String> cursor;
 
     @InjectMocks

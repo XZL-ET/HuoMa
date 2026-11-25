@@ -13,6 +13,8 @@ import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.OperationLogService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.ReceptionistDailyMaxService;
+import com.bookstore.qrcode.service.StrictDeptConfigService;
+import com.bookstore.qrcode.service.StrictDeptService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -65,6 +67,8 @@ public class AgentController {
     private final DepartmentService departmentService;
     private final PoolAllowedDepartmentRepository whitelistRepo;
     private final ReceptionistDailyMaxService receptionistDailyMaxService;
+    private final StrictDeptConfigService strictDeptConfig;
+    private final StrictDeptService strictDeptService;
 
     /**
      * GET {@code /agents} — 全局员工池列表（分页 + 筛选）。
@@ -481,11 +485,18 @@ public class AgentController {
         List<String> restoredCodes = new ArrayList<>();      // 本次恢复的活码名称
         List<String> otherCodes = new ArrayList<>();         // 仍在码上的活码名称
         List<String> skippedByWhitelist = new ArrayList<>(); // 按部门准入跳过的活码名称
+        List<String> skippedByStrict = new ArrayList<>();    // 按严格同部门跳过的活码名称
         Set<Long> syncedQrIds = new HashSet<>();             // 需要同步到企微的活码 ID
 
         // 白名单只读一次：同一次恢复内的所有判定与回池提示必须一致
         boolean whitelistActive = whitelist.isActive();
         boolean whitelistAllowsUser = !whitelistActive || whitelist.isAllowed(userid);
+
+        // 严格同部门：自动流程 fail-open —— 无法判定（树坏/活码无部门/员工无档）时照旧复活，
+        // 只有明确判出外县才拦截。不能复用 isLocal()：树坏时它会误判本地子部门员工。
+        boolean strictModeEnabled = strictDeptConfig.isStrictModeEnabled();
+        Set<String> strictExemptUserids = strictModeEnabled
+            ? strictDeptConfig.getExemptUserids() : Set.of();
 
         for (QrAgent qa : qrAgents) {
             QrCode qr = qrCodeRepo.findById(qa.getQrCodeId()).orElse(null);
@@ -502,6 +513,13 @@ public class AgentController {
                 }
                 if (qa.getRole() == QrAgent.AgentRole.receptionist && !whitelistAllowsUser) {
                     skippedByWhitelist.add(qrName);
+                    continue;
+                }
+                if (qa.getRole() == QrAgent.AgentRole.receptionist
+                    && strictModeEnabled
+                    && !strictExemptUserids.contains(qa.getAgentUserid())
+                    && isStrictDeptBlocked(qa, qr)) {
+                    skippedByStrict.add(qrName);
                     continue;
                 }
                 QrAgent.AgentStatus prevQaStatus = qa.getStatus();
@@ -566,6 +584,12 @@ public class AgentController {
             }
             msg.append("按部门准入跳过活码：").append(String.join("、", skippedByWhitelist));
         }
+        if (!skippedByStrict.isEmpty()) {
+            if (msg.length() > 0) {
+                msg.append("；");
+            }
+            msg.append("按严格同部门跳过活码：").append(String.join("、", skippedByStrict));
+        }
         if (poolService.isPoolEligible(userid) && whitelistAllowsUser
             && (needsStatusReset || !restoredCodes.isEmpty())) {
             msg.append("；已自动加入全局池");
@@ -582,6 +606,36 @@ public class AgentController {
         }
         redirect.addFlashAttribute("message", msg.toString());
         return redirectTo(redirectUrl, view);
+    }
+
+    /**
+     * 判定恢复该 removed/full 绑定是否违反严格同部门。
+     *
+     * <p>自动流程 fail-open：只在「树可用 + 员工有档 + 不在本县」时返回 true，
+     * 其余无法判定的情况一律放行并记 WARN。</p>
+     */
+    private boolean isStrictDeptBlocked(QrAgent qa, QrCode qr) {
+        if (qr == null || qr.getDepartmentId() == null) {
+            log.warn("严格同部门：活码无部门，恢复时跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        Employee emp = employeeRepo.findByUserid(qa.getAgentUserid()).orElse(null);
+        if (emp == null) {
+            log.warn("严格同部门：员工无档案，恢复时跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        Set<Long> localIds;
+        try {
+            localIds = strictDeptService.expandLocalDeptIds(qr.getDepartmentId());
+        } catch (DepartmentWhitelistService.DeptTreeUnavailableException
+                 | IllegalArgumentException e) {
+            log.warn("严格同部门：本县部门展开失败，恢复时跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid(), e);
+            return false;
+        }
+        return !whitelist.isEmployeeAllowed(emp, localIds);
     }
 
     /** 重定向到指定 URL 或 agents 列表页 */

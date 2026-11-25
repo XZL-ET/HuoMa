@@ -44,6 +44,8 @@ class DepartmentWhitelistPageRenderTest {
     @MockBean private DepartmentService departmentService;
     @MockBean private PoolAllowedDepartmentRepository whitelistRepo;
     @MockBean private ReceptionistDailyMaxService receptionistDailyMaxService;
+    @MockBean private StrictDeptConfigService strictDeptConfigService;
+    @MockBean private StrictDeptService strictDeptService;
     @MockBean(name = "rateLimitRedisTemplate") private StringRedisTemplate rateLimitRedisTemplate;
     @MockBean private LoginSuccessHandler loginSuccessHandler;
 

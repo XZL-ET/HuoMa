@@ -7,6 +7,8 @@ import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.GlobalAgentPoolService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.ScheduledJobGuard;
+import com.bookstore.qrcode.service.StrictDeptConfigService;
+import com.bookstore.qrcode.service.StrictDeptService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -68,6 +70,9 @@ public class DailyResetWorker {
     private final ObjectMapper objectMapper;
     private final ScheduledJobGuard jobGuard;
     private final DepartmentWhitelistService whitelist;
+    private final StrictDeptConfigService strictDeptConfig;
+    private final StrictDeptService strictDeptService;
+    private final EmployeeRepository employeeRepo;
 
     /** 跨机互斥：双机同刻触发会撞 daily_report 唯一键、每天白吃一个自增 ID */
     private static final String DAILY_RESET_LOCK_KEY = "lock:job:daily-reset";
@@ -253,6 +258,13 @@ public class DailyResetWorker {
             }
         }
 
+        // 严格同部门：自动流程取 fail-open —— 部门树不可用、活码无部门、员工无档时都
+        // 照旧复活，否则一次企微抖动就会把所有 full 接待员永久踢下码。绝不调用
+        // isLocal()：它在树不可用时降级为精确 root ID，会把本地子部门员工误判成外县。
+        boolean strictModeEnabled = strictDeptConfig.isStrictModeEnabled();
+        Set<String> strictExemptUserids = strictModeEnabled
+            ? strictDeptConfig.getExemptUserids() : Set.of();
+
         for (var qa : fullAgents) {
             if (qa.getRole() == QrAgent.AgentRole.receptionist
                 && allowedReceptionists != null
@@ -261,6 +273,17 @@ public class DailyResetWorker {
                 qrAgentRepo.save(qa);
                 affectedQrIds.add(qa.getQrCodeId());
                 log.info("部门准入：每日重置不复活无关接待员 qr={}, userid={}",
+                    qa.getQrCodeId(), qa.getAgentUserid());
+                continue;
+            }
+            if (qa.getRole() == QrAgent.AgentRole.receptionist
+                && strictModeEnabled
+                && !strictExemptUserids.contains(qa.getAgentUserid())
+                && isStrictDeptViolation(qa)) {
+                qa.setStatus(QrAgent.AgentStatus.removed);
+                qrAgentRepo.save(qa);
+                affectedQrIds.add(qa.getQrCodeId());
+                log.warn("严格同部门：每日重置不复活外县接待员 qr={}, userid={}",
                     qa.getQrCodeId(), qa.getAgentUserid());
                 continue;
             }
@@ -311,6 +334,37 @@ public class DailyResetWorker {
                     }
                 });
         }
+    }
+
+    /**
+     * 判定 full 接待员是否违反严格同部门，需要从活码上移除。
+     *
+     * <p>只在能明确判定「树可用 + 员工有档 + 不在本县」时才返回 true；
+     * 任一前提缺失都记 WARN 并返回 false，交给原逻辑复活。</p>
+     */
+    private boolean isStrictDeptViolation(QrAgent qa) {
+        QrCode qr = qrCodeRepo.findById(qa.getQrCodeId()).orElse(null);
+        if (qr == null || qr.getDepartmentId() == null) {
+            log.warn("严格同部门：活码无部门，每日重置跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        Employee emp = employeeRepo.findByUserid(qa.getAgentUserid()).orElse(null);
+        if (emp == null) {
+            log.warn("严格同部门：员工无档案，每日重置跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        Set<Long> localIds;
+        try {
+            localIds = strictDeptService.expandLocalDeptIds(qr.getDepartmentId());
+        } catch (DepartmentWhitelistService.DeptTreeUnavailableException
+                 | IllegalArgumentException e) {
+            log.warn("严格同部门：本县部门展开失败，每日重置跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid(), e);
+            return false;
+        }
+        return !whitelist.isEmployeeAllowed(emp, localIds);
     }
 
     /**

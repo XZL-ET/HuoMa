@@ -62,6 +62,8 @@ public class PatrolWorker {
     private final ScheduledJobGuard jobGuard;
     private final DepartmentWhitelistService whitelist;
     private final GlobalAgentPoolService poolService;
+    private final StrictDeptConfigService strictDeptConfig;
+    private final StrictDeptCleanupService strictDeptCleanupService;
 
     /** 自注入代理 — 让本类方法上的 @Transactional 生效 */
     @Lazy
@@ -81,6 +83,9 @@ public class PatrolWorker {
     private static final String THROTTLE_DLQ_REPLAY = "throttle:job:dlq-replay";
     private static final String THROTTLE_QR_AGENT_ANOMALY = "throttle:alert:qr_agent_anomaly";
     private static final String THROTTLE_DLQ_EXHAUSTED = "throttle:alert:dlq_replay_exhausted";
+    private static final String THROTTLE_STRICT_DEPT_DRIFT = "throttle:alert:strict_dept_drift";
+    /** 超阈值才告警：少量漂移可能来自清退进行中，不值得刷告警 */
+    private static final long STRICT_DEPT_DRIFT_THRESHOLD = 50L;
 
     /**
      * 上次真正告警时看到的漏处理计数，即增量告警的基线（计数值是进程内累计值，重启归零，不能直接判阈值）。
@@ -152,6 +157,13 @@ public class PatrolWorker {
                 self.patrolQrAgentAnomalies();
             } catch (Exception e) {
                 log.error("活码异常员工巡检异常", e);
+            }
+
+            // 0.7 严格同部门漂移巡检（有异常员工也照常执行，互不影响）
+            try {
+                self.patrolStrictDeptDrift();
+            } catch (Exception e) {
+                log.error("严格同部门漂移巡检异常", e);
             }
 
             // 1. 检查全局池余量（扫描后人数可能下降，触发自动补充）
@@ -642,6 +654,37 @@ public class PatrolWorker {
         } else {
             // 本轮扫描未见异常 —— 条件已清除，关闭历史告警
             alertService.resolveOpenByType("qr_agent_anomaly");
+        }
+    }
+
+    /**
+     * 严格同部门漂移巡检：统计仍挂在活跃活码上的外县非豁免接待员。
+     *
+     * <p>严格模式关闭时主动关闭历史告警，避免旧告警长期挂着；
+     * 统计本身失败时不动告警状态——无法判定就不该假装已经好了。</p>
+     */
+    void patrolStrictDeptDrift() {
+        if (!strictDeptConfig.isStrictModeEnabled()) {
+            alertService.resolveOpenByType("strict_dept_drift");
+            return;
+        }
+        long drifted;
+        try {
+            drifted = strictDeptCleanupService.countDriftedActiveReceptionists();
+        } catch (Exception e) {
+            log.warn("严格同部门漂移统计失败，本轮不改变告警状态", e);
+            return;
+        }
+        if (drifted > STRICT_DEPT_DRIFT_THRESHOLD) {
+            if (jobGuard.firstWithin(THROTTLE_STRICT_DEPT_DRIFT, Duration.ofHours(1))) {
+                alertService.createAlert(null, "strict_dept_drift",
+                    AgentAlert.AlertSeverity.medium,
+                    String.format("严格同部门模式下仍有 %d 名外县接待员挂在活跃活码上，"
+                        + "请到「严格同部门清退」页预览处理", drifted),
+                    AgentAlert.AutoAction.none, null);
+            }
+        } else {
+            alertService.resolveOpenByType("strict_dept_drift");
         }
     }
 

@@ -48,7 +48,9 @@ class DepartmentWhitelistControllerTest {
             applyService,
             mock(DepartmentService.class),
             mock(PoolAllowedDepartmentRepository.class),
-            mock(ReceptionistDailyMaxService.class));
+            mock(ReceptionistDailyMaxService.class),
+            mock(StrictDeptConfigService.class),
+            mock(StrictDeptService.class));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

@@ -102,6 +102,8 @@ public class QrCodeService {
     private final Executor batchExecutor;
 
     private final DepartmentWhitelistService whitelist;
+    private final StrictDeptConfigService strictDeptConfig;
+    private final StrictDeptService strictDeptService;
 
     // 自注入代理：解决 executeBatchImport → create() 的 @Transactional 自调用失效问题
     @org.springframework.beans.factory.annotation.Autowired
@@ -793,9 +795,33 @@ public class QrCodeService {
      */
     @Transactional
     public void addAgent(Long qrCodeId, String agentUserid) {
-        getById(qrCodeId);
+        QrCode qr = getById(qrCodeId);
         if (whitelist.isActive() && !whitelist.isAllowed(agentUserid)) {
             throw new RuntimeException("该员工所属部门不在部门准入范围内: " + agentUserid);
+        }
+
+        // 手动加人是人工意图，严格模式下宁可拒绝也不放行：任何无法判定的情况都直接报错，
+        // 由操作人补配置或加入豁免名单，避免一次误点把外县接待员挂上码。
+        if (strictDeptConfig.isStrictModeEnabled()
+            && !strictDeptConfig.getExemptUserids().contains(agentUserid)) {
+            Long deptId = qr.getDepartmentId();
+            if (deptId == null) {
+                throw new IllegalStateException("活码未配置部门，无法校验严格同部门: qrCodeId=" + qrCodeId);
+            }
+            Employee emp = employeeRepo.findByUserid(agentUserid).orElse(null);
+            if (emp == null) {
+                throw new IllegalStateException("员工不存在档案，无法校验所属区县: " + agentUserid);
+            }
+            boolean local;
+            try {
+                local = strictDeptService.isLocal(emp, deptId);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalStateException("活码所属部门不在部门树中: " + deptId, e);
+            }
+            if (!local) {
+                throw new IllegalStateException("该员工不属于本码所在区县: " + agentUserid
+                    + "，如需放行请加入严格同部门豁免名单");
+            }
         }
 
         // 检查是否已在联系人中（排除已移除的 status=removed）：

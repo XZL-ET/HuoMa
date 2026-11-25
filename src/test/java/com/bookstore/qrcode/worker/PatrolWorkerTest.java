@@ -21,6 +21,8 @@ import com.bookstore.qrcode.service.MessageGuardService;
 import com.bookstore.qrcode.service.QrCodeService;
 import com.bookstore.qrcode.service.RateLimiterService;
 import com.bookstore.qrcode.service.ScheduledJobGuard;
+import com.bookstore.qrcode.service.StrictDeptCleanupService;
+import com.bookstore.qrcode.service.StrictDeptConfigService;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -66,6 +69,8 @@ class PatrolWorkerTest {
     private ScheduledJobGuard jobGuard;
     private DepartmentWhitelistService whitelistService;
     private GlobalAgentPoolService poolService;
+    private StrictDeptConfigService strictDeptConfig;
+    private StrictDeptCleanupService strictDeptCleanupService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -204,6 +209,8 @@ class PatrolWorkerTest {
         jobGuard = mock(ScheduledJobGuard.class);
         whitelistService = mock(DepartmentWhitelistService.class);
         poolService = mock(GlobalAgentPoolService.class);
+        strictDeptConfig = mock(StrictDeptConfigService.class);
+        strictDeptCleanupService = mock(StrictDeptCleanupService.class);
         return new PatrolWorker(
             qrAgentRepo,
             poolRepo,
@@ -221,7 +228,9 @@ class PatrolWorkerTest {
             metrics,
             jobGuard,
             whitelistService,
-            poolService);
+            poolService,
+            strictDeptConfig,
+            strictDeptCleanupService);
     }
 
     // ==================== 条件恢复后自动关闭 ====================
@@ -381,6 +390,60 @@ class PatrolWorkerTest {
         verify(alertService).alertEmptyBackup(isNull(), anyString());
         verify(alertService, never()).resolveOpenByKey(eq("empty_backup"), any(), any());
         verify(alertService, never()).resolveOpenByType("empty_backup");
+    }
+
+    // ==================== 严格同部门漂移巡检 ====================
+
+    @Test
+    @DisplayName("严格模式关闭 → 关闭历史 strict_dept_drift 告警")
+    void shouldResolveStrictDeptDriftWhenModeOff() throws Exception {
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(false);
+
+        invoke("patrolStrictDeptDrift");
+
+        verify(alertService).resolveOpenByType("strict_dept_drift");
+    }
+
+    @Test
+    @DisplayName("漂移超过阈值 → 建 strict_dept_drift 告警")
+    void shouldAlertWhenStrictDeptDriftExceedsThreshold() throws Exception {
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptCleanupService.countDriftedActiveReceptionists()).thenReturn(51L);
+        when(jobGuard.firstWithin(eq("throttle:alert:strict_dept_drift"), any(Duration.class)))
+            .thenReturn(true);
+
+        invoke("patrolStrictDeptDrift");
+
+        verify(alertService).createAlert(isNull(), eq("strict_dept_drift"),
+            eq(AgentAlert.AlertSeverity.medium),
+            org.mockito.ArgumentMatchers.contains("51"),
+            eq(AgentAlert.AutoAction.none), isNull());
+        verify(alertService, never()).resolveOpenByType("strict_dept_drift");
+    }
+
+    @Test
+    @DisplayName("漂移未超阈值 → 关闭历史 strict_dept_drift 告警")
+    void shouldResolveStrictDeptDriftWhenBelowThreshold() throws Exception {
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptCleanupService.countDriftedActiveReceptionists()).thenReturn(50L);
+
+        invoke("patrolStrictDeptDrift");
+
+        verify(alertService).resolveOpenByType("strict_dept_drift");
+        verify(alertService, never()).createAlert(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("漂移统计抛异常 → 不创建也不关闭告警")
+    void shouldLeaveAlertUntouchedWhenDriftCountFails() throws Exception {
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptCleanupService.countDriftedActiveReceptionists())
+            .thenThrow(new RuntimeException("tree down"));
+
+        invoke("patrolStrictDeptDrift");
+
+        verify(alertService, never()).createAlert(any(), any(), any(), any(), any(), any());
+        verify(alertService, never()).resolveOpenByType("strict_dept_drift");
     }
 
     private void invoke(String methodName) throws Exception {
