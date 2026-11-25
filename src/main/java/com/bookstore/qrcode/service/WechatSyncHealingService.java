@@ -317,11 +317,17 @@ public class WechatSyncHealingService {
             .map(QrAgent::getAgentUserid)
             .forEach(excludeUserids::add);
 
+        // 严格同部门取人：按活码所在部门取人，而非全局取人。
+        // 活码不存在或部门为空时 deptId 为 null：严格模式返回 null（不跨县补人），
+        // 非严格模式等同旧的全局取人行为。
+        QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
+        Long deptId = qr != null ? qr.getDepartmentId() : null;
+
         // 从全局池取替补，最多尝试 20 次，跳过异常状态的员工
         String backupUserid = null;
         int dailyMax = 150;
         for (int attempt = 0; attempt < 20; attempt++) {
-            GlobalAgentPool backup = poolService.takeStandby(excludeUserids);
+            GlobalAgentPool backup = poolService.takeStandby(excludeUserids, deptId);
             if (backup == null) break;
 
             // 二次校验：替补必须是正常状态（防止 warning/blocked/melted 等异常员工被补入）
@@ -343,7 +349,6 @@ public class WechatSyncHealingService {
 
         if (backupUserid == null) {
             log.warn("自愈补充失败：全局池无健康 standby, qrCodeId={}", qrCodeId);
-            QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
             String schoolName = qr != null ? qr.getSchoolName() : String.valueOf(qrCodeId);
             alertService.alertEmptyBackup(qrCodeId, schoolName);
             return;
@@ -369,7 +374,6 @@ public class WechatSyncHealingService {
 
         // 同步到企微：构建包含替补的最新成员列表，调用 updateContactWay
         try {
-            QrCode qr = qrCodeRepo.findById(qrCodeId).orElse(null);
             if (qr != null && qr.getQrConfigId() != null) {
                 List<String> updatedUserIds = new ArrayList<>();
                 for (QrAgent a : qrAgentRepo.findByQrCodeId(qrCodeId)) {

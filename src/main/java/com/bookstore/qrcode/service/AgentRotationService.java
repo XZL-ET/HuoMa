@@ -200,11 +200,9 @@ public class AgentRotationService {
             .map(QrAgent::getAgentUserid)
             .forEach(excludeUserids::add);
 
-        // 同部门优先：取「服务老师本人」所在部门，而非活码部门；无则回退活码部门
-        Long deptId = poolService.resolvePrimaryDepartmentId(userId);
-        if (deptId == null) {
-            deptId = qr.getDepartmentId();
-        }
+        // 严格同部门取人：以「活码所在部门」为范围，不能取服务老师本人部门
+        // （服务老师可能是跨县兼岗，按其本人部门取人会把外县员工补进本县活码）
+        Long deptId = qr.getDepartmentId();
         GlobalAgentPool backup = poolService.takeStandby(excludeUserids, deptId);
         if (backup == null) {
             log.error("服务老师 {} 下码前补员失败：全局池枯竭，活码 {} 保持 active 不下码",
