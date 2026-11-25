@@ -54,6 +54,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DepartmentWhitelistRemovalService {
 
+    /** 默认撤人原因（历史调用点与空白原因的回退文案）。 */
+    private static final String DEFAULT_REMOVAL_REASON = "部门准入白名单移出";
+
     private final QrCodeRepository qrCodeRepo;
     private final QrAgentRepository qrAgentRepo;
     private final QrRotateLogRepository rotateLogRepo;
@@ -78,9 +81,36 @@ public class DepartmentWhitelistRemovalService {
      * @param disallowedUserids 不允许的 userid 集合
      * @return 撤人结果；无匹配接待员时返回 {@code (0,0,false,null)}
      * @throws RuntimeException 活码不存在
+     * @see #removeReceptionistsFromQr(Long, Set, String, boolean)
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public QrRemovalOutcome removeReceptionistsFromQr(Long qrCodeId, Set<String> disallowedUserids) {
+        return removeReceptionistsFromQr(qrCodeId, disallowedUserids, DEFAULT_REMOVAL_REASON, false);
+    }
+
+    /**
+     * 从指定活码撤下不再被部门白名单允许的 active 接待员，可自定义原因并强制本县补位。
+     *
+     * <p>撤人后若 active 成员不足 1 人，先补位；补不到则整体跳过、原活码不变：</p>
+     * <ul>
+     *   <li>{@code strictBackfill == true} → 只调 {@link GlobalAgentPoolService#takeStandbyStrict(Set, Long)}，
+     *       忽略严格模式开关，绝不跨县降级；本县无人时跳过；</li>
+     *   <li>{@code strictBackfill == false} → 沿用 {@link GlobalAgentPoolService#takeStandby(Set, Long)}，
+     *       开关开启时由池服务内部转为严格取人。</li>
+     * </ul>
+     *
+     * @param qrCodeId          活码 ID
+     * @param disallowedUserids 不允许的 userid 集合
+     * @param reason            写入每条 {@link QrRotateLog} 的原因；{@code null}/空白时回退默认文案
+     * @param strictBackfill    是否强制本县补位（不受严格模式开关影响）
+     * @return 撤人结果；无匹配接待员时返回 {@code (0,0,false,null)}
+     * @throws RuntimeException 活码不存在
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public QrRemovalOutcome removeReceptionistsFromQr(Long qrCodeId, Set<String> disallowedUserids,
+                                                      String reason, boolean strictBackfill) {
+        String removalReason = (reason == null || reason.isBlank())
+            ? DEFAULT_REMOVAL_REASON : reason;
         QrCode qr = qrCodeRepo.findById(qrCodeId)
             .orElseThrow(() -> new RuntimeException("活码不存在: " + qrCodeId));
 
@@ -110,10 +140,14 @@ public class DepartmentWhitelistRemovalService {
         int remaining = active.size() - doomed.size();
         int backfilled = 0;
         while (remaining < 1) {
-            GlobalAgentPool pool = poolService.takeStandby(exclude, qr.getDepartmentId());
+            GlobalAgentPool pool = strictBackfill
+                ? poolService.takeStandbyStrict(exclude, qr.getDepartmentId())
+                : poolService.takeStandby(exclude, qr.getDepartmentId());
             if (pool == null) {
-                log.warn("部门准入撤人跳过：全局池枯竭无法补位, qrCodeId={}", qrCodeId);
-                return new QrRemovalOutcome(0, 0, true, "全局池枯竭，无法补位");
+                String skipReason = strictBackfill ? "本县无备选，无法补位" : "全局池枯竭，无法补位";
+                log.warn("部门准入撤人跳过：无法补位, qrCodeId={}, strictBackfill={}",
+                    qrCodeId, strictBackfill);
+                return new QrRemovalOutcome(0, 0, true, skipReason);
             }
             sortOrder++;
             qrAgentRepo.save(QrAgent.builder()
@@ -139,7 +173,7 @@ public class DepartmentWhitelistRemovalService {
             .map(qa -> QrRotateLog.builder()
                 .qrCodeId(qrCodeId)
                 .fromUserid(qa.getAgentUserid())
-                .reason("部门准入白名单移出")
+                .reason(removalReason)
                 .build())
             .toList());
 
