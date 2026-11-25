@@ -17,8 +17,10 @@ import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -115,5 +117,39 @@ class StrictDeptControllerTest {
             .andExpect(flash().attribute("message", containsString("已开启")));
 
         verify(configService).setStrictModeEnabled(true);
+    }
+
+    @Test
+    @DisplayName("POST exempt-userids 规范化换行/中英文逗号并去重后写入")
+    void exemptUseridsNormalizedAndSaved() throws Exception {
+        mockMvc.perform(post("/strict-dept/exempt-userids")
+                .param("userids", " li.si , wang.wu\nzhao.liu，li.si\n\n"))
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrl("/strict-dept"))
+            .andExpect(flash().attribute("message", containsString("共 3 人")));
+
+        verify(configService).setExemptUserids(List.of("li.si", "wang.wu", "zhao.liu"));
+    }
+
+    @Test
+    @DisplayName("POST exempt-userids 空白输入清空名单")
+    void exemptUseridsBlankClearsList() throws Exception {
+        mockMvc.perform(post("/strict-dept/exempt-userids").param("userids", "  \n , "))
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrl("/strict-dept"))
+            .andExpect(flash().attribute("message", containsString("已清空")));
+
+        verify(configService).setExemptUserids(List.of());
+    }
+
+    @Test
+    @DisplayName("POST exempt-userids 写入失败时 flash 错误")
+    void exemptUseridsSaveFailureFlashesError() throws Exception {
+        doThrow(new IllegalStateException("boom")).when(configService).setExemptUserids(anyList());
+
+        mockMvc.perform(post("/strict-dept/exempt-userids").param("userids", "li.si"))
+            .andExpect(status().is3xxRedirection())
+            .andExpect(redirectedUrl("/strict-dept"))
+            .andExpect(flash().attribute("error", "豁免名单保存失败，请稍后重试"));
     }
 }

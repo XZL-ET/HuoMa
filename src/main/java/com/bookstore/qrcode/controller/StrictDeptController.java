@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +55,9 @@ public class StrictDeptController {
         model.addAttribute("title", "严格同部门清退");
         model.addAttribute("view", "strict-dept");
         model.addAttribute("strictModeEnabled", strictDeptConfigService.isStrictModeEnabled());
-        model.addAttribute("exemptUserids", strictDeptConfigService.getExemptUserids());
+        Set<String> exemptUserids = strictDeptConfigService.getExemptUserids();
+        model.addAttribute("exemptUseridsText",
+                String.join("\n", exemptUserids.stream().sorted().toList()));
 
         List<PoolAllowedDepartment> countyOptions;
         try {
@@ -151,6 +154,34 @@ public class StrictDeptController {
         } catch (RuntimeException e) {
             log.warn("严格同部门开关写入失败", e);
             redirect.addFlashAttribute("error", "开关保存失败，请稍后重试");
+        }
+        return "redirect:/strict-dept";
+    }
+
+    /**
+     * POST {@code /strict-dept/exempt-userids} — 保存豁免服务老师名单。
+     *
+     * <p>接受换行、逗号（中英文）、分号或空白分隔；去空行、去首尾空白、按首次出现顺序去重。
+     * 提交空内容表示清空名单（不再豁免任何人）。</p>
+     */
+    @PostMapping("/exempt-userids")
+    public String updateExemptUserids(
+            @RequestParam(name = "userids", required = false) String userids,
+            RedirectAttributes redirect) {
+        List<String> parsed = userids == null ? List.of()
+            : Arrays.stream(userids.split("[,，;；\\s]+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+        try {
+            strictDeptConfigService.setExemptUserids(parsed);
+            redirect.addFlashAttribute("message", parsed.isEmpty()
+                ? "豁免名单已清空"
+                : "豁免名单已更新，共 " + parsed.size() + " 人");
+        } catch (RuntimeException e) {
+            log.warn("严格同部门豁免名单写入失败", e);
+            redirect.addFlashAttribute("error", "豁免名单保存失败，请稍后重试");
         }
         return "redirect:/strict-dept";
     }

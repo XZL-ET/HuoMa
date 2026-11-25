@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -67,6 +68,22 @@ class StrictDeptTemplateRenderTest {
             .andExpect(content().string(containsString("预览")))
             .andExpect(content().string(containsString("确认执行清退")))
             .andExpect(content().string(containsString("未配置区县白名单")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("豁免名单在清退页可编辑：渲染保存表单与当前名单")
+    void rendersEditableExemptList() throws Exception {
+        when(strictDeptConfigService.getExemptUserids()).thenReturn(Set.of("svc1", "svc2"));
+        when(cleanupService.countDriftedActiveReceptionists()).thenReturn(0L);
+
+        mockMvc.perform(get("/strict-dept"))
+            .andExpect(status().isOk())
+            .andExpect(content().string(containsString("/strict-dept/exempt-userids")))
+            .andExpect(content().string(containsString("name=\"userids\"")))
+            .andExpect(content().string(containsString("svc1")))
+            .andExpect(content().string(containsString("保存豁免名单")))
+            .andExpect(content().string(not(containsString("修改请在系统配置中进行"))));
     }
 
     @Test

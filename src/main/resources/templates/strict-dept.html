@@ -78,14 +78,19 @@
         </div>
         <div class="col-lg-4">
             <div class="card p-3 h-100">
-                <h5 class="mb-2">豁免服务老师（只读）</h5>
-                <div th:if="${exemptUserids != null && !exemptUserids.isEmpty()}">
-                    <span th:each="uid : ${exemptUserids}"
-                          class="badge bg-light text-dark border me-1 mb-1" th:text="${uid}"></span>
-                </div>
-                <div th:if="${exemptUserids == null || exemptUserids.isEmpty()}"
-                     class="text-muted small">当前无豁免人员。</div>
-                <small class="text-muted d-block mt-2">豁免人员不会被清退，修改请在系统配置中进行。</small>
+                <h5 class="mb-2">豁免服务老师</h5>
+                <form th:action="@{/strict-dept/exempt-userids}" method="post">
+                    <label class="form-label small text-muted mb-1" for="exemptUseridsInput">
+                        企微 userid，每行一个或用逗号分隔
+                    </label>
+                    <textarea id="exemptUseridsInput" name="userids" class="form-control form-control-sm"
+                              rows="3" placeholder="留空表示不豁免任何人"
+                              th:text="${exemptUseridsText}"></textarea>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <button type="submit" class="btn btn-primary btn-sm">保存豁免名单</button>
+                        <small class="text-muted">豁免人员不会被清退，也不受严格同部门取人限制。</small>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
