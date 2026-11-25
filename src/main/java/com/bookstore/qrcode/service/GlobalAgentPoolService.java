@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -55,6 +56,7 @@ public class GlobalAgentPoolService {
     private final WecomApiClient wecomApi;
     private final ObjectMapper objectMapper;
     private final DepartmentWhitelistService whitelist;
+    private final StrictDeptConfigService strictDeptConfig;
 
     /** 部门树缓存：parentId → 所有子孙部门 ID。企微部门结构很少变动，实例级缓存即可。 */
     private final Map<Long, Collection<Long>> deptTreeCache = new ConcurrentHashMap<>();
@@ -207,12 +209,19 @@ public class GlobalAgentPoolService {
      *   <li>全局枯竭 → 返回 null</li>
      * </ol>
      *
+     * <p>严格同部门开关开启时，整个方法委托给 {@link #takeStandbyStrict(Set, Long)}，
+     * 不再跨县降级。</p>
+     *
      * @param excludeUserids 排除的 userid 集合
      * @param preferredDepartmentId 优先部门 ID，null 时直接全局取人
      * @return 可用 standby，或无可用时返回 null
      */
     @Transactional
     public GlobalAgentPool takeStandby(Set<String> excludeUserids, Long preferredDepartmentId) {
+        if (strictDeptConfig.isStrictModeEnabled()) {
+            return takeStandbyStrict(excludeUserids, preferredDepartmentId);
+        }
+
         // ① 收集子孙部门 ID（用于 IN 查询）
         Collection<Long> deptIds = null;
         if (preferredDepartmentId != null) {
@@ -224,7 +233,7 @@ public class GlobalAgentPoolService {
             List<GlobalAgentPool> standbys = poolRepo.findStandbysByDeptForUpdate(deptIds,
                 GlobalAgentPool.PoolStatus.standby);
             if (!standbys.isEmpty()) {
-                GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids);
+                GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids, null);
                 if (result != null) return result;
                 log.info("同部门无可用 standby，降级为全局取人: deptId={}", preferredDepartmentId);
             } else {
@@ -237,13 +246,56 @@ public class GlobalAgentPoolService {
     }
 
     /**
+     * 严格同部门取人：只在指定部门（含子孙部门）内取 standby，绝不跨县降级。
+     *
+     * <p>与 {@link #takeStandby(Set, Long)} 的区别：忽略严格模式开关，
+     * 永远严格；同县无人时返回 {@code null}。</p>
+     *
+     * <p>候选来源是全局 standby 全量（带行锁），再按 {@link Employee#getDepartment()}
+     * 的完整部门列表逐人判定本县归属——不能只按池记录的主部门
+     * {@code department_id} 过滤，否则兼属本县的多部门员工会被漏选。</p>
+     *
+     * @param excludeUserids 需要排除的 userid 集合
+     * @param preferredDepartmentId 本县根部门 ID
+     * @return 本县可用 standby；缺部门或本县无人时返回 {@code null}
+     */
+    @Transactional
+    public GlobalAgentPool takeStandbyStrict(Set<String> excludeUserids, Long preferredDepartmentId) {
+        if (preferredDepartmentId == null) {
+            log.warn("严格同部门取人缺少部门 ID，返回 null（不跨县兜底）");
+            return null;
+        }
+        Set<Long> localDeptIds = new HashSet<>(collectDescendantDeptIds(preferredDepartmentId));
+        if (localDeptIds.isEmpty()) {
+            log.warn("严格同部门取人部门展开为空: deptId={}", preferredDepartmentId);
+            return null;
+        }
+        List<GlobalAgentPool> standbys = poolRepo
+            .findStandbysForUpdate(GlobalAgentPool.PoolStatus.standby);
+        if (standbys.isEmpty()) {
+            log.warn("全局员工池无 standby 员工可用（严格同部门 deptId={}）", preferredDepartmentId);
+            return null;
+        }
+        GlobalAgentPool result = selectFromDeptCandidates(standbys, excludeUserids, localDeptIds);
+        if (result == null) {
+            log.warn("严格同部门无可用 standby（不跨县降级）: deptId={}, 本县部门集={}",
+                preferredDepartmentId, localDeptIds);
+        }
+        return result;
+    }
+
+    /**
      * 从同部门候选列表中选取第一个可用员工（懒清理 + 公平轮转）。
      *
      * <p>逻辑与 {@link #takeStandby(Set)} 保持一致，
      * 复用相同的懒清理规则（离职/企微不可用/封号熔断）。</p>
+     *
+     * @param localDeptIds 本县部门集合；非 null 时额外要求员工部门命中本县。
+     *                     不命中只跳过、不删除——多部门/无档员工可能仍属本县，删除有误杀风险
      */
     private GlobalAgentPool selectFromDeptCandidates(List<GlobalAgentPool> candidates,
-                                                      Set<String> excludeUserids) {
+                                                      Set<String> excludeUserids,
+                                                      Set<Long> localDeptIds) {
         DepartmentWhitelistService.AllowedDeptResult deptAccess =
             whitelist.loadAllowedDeptIdsWithTreeStatus();
         int skippedInactive = 0, skippedBlocked = 0, skippedWechatUnavailable = 0;
@@ -263,6 +315,11 @@ public class GlobalAgentPoolService {
                 } else {
                     log.warn("部门树不可用，暂不清理疑似无关部门员工 userid={}", p.getAgentUserid());
                 }
+                continue;
+            }
+            // 严格同部门：员工任一部门不在本县集合 → 跳过（不删除）
+            if (localDeptIds != null
+                && (emp == null || !whitelist.isEmployeeAllowed(emp, localDeptIds))) {
                 continue;
             }
             if (emp != null && !emp.getActive()) {
@@ -310,31 +367,51 @@ public class GlobalAgentPoolService {
     /**
      * 收集指定部门的所有子孙部门 ID（带实例级缓存，避免重复调用企微 API）。
      *
-     * <p>优先从 {@link #deptTreeCache} 获取，未命中时调用企微 API 拉取并缓存。
-     * 企微部门结构很少变动，实例级缓存生命周期同应用进程。</p>
+     * <p>优先从 {@link #deptTreeCache} 获取，未命中时调用企微 API 拉取，
+     * <b>只有成功才写缓存</b>。拉取失败时本次降级为只含 {@code parentId} 的不可变集合，
+     * 但不缓存——否则一次偶发故障会把「精确 root」结果固化整个进程生命周期，
+     * 之后新增的子部门将永久漏选（与 {@code DepartmentService.loadDeptIdNameMap}
+     * 空结果不缓存的口径一致）。</p>
      */
     private Collection<Long> collectDescendantDeptIds(Long parentId) {
-        return deptTreeCache.computeIfAbsent(parentId, this::doCollectDescendantDeptIds);
+        Collection<Long> cached = deptTreeCache.get(parentId);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            Collection<Long> ids = doCollectDescendantDeptIds(parentId);
+            deptTreeCache.put(parentId, ids);
+            return ids;
+        } catch (RuntimeException e) {
+            log.warn("拉取子孙部门失败，本次仅用直接部门ID（不写入缓存）: parentId={}", parentId, e);
+            return Set.of(parentId);
+        }
     }
 
     /**
      * 递归拉取子孙部门 ID（无缓存，实际调用企微 API）。
+     *
+     * <p>失败时抛运行时异常，不得吞掉：任一子树失败都让整棵树降级为「精确 root」，
+     * 不能保留半截结果（半截集合会被当作完整结果缓存）。</p>
+     *
+     * @throws IllegalStateException 企微部门接口不可用
      */
     private Collection<Long> doCollectDescendantDeptIds(Long parentId) {
         Set<Long> ids = new LinkedHashSet<>();
         ids.add(parentId);
+        JsonNode resp;
         try {
-            JsonNode resp = wecomApi.listDepartments(parentId);
-            if (resp.has("department") && resp.get("department").isArray()) {
-                for (JsonNode dept : resp.get("department")) {
-                    long childId = dept.get("id").asLong();
-                    if (!ids.contains(childId)) {
-                        ids.addAll(doCollectDescendantDeptIds(childId));
-                    }
+            resp = wecomApi.listDepartments(parentId);
+        } catch (Exception e) {
+            throw new IllegalStateException("拉取子孙部门失败: parentId=" + parentId, e);
+        }
+        if (resp != null && resp.has("department") && resp.get("department").isArray()) {
+            for (JsonNode dept : resp.get("department")) {
+                long childId = dept.get("id").asLong();
+                if (!ids.contains(childId)) {
+                    ids.addAll(doCollectDescendantDeptIds(childId));
                 }
             }
-        } catch (Exception e) {
-            log.warn("拉取子孙部门失败: parentId={}, 仅用直接部门ID", parentId, e);
         }
         return ids;
     }
