@@ -24,6 +24,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +41,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
 
@@ -81,6 +84,45 @@ class AdminSystemConfigControllerWebTest {
                 .andExpect(content().string(containsString("保存并应用到全部接待员")))
                 .andExpect(model().attribute("deletionReportRecipients", "admin1,admin2"))
                 .andExpect(model().attribute("deletionReportTime", "09:00"));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("GET 按用途分区配置键，隐藏内部键")
+    void indexPartitionsConfigs() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(
+            cfg("default_welcome_text", "您好"),
+            cfg("transfer_filled_greeting_default", "已登记"),
+            cfg("image.heading.line1", "第一行"),
+            cfg("receptionist_daily_max_default", "500"),
+            cfg("deletion_report_admin_userids", "boss1"),
+            cfg("strict_dept_mode", "false"),
+            cfg("collection_form_version", "7"),
+            cfg("some_new_key", "v")));
+        when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
+        when(receptionistDailyMaxService.resolveDefault()).thenReturn(200);
+        when(deletionReportService.getEffectiveRecipients()).thenReturn("");
+        when(deletionReportService.resolvePushTime()).thenReturn(LocalTime.of(9, 0));
+        when(formTemplateService.resolveImageCopy()).thenReturn(Collections.emptyMap());
+
+        mockMvc.perform(get("/admin/system-config"))
+            .andExpect(status().isOk())
+            .andExpect(model().attribute("copyConfigs", hasSize(2)))
+            .andExpect(model().attribute("advancedConfigs", hasSize(1)))
+            .andExpect(content().string(containsString("id=\"group-copy\"")))
+            .andExpect(content().string(containsString("id=\"group-limits\"")))
+            .andExpect(content().string(containsString("id=\"group-notify\"")))
+            .andExpect(content().string(containsString("id=\"group-tools\"")))
+            .andExpect(content().string(containsString("default_welcome_text")))
+            .andExpect(content().string(containsString("some_new_key")))
+            .andExpect(content().string(not(containsString("strict_dept_mode"))))
+            .andExpect(content().string(not(containsString("collection_form_version"))))
+            .andExpect(content().string(not(containsString("image.heading.line1"))))
+            .andExpect(content().string(not(containsString("receptionist_daily_max_default"))));
+    }
+
+    private static SystemConfig cfg(String key, String value) {
+        return SystemConfig.builder().configKey(key).configValue(value).build();
     }
 
     @Test

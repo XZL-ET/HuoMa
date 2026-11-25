@@ -5,6 +5,13 @@
 <div id="content">
     <h4 class="mb-3">⚙️ 系统配置</h4>
 
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <a class="btn btn-sm btn-outline-secondary" href="#group-copy">业务文案</a>
+        <a class="btn btn-sm btn-outline-secondary" href="#group-limits">运营阈值</a>
+        <a class="btn btn-sm btn-outline-secondary" href="#group-notify">通知日报</a>
+        <a class="btn btn-sm btn-outline-secondary" href="#group-tools">运维工具</a>
+    </div>
+
     <div th:if="${message}" class="alert alert-success alert-dismissible fade show" role="alert">
         ✅ <span th:text="${message}"></span>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
@@ -15,52 +22,32 @@
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
+    <!-- 业务文案 -->
+    <h5 id="group-copy" class="mt-4 mb-2">📝 业务文案</h5>
+
     <div class="card border-0 shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0 align-middle">
-                <thead class="table-light">
-                    <tr>
-                        <th style="width:25%">配置键</th>
-                        <th>配置值</th>
-                        <th style="width:16%">更新时间</th>
-                        <th style="width:8%">操作</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr th:each="c : ${configs}">
-                        <td><code th:text="${c.configName} ?: ${c.configKey}"></code></td>
-                        <td>
-                            <form th:action="@{/admin/system-config/save}" method="post"
-                                  class="d-flex align-items-start gap-2">
-                                <input type="hidden" name="configKey" th:value="${c.configKey}">
-                                <th:block th:if="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled') or #strings.contains(c.configKey, 'transfer_success_msg')}">
-                                    <textarea name="configValue" class="form-control form-control-sm" rows="2"
-                                              style="max-width:480px" th:text="${c.configValue}"></textarea>
-                                </th:block>
-                                <th:block th:unless="${#strings.contains(c.configKey, 'welcome_text') or #strings.contains(c.configKey, 'welcome_msg') or #strings.contains(c.configKey, 'transfer_filled') or #strings.contains(c.configKey, 'transfer_unfilled') or #strings.contains(c.configKey, 'transfer_success_msg')}">
-                                    <input type="text" name="configValue" th:value="${c.configValue}"
-                                           class="form-control form-control-sm" style="max-width:400px">
-                                </th:block>
-                                <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">
-                                    ✓ 保存
-                                </button>
-                            </form>
-                        </td>
-                        <td class="text-muted small" th:text="${c.updatedAt}"></td>
-                        <td></td>
-                    </tr>
-                    <tr th:if="${configs.isEmpty()}">
-                        <td colspan="4" class="text-center text-muted py-4">
-                            📦 暂无配置项
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+        <div class="card-header bg-white border-bottom-0">
+            <h5 class="mb-0">欢迎语与转接文案</h5>
+        </div>
+        <div class="card-body">
+            <div th:if="${copyConfigs.isEmpty()}" class="text-muted small">暂无欢迎语与转接文案配置项。</div>
+            <form th:each="c : ${copyConfigs}" th:action="@{/admin/system-config/save}" method="post" class="mb-3">
+                <label class="form-label small text-muted mb-1">
+                    <code th:text="${c.configName} ?: ${c.configKey}"></code>
+                </label>
+                <div class="d-flex align-items-start gap-2">
+                    <input type="hidden" name="configKey" th:value="${c.configKey}">
+                    <textarea name="configValue" class="form-control form-control-sm" rows="2"
+                              th:text="${c.configValue}"></textarea>
+                    <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">✓ 保存</button>
+                </div>
+                <small class="text-muted d-block mt-1" th:text="'更新时间：' + ${c.updatedAt}"></small>
+            </form>
         </div>
     </div>
 
     <!-- 图片版文案 -->
-    <div class="card border-0 shadow-sm mt-4">
+    <div class="card border-0 shadow-sm mt-3">
         <div class="card-header bg-white border-bottom-0">
             <h5 class="mb-0">📚 图片版文案</h5>
         </div>
@@ -106,66 +93,74 @@
         </div>
     </div>
 
-    <!-- 服务老师日限 -->
-    <div class="card border-0 shadow-sm mt-4">
-        <div class="card-header bg-white border-bottom-0">
-            <h5 class="mb-0">服务老师日限</h5>
+    <!-- 运营阈值 -->
+    <h5 id="group-limits" class="mt-4 mb-2">📊 运营阈值</h5>
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <!-- 服务老师日限 -->
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-bottom-0">
+                    <h5 class="mb-0">服务老师日限</h5>
+                </div>
+                <div class="card-body">
+                    <form th:action="@{/admin/system-config/service-teacher-daily-max}" method="post"
+                          class="row g-3 align-items-end">
+                        <div class="col-auto">
+                            <label class="form-label small text-muted mb-1" for="serviceDailyMaxInput">每日可加人数</label>
+                            <input id="serviceDailyMaxInput" type="number" name="value" class="form-control form-control-sm"
+                                   min="1" max="800" required th:value="${serviceTeacherDailyMax}" style="width:140px">
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" name="apply" value="false" class="btn btn-outline-primary btn-sm">
+                                保存默认值
+                            </button>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" name="apply" value="true" class="btn btn-primary btn-sm"
+                                    onclick="return confirm('将把「所有服务老师」的日限统一改为该值并刷新存量，执行前会自动备份。确认执行？')">
+                                保存并应用到全部服务老师
+                            </button>
+                        </div>
+                    </form>
+                    <small class="text-muted d-block mt-2">「保存默认值」只影响以后新建的服务老师；「应用到全部」会同时刷新存量服务老师的日限（执行前自动建备份表，可回滚）。</small>
+                </div>
+            </div>
         </div>
-        <div class="card-body">
-            <form th:action="@{/admin/system-config/service-teacher-daily-max}" method="post"
-                  class="row g-3 align-items-end">
-                <div class="col-auto">
-                    <label class="form-label small text-muted mb-1" for="serviceDailyMaxInput">每日可加人数</label>
-                    <input id="serviceDailyMaxInput" type="number" name="value" class="form-control form-control-sm"
-                           min="1" max="800" required th:value="${serviceTeacherDailyMax}" style="width:140px">
+        <div class="col-lg-6">
+            <!-- 接待员日限 -->
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-bottom-0">
+                    <h5 class="mb-0">接待员日限</h5>
                 </div>
-                <div class="col-auto">
-                    <button type="submit" name="apply" value="false" class="btn btn-outline-primary btn-sm">
-                        保存默认值
-                    </button>
+                <div class="card-body">
+                    <form th:action="@{/admin/system-config/receptionist-daily-max}" method="post"
+                          class="row g-3 align-items-end">
+                        <div class="col-auto">
+                            <label class="form-label small text-muted mb-1" for="receptionistDailyMaxInput">每日可加人数</label>
+                            <input id="receptionistDailyMaxInput" type="number" name="value" class="form-control form-control-sm"
+                                   min="1" max="800" required th:value="${receptionistDailyMax}" style="width:140px">
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" name="apply" value="false" class="btn btn-outline-primary btn-sm">
+                                保存默认值
+                            </button>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" name="apply" value="true" class="btn btn-primary btn-sm"
+                                    onclick="return confirm('将把「所有接待员」的日限统一改为该值并刷新存量，执行前会自动备份。确认执行？')">
+                                保存并应用到全部接待员
+                            </button>
+                        </div>
+                    </form>
+                    <small class="text-muted d-block mt-2">「保存默认值」只影响以后新建的接待员；「应用到全部」会同时刷新存量接待员的活码日限与全局池日限（实际判定读全局池），执行前自动备份两处数据，可回滚。</small>
                 </div>
-                <div class="col-auto">
-                    <button type="submit" name="apply" value="true" class="btn btn-primary btn-sm"
-                            onclick="return confirm('将把「所有服务老师」的日限统一改为该值并刷新存量，执行前会自动备份。确认执行？')">
-                        保存并应用到全部服务老师
-                    </button>
-                </div>
-            </form>
-            <small class="text-muted d-block mt-2">「保存默认值」只影响以后新建的服务老师；「应用到全部」会同时刷新存量服务老师的日限（执行前自动建备份表，可回滚）。</small>
+            </div>
         </div>
     </div>
 
-    <!-- 接待员日限 -->
-    <div class="card border-0 shadow-sm mt-4">
-        <div class="card-header bg-white border-bottom-0">
-            <h5 class="mb-0">接待员日限</h5>
-        </div>
-        <div class="card-body">
-            <form th:action="@{/admin/system-config/receptionist-daily-max}" method="post"
-                  class="row g-3 align-items-end">
-                <div class="col-auto">
-                    <label class="form-label small text-muted mb-1" for="receptionistDailyMaxInput">每日可加人数</label>
-                    <input id="receptionistDailyMaxInput" type="number" name="value" class="form-control form-control-sm"
-                           min="1" max="800" required th:value="${receptionistDailyMax}" style="width:140px">
-                </div>
-                <div class="col-auto">
-                    <button type="submit" name="apply" value="false" class="btn btn-outline-primary btn-sm">
-                        保存默认值
-                    </button>
-                </div>
-                <div class="col-auto">
-                    <button type="submit" name="apply" value="true" class="btn btn-primary btn-sm"
-                            onclick="return confirm('将把「所有接待员」的日限统一改为该值并刷新存量，执行前会自动备份。确认执行？')">
-                        保存并应用到全部接待员
-                    </button>
-                </div>
-            </form>
-            <small class="text-muted d-block mt-2">「保存默认值」只影响以后新建的接待员；「应用到全部」会同时刷新存量接待员的活码日限与全局池日限（实际判定读全局池），执行前自动备份两处数据，可回滚。</small>
-        </div>
-    </div>
-
-    <!-- 客户删除员工日报 -->
-    <div class="card border-0 shadow-sm mt-4">
+    <!-- 通知日报 -->
+    <h5 id="group-notify" class="mt-4 mb-2">🔔 通知日报</h5>
+    <div class="card border-0 shadow-sm">
         <div class="card-header bg-white border-bottom-0">
             <h5 class="mb-0">客户删除员工日报</h5>
         </div>
@@ -212,10 +207,8 @@
     </div>
 
     <!-- 运维工具 -->
-    <div class="card border-0 shadow-sm mt-4">
-        <div class="card-header bg-white border-bottom-0">
-            <h5 class="mb-0">🛠️ 运维工具</h5>
-        </div>
+    <h5 id="group-tools" class="mt-4 mb-2">🛠️ 运维工具</h5>
+    <div class="card border-0 shadow-sm">
         <div class="card-body">
             <div class="d-flex flex-wrap gap-3 align-items-center">
                 <!-- 标签同步 -->
@@ -235,6 +228,45 @@
     </div>
 
     <div id="repairSamples" class="mt-3" style="display:none"></div>
+
+    <!-- 高级配置（默认收起） -->
+    <details class="card border-0 shadow-sm p-3 mt-4">
+        <summary class="text-muted">高级配置（未归类键，改动前请确认用途）</summary>
+        <div class="alert alert-warning py-2 small mt-3 mb-2">
+            以下为未归类的原始配置，误改可能导致功能异常。
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:30%">配置键</th>
+                        <th>配置值</th>
+                        <th style="width:16%">更新时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="c : ${advancedConfigs}">
+                        <td><code th:text="${c.configKey}"></code></td>
+                        <td>
+                            <form th:action="@{/admin/system-config/save}" method="post"
+                                  class="d-flex align-items-center gap-2">
+                                <input type="hidden" name="configKey" th:value="${c.configKey}">
+                                <input type="text" name="configValue" th:value="${c.configValue}"
+                                       class="form-control form-control-sm" style="max-width:400px">
+                                <button type="submit" class="btn btn-sm btn-primary flex-shrink-0">✓ 保存</button>
+                            </form>
+                        </td>
+                        <td class="text-muted small" th:text="${c.updatedAt}"></td>
+                    </tr>
+                    <tr th:if="${advancedConfigs.isEmpty()}">
+                        <td colspan="3" class="text-center text-muted py-4">
+                            📦 暂无未归类配置
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </details>
 
     <script th:inline="javascript">
     async function repairRemarks() {

@@ -18,6 +18,9 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -41,12 +44,51 @@ public class AdminSystemConfigController {
     private final DeletionReportJob deletionReportJob;
     private final FormTemplateService formTemplateService;
 
+    /** 已由页面上专用卡片接管的键，不再在高级配置区重复出现。 */
+    private static final Set<String> CARD_MANAGED_KEYS = Set.of(
+            FormTemplateService.IMAGE_HEADING_LINE1_KEY,
+            FormTemplateService.IMAGE_HEADING_LINE2_KEY,
+            FormTemplateService.IMAGE_SUBTITLE_KEY,
+            FormTemplateService.IMAGE_GRADE_HINT_KEY,
+            FormTemplateService.IMAGE_BUTTON_TEXT_KEY,
+            FormTemplateService.PRIVACY_NOTICE_KEY,
+            ServiceTeacherDailyMaxService.CONFIG_KEY,
+            ReceptionistDailyMaxService.CONFIG_KEY,
+            DeletionReportService.RECIPIENTS_CONFIG_KEY,
+            DeletionReportService.TIME_CONFIG_KEY);
+
+    /** 由程序维护的内部键，不在页面暴露。 */
+    private static final Set<String> HIDDEN_KEYS = Set.of(
+            FormTemplateService.VERSION_CONFIG_KEY,
+            DeletionReportService.TODAY_RECIPIENTS_CONFIG_KEY,
+            "strict_dept_mode",
+            "strict_dept_exempt_userids");
+
+    /** 欢迎语 / 转接文案类键，进「欢迎语与转接文案」卡片。 */
+    private static final List<String> COPY_KEY_MARKERS = List.of(
+            "welcome_text", "welcome_msg", "transfer_filled", "transfer_unfilled", "transfer_success_msg");
+
+    private static boolean isCopyConfig(SystemConfig c) {
+        String key = c.getConfigKey();
+        return key != null && COPY_KEY_MARKERS.stream().anyMatch(key::contains);
+    }
+
     /**
      * 配置列表页
      */
     @GetMapping
     public String index(Model model) {
-        model.addAttribute("configs", configRepository.findAll());
+        List<SystemConfig> configs = configRepository.findAll();
+        model.addAttribute("copyConfigs", configs.stream()
+                .filter(AdminSystemConfigController::isCopyConfig)
+                .sorted(Comparator.comparing(SystemConfig::getConfigKey))
+                .toList());
+        model.addAttribute("advancedConfigs", configs.stream()
+                .filter(c -> !isCopyConfig(c))
+                .filter(c -> !CARD_MANAGED_KEYS.contains(c.getConfigKey()))
+                .filter(c -> !HIDDEN_KEYS.contains(c.getConfigKey()))
+                .sorted(Comparator.comparing(SystemConfig::getConfigKey))
+                .toList());
         model.addAllAttributes(formTemplateService.resolveImageCopy());
         model.addAttribute("serviceTeacherDailyMax", serviceTeacherDailyMaxService.resolveDefault());
         model.addAttribute("receptionistDailyMax", receptionistDailyMaxService.resolveDefault());
