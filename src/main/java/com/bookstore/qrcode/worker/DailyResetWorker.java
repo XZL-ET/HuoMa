@@ -340,7 +340,7 @@ public class DailyResetWorker {
      * 判定 full 接待员是否违反严格同部门，需要从活码上移除。
      *
      * <p>只在能明确判定「树可用 + 员工有档 + 不在本县」时才返回 true；
-     * 任一前提缺失都记 WARN 并返回 false，交给原逻辑复活。</p>
+     * 树不可用、员工无档、部门缺失或不可解析都记 WARN 并返回 false，交给原逻辑复活。</p>
      */
     private boolean isStrictDeptViolation(QrAgent qa) {
         QrCode qr = qrCodeRepo.findById(qa.getQrCodeId()).orElse(null);
@@ -355,16 +355,21 @@ public class DailyResetWorker {
                 qa.getQrCodeId(), qa.getAgentUserid());
             return false;
         }
-        Set<Long> localIds;
+        Boolean local;
         try {
-            localIds = strictDeptService.expandLocalDeptIds(qr.getDepartmentId());
+            local = strictDeptService.isLocalOrUnknown(emp, qr.getDepartmentId());
         } catch (DepartmentWhitelistService.DeptTreeUnavailableException
                  | IllegalArgumentException e) {
             log.warn("严格同部门：本县部门展开失败，每日重置跳过严格守卫 qr={}, userid={}",
                 qa.getQrCodeId(), qa.getAgentUserid(), e);
             return false;
         }
-        return !whitelist.isEmployeeAllowed(emp, localIds);
+        if (local == null) {
+            log.warn("严格同部门：员工部门缺失或无法解析，每日重置跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        return !local;
     }
 
     /**

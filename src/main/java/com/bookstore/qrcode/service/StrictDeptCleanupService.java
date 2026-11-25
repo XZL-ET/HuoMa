@@ -257,10 +257,14 @@ public class StrictDeptCleanupService {
      * 统计仍在活码上担任接待员的外县非豁免人数。
      *
      * <p>不判断严格模式总开关（由巡检调用方控制）；排除 paused 码、部门为空的码、
-     * 根部门不在全局白名单的码（白名单启用时）、豁免 userid 与无员工档案的绑定。
-     * 部门树不可用时 {@link StrictDeptService#isLocal} 已降级为精确 root 判定。</p>
+     * 根部门不在全局白名单的码（白名单启用时）、豁免 userid 与无员工档案的绑定，
+     * 以及「员工部门缺失/不可解析」这类无法判定归属的绑定（不计为漂移）。</p>
+     *
+     * <p>部门树不可用时抛出 {@link DepartmentWhitelistService.DeptTreeUnavailableException}，
+     * 由巡检调用方决定保持告警状态不变——不能把「树坏了」误当作「全员外县」。</p>
      *
      * @return 外县 active 接待员绑定数
+     * @throws DepartmentWhitelistService.DeptTreeUnavailableException 部门树不可用
      */
     public long countDriftedActiveReceptionists() {
         List<QrAgent> activeReceptionists = qrAgentRepo.findByStatusAndRole(
@@ -309,17 +313,21 @@ public class StrictDeptCleanupService {
             if (employee == null) {
                 continue;
             }
-            boolean local;
+            Boolean local;
             try {
-                local = strictDeptService.isLocal(employee, rootDeptId);
+                local = strictDeptService.isLocalOrUnknown(employee, rootDeptId);
             } catch (IllegalArgumentException e) {
                 // 根部门在全局白名单里但不在企微部门树：无法判定，不计入漂移
                 log.warn("严格同部门漂移统计：活码 {} 根部门 {} 不在部门树，已跳过",
                     qr.getId(), rootDeptId);
                 continue;
             }
-            if (!local) {
+            // DeptTreeUnavailableException 不捕获：向上抛给巡检，保持告警状态不变
+            if (Boolean.FALSE.equals(local)) {
                 drifted++;
+            } else if (local == null) {
+                log.warn("严格同部门漂移统计：员工 {} 部门缺失或无法解析，跳过漂移计数",
+                    qa.getAgentUserid());
             }
         }
         return drifted;

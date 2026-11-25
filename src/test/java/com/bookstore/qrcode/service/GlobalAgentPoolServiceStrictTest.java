@@ -20,6 +20,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -177,6 +178,28 @@ class GlobalAgentPoolServiceStrictTest {
 
         assertThat(strictDeptService.isLocal(local, LOCAL_DEPT)).isTrue();
         assertThat(strictDeptService.isLocal(other, LOCAL_DEPT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isLocalOrUnknown 三态：无档/空部门→null，本县→true，外县→false")
+    void isLocalOrUnknownDistinguishesUnknownFromOtherDistrict() {
+        when(departmentService.loadDeptTree()).thenReturn(Map.of(
+            LOCAL_DEPT, new DepartmentService.DeptNode(LOCAL_DEPT, "本县", 0L)));
+
+        Employee local = Employee.builder()
+            .userid("strictLocal").name("本县").department("[" + LOCAL_DEPT + "]").build();
+        Employee other = Employee.builder()
+            .userid("strictOther").name("外县").department("[" + OTHER_DEPT + "]").build();
+        Employee blank = Employee.builder()
+            .userid("strictBlank").name("空部门").department(" ").build();
+        Employee badJson = Employee.builder()
+            .userid("strictBad").name("坏部门").department("not-a-json").build();
+
+        assertThat(strictDeptService.isLocalOrUnknown(null, LOCAL_DEPT)).isNull();
+        assertThat(strictDeptService.isLocalOrUnknown(blank, LOCAL_DEPT)).isNull();
+        assertThat(strictDeptService.isLocalOrUnknown(badJson, LOCAL_DEPT)).isNull();
+        assertThat(strictDeptService.isLocalOrUnknown(local, LOCAL_DEPT)).isTrue();
+        assertThat(strictDeptService.isLocalOrUnknown(other, LOCAL_DEPT)).isFalse();
     }
 
     // ── helpers ──

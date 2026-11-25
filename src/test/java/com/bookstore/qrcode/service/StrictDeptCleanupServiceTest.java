@@ -467,6 +467,34 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
         assertThat(cleanupService.countDriftedActiveReceptionists()).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("countDrifted 部门树不可用 → 向上抛 DeptTreeUnavailableException（不误报全漂移）")
+    void countDrifted抛树不可用异常() {
+        whitelist(LOCAL_ROOT);
+        QrCode qr = newQr("DRIFT-TREE-DOWN", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        seedEmployee("extActive", "[" + OTHER_DEPT + "]");
+        bind(qr.getId(), "extActive", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        when(departmentService.loadDeptTree()).thenThrow(new RuntimeException("dept tree down"));
+
+        assertThatThrownBy(() -> cleanupService.countDriftedActiveReceptionists())
+            .isInstanceOf(DepartmentWhitelistService.DeptTreeUnavailableException.class);
+    }
+
+    @Test
+    @DisplayName("countDrifted 员工部门为空/不可解析 → 不计为漂移")
+    void countDrifted跳过无部门员工() {
+        whitelist(LOCAL_ROOT);
+        QrCode qr = newQr("DRIFT-NO-DEPT", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        seedEmployee("extActive", "[" + OTHER_DEPT + "]");
+        seedEmployee("blankDept", null);
+        seedEmployee("badJson", "not-a-json");
+        bind(qr.getId(), "extActive", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "blankDept", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "badJson", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+
+        assertThat(cleanupService.countDriftedActiveReceptionists()).isEqualTo(1);
+    }
+
     // ==================== helpers ====================
 
     private QrCode newQr(String schoolId, Long deptId, QrCode.QrCodeStatus status) {

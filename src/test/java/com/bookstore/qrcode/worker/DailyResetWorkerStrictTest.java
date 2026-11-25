@@ -98,8 +98,7 @@ class DailyResetWorkerStrictTest {
         when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
         when(qrCodeRepo.findById(QR_ID)).thenReturn(Optional.of(qr(LOCAL_DEPT)));
         when(employeeRepo.findByUserid("u-other")).thenReturn(Optional.of(emp));
-        when(strictDeptService.expandLocalDeptIds(LOCAL_DEPT)).thenReturn(Set.of(LOCAL_DEPT));
-        when(whitelist.isEmployeeAllowed(emp, Set.of(LOCAL_DEPT))).thenReturn(false);
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(false);
 
         worker.recoverFullAgents();
 
@@ -116,8 +115,7 @@ class DailyResetWorkerStrictTest {
         when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
         when(qrCodeRepo.findById(QR_ID)).thenReturn(Optional.of(qr(LOCAL_DEPT)));
         when(employeeRepo.findByUserid("u-local")).thenReturn(Optional.of(emp));
-        when(strictDeptService.expandLocalDeptIds(LOCAL_DEPT)).thenReturn(Set.of(LOCAL_DEPT));
-        when(whitelist.isEmployeeAllowed(emp, Set.of(LOCAL_DEPT))).thenReturn(true);
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(true);
         when(agentRepo.findById("u-local")).thenReturn(Optional.of(normalAgent("u-local")));
 
         worker.recoverFullAgents();
@@ -135,9 +133,28 @@ class DailyResetWorkerStrictTest {
         when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
         when(qrCodeRepo.findById(QR_ID)).thenReturn(Optional.of(qr(LOCAL_DEPT)));
         when(employeeRepo.findByUserid("u-any")).thenReturn(Optional.of(emp));
-        when(strictDeptService.expandLocalDeptIds(LOCAL_DEPT))
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT))
             .thenThrow(new DepartmentWhitelistService.DeptTreeUnavailableException("tree down"));
         when(agentRepo.findById("u-any")).thenReturn(Optional.of(normalAgent("u-any")));
+
+        worker.recoverFullAgents();
+
+        assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
+    }
+
+    @Test
+    @DisplayName("员工部门缺失/不可解析（三态 null）→ 视为无法判定，照常复活")
+    void failsOpenWhenEmployeeDepartmentUnknown() {
+        QrAgent qa = fullReceptionist("u-nodept");
+        Employee emp = Employee.builder().userid("u-nodept").name("u-nodept")
+            .department("[]").build();
+        stubCommon(List.of(qa));
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
+        when(qrCodeRepo.findById(QR_ID)).thenReturn(Optional.of(qr(LOCAL_DEPT)));
+        when(employeeRepo.findByUserid("u-nodept")).thenReturn(Optional.of(emp));
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(null);
+        when(agentRepo.findById("u-nodept")).thenReturn(Optional.of(normalAgent("u-nodept")));
 
         worker.recoverFullAgents();
 

@@ -612,7 +612,7 @@ public class AgentController {
      * 判定恢复该 removed/full 绑定是否违反严格同部门。
      *
      * <p>自动流程 fail-open：只在「树可用 + 员工有档 + 不在本县」时返回 true，
-     * 其余无法判定的情况一律放行并记 WARN。</p>
+     * 其余无法判定的情况（树故障、无档、部门缺失或不可解析）一律放行并记 WARN。</p>
      */
     private boolean isStrictDeptBlocked(QrAgent qa, QrCode qr) {
         if (qr == null || qr.getDepartmentId() == null) {
@@ -626,16 +626,21 @@ public class AgentController {
                 qa.getQrCodeId(), qa.getAgentUserid());
             return false;
         }
-        Set<Long> localIds;
+        Boolean local;
         try {
-            localIds = strictDeptService.expandLocalDeptIds(qr.getDepartmentId());
+            local = strictDeptService.isLocalOrUnknown(emp, qr.getDepartmentId());
         } catch (DepartmentWhitelistService.DeptTreeUnavailableException
                  | IllegalArgumentException e) {
             log.warn("严格同部门：本县部门展开失败，恢复时跳过严格守卫 qr={}, userid={}",
                 qa.getQrCodeId(), qa.getAgentUserid(), e);
             return false;
         }
-        return !whitelist.isEmployeeAllowed(emp, localIds);
+        if (local == null) {
+            log.warn("严格同部门：员工部门缺失或无法解析，恢复时跳过严格守卫 qr={}, userid={}",
+                qa.getQrCodeId(), qa.getAgentUserid());
+            return false;
+        }
+        return !local;
     }
 
     /** 重定向到指定 URL 或 agents 列表页 */

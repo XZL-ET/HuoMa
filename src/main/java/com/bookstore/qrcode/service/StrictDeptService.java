@@ -1,6 +1,7 @@
 package com.bookstore.qrcode.service;
 
 import com.bookstore.qrcode.entity.Employee;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,7 +25,9 @@ import java.util.Set;
  *       {@link DepartmentWhitelistService.DeptTreeUnavailableException}。
  *       清退 preview/apply 等破坏性编排据此整体中止，绝不拿「精确 ID」硬跑。</li>
  *   <li>{@link #isLocal(Employee, Long)}：内部捕获树不可用，降级为「精确 root ID 命中」
- *       并记 WARN。日常护栏（addAgent/每日重置/复活兜底）走此口径，即「只少放不多放」。</li>
+ *       并记 WARN。仅用于「放行类」判定（如手动加人的初筛）。</li>
+ *   <li>{@link #isLocalOrUnknown(Employee, Long)}：三态判定，不吞树不可用，
+ *       也不把「无部门/部门不可解析」当成外县。自动护栏（每日重置/复活/漂移统计）走此口径。</li>
  * </ul>
  *
  * @author Bookstore Dev
@@ -37,6 +40,7 @@ public class StrictDeptService {
 
     private final DepartmentService departmentService;
     private final DepartmentWhitelistService whitelistService;
+    private final ObjectMapper objectMapper;
 
     /**
      * 展开本县部门集合：root 本身 + 全部子孙部门。
@@ -109,5 +113,46 @@ public class StrictDeptService {
             localIds = Set.of(rootDeptId);
         }
         return whitelistService.isEmployeeAllowed(emp, localIds);
+    }
+
+    /**
+     * 严格护栏用三态判定：{@code true}=本县，{@code false}=确认外县，
+     * {@code null}=无法判定（员工无档 / 部门为空 / JSON 不可解析 / 部门数组为空）。
+     *
+     * <p>与 {@link #isLocal(Employee, Long)} 的区别：不吞部门树不可用（原样抛出），
+     * 也不把「无部门」当成外县——调用方可据此 fail-open，避免误撤无法判定归属的员工。</p>
+     *
+     * @param emp        员工记录，可为 null
+     * @param rootDeptId 县级根部门 ID
+     * @return 见方法说明
+     * @throws IllegalArgumentException root 为 null 或不在部门树
+     * @throws DepartmentWhitelistService.DeptTreeUnavailableException 部门树不可用
+     */
+    public Boolean isLocalOrUnknown(Employee emp, Long rootDeptId) {
+        Set<Long> localIds = expandLocalDeptIds(rootDeptId);
+        if (emp == null) {
+            return null;
+        }
+        String department = emp.getDepartment();
+        if (department == null || department.isBlank()) {
+            return null;
+        }
+        long[] deptIds;
+        try {
+            deptIds = objectMapper.readValue(department, long[].class);
+        } catch (Exception e) {
+            log.warn("严格同部门：员工部门 JSON 解析失败，视为无法判定 userid={}, department={}",
+                emp.getUserid(), department, e);
+            return null;
+        }
+        if (deptIds == null || deptIds.length == 0) {
+            return null;
+        }
+        for (long deptId : deptIds) {
+            if (localIds.contains(deptId)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

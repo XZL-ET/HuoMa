@@ -28,6 +28,9 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -172,8 +175,7 @@ class StrictDeptGuardsTest {
         when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
         when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
         when(employeeRepo.findByUserid("u-other")).thenReturn(Optional.of(emp));
-        when(strictDeptService.expandLocalDeptIds(LOCAL_DEPT)).thenReturn(Set.of(LOCAL_DEPT));
-        when(whitelist.isEmployeeAllowed(emp, Set.of(LOCAL_DEPT))).thenReturn(false);
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(false);
 
         RedirectAttributesModelMap redirect = new RedirectAttributesModelMap();
         agentController.restoreAgent("u-other", "pool", "", redirect);
@@ -198,12 +200,73 @@ class StrictDeptGuardsTest {
         when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
         when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
         when(employeeRepo.findByUserid("u-any")).thenReturn(Optional.of(emp));
-        when(strictDeptService.expandLocalDeptIds(LOCAL_DEPT))
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT))
             .thenThrow(new DepartmentWhitelistService.DeptTreeUnavailableException("tree down"));
 
         agentController.restoreAgent("u-any", "pool", "", new RedirectAttributesModelMap());
 
         assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
+    }
+
+    @Test
+    @DisplayName("严格开启 + 员工部门为空串 → 无法判定，照常复活（fail-open）")
+    void restoreFailsOpenWhenEmployeeDeptBlank() {
+        assertRestoreFailsOpenForUnknownDepartment("");
+    }
+
+    @Test
+    @DisplayName("严格开启 + 员工部门为 [] → 无法判定，照常复活（fail-open）")
+    void restoreFailsOpenWhenEmployeeDeptEmptyArray() {
+        assertRestoreFailsOpenForUnknownDepartment("[]");
+    }
+
+    @Test
+    @DisplayName("严格开启 + 豁免 userid → 复活且不调用严格判定")
+    void restoreSkipsStrictCheckForExemptUserid() {
+        QrCode qr = QrCode.builder().id(1L).schoolName("某学校").departmentId(LOCAL_DEPT).build();
+        QrAgent qa = QrAgent.builder().id(10L).qrCodeId(1L).agentUserid("u-exempt")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.removed).build();
+        Employee emp = emp("u-exempt", OTHER_DEPT);
+
+        when(agentRepo.findByIdForUpdate("u-exempt")).thenReturn(Optional.of(agent("u-exempt")));
+        when(qrAgentRepo.findByAgentUserid("u-exempt")).thenReturn(List.of(qa));
+        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr));
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of("u-exempt"));
+        when(whitelist.isActive()).thenReturn(false);
+        // 即使严格判定会返回 false，豁免员工也不得被调用/拦截
+        lenient().when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(false);
+
+        agentController.restoreAgent("u-exempt", "pool", "", new RedirectAttributesModelMap());
+
+        assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
+        verify(strictDeptService, never()).isLocalOrUnknown(any(), any());
+    }
+
+    private void assertRestoreFailsOpenForUnknownDepartment(String departmentJson) {
+        QrCode qr = QrCode.builder().id(1L).schoolName("某学校").departmentId(LOCAL_DEPT).build();
+        QrAgent qa = QrAgent.builder().id(10L).qrCodeId(1L).agentUserid("u-nodept")
+            .role(QrAgent.AgentRole.receptionist)
+            .status(QrAgent.AgentStatus.removed).build();
+        Employee emp = Employee.builder().userid("u-nodept").name("u-nodept")
+            .department(departmentJson).build();
+
+        when(agentRepo.findByIdForUpdate("u-nodept")).thenReturn(Optional.of(agent("u-nodept")));
+        when(qrAgentRepo.findByAgentUserid("u-nodept")).thenReturn(List.of(qa));
+        when(qrCodeRepo.findById(1L)).thenReturn(Optional.of(qr));
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptConfig.getExemptUserids()).thenReturn(Set.of());
+        when(employeeRepo.findByUserid("u-nodept")).thenReturn(Optional.of(emp));
+        when(strictDeptService.isLocalOrUnknown(emp, LOCAL_DEPT)).thenReturn(null);
+
+        RedirectAttributesModelMap redirect = new RedirectAttributesModelMap();
+        assertThatCode(() -> agentController.restoreAgent("u-nodept", "pool", "", redirect))
+            .doesNotThrowAnyException();
+
+        assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active);
+        assertThat(redirect.getFlashAttributes().get("message").toString())
+            .doesNotContain("按严格同部门跳过活码");
     }
 
     // ==================== helpers ====================

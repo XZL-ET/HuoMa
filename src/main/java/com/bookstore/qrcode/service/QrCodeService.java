@@ -816,7 +816,8 @@ public class QrCodeService {
             try {
                 local = strictDeptService.isLocal(emp, deptId);
             } catch (IllegalArgumentException e) {
-                throw new IllegalStateException("活码所属部门不在部门树中: " + deptId, e);
+                throw new IllegalStateException("活码所属部门不在部门树中: deptId=" + deptId
+                    + ", userid=" + agentUserid, e);
             }
             if (!local) {
                 throw new IllegalStateException("该员工不属于本码所在区县: " + agentUserid

@@ -446,6 +446,21 @@ class PatrolWorkerTest {
         verify(alertService, never()).resolveOpenByType("strict_dept_drift");
     }
 
+    @Test
+    @DisplayName("部门树不可用（DeptTreeUnavailableException）→ 告警状态保持不动")
+    void shouldLeaveAlertUntouchedWhenDeptTreeUnavailable() throws Exception {
+        when(strictDeptConfig.isStrictModeEnabled()).thenReturn(true);
+        when(strictDeptCleanupService.countDriftedActiveReceptionists())
+            .thenThrow(new DepartmentWhitelistService
+                .DeptTreeUnavailableException("dept tree down"));
+
+        invoke("patrolStrictDeptDrift");
+
+        verify(alertService, never()).createAlert(any(), any(), any(), any(), any(), any());
+        verify(alertService, never()).resolveOpenByType("strict_dept_drift");
+        verify(jobGuard, never()).firstWithin(eq("throttle:alert:strict_dept_drift"), any());
+    }
+
     private void invoke(String methodName) throws Exception {
         Method m = PatrolWorker.class.getDeclaredMethod(methodName);
         m.setAccessible(true);
