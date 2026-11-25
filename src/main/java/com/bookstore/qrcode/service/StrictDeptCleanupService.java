@@ -128,10 +128,13 @@ public class StrictDeptCleanupService {
         try {
             String op = (operator == null || operator.isBlank()) ? SYSTEM_OPERATOR : operator;
             Set<String> exemptUserids = strictDeptConfig.getExemptUserids();
-            List<String> failures = new ArrayList<>();
+            // 三类信息分开累计：提示（纯信息）、跳过（未处理）、真实失败（异常）
+            List<String> hints = new ArrayList<>();
+            List<String> skippedReasons = new ArrayList<>();
+            List<String> realFailures = new ArrayList<>();
 
             // 写库前先整体重算：树不可用时此处抛异常，尚未产生任何写入
-            ScanResult scan = scan(rootDeptFilter, exemptUserids, failures);
+            ScanResult scan = scan(rootDeptFilter, exemptUserids, hints);
 
             int codesProcessed = 0;
             int codesSkipped = 0;
@@ -144,7 +147,7 @@ public class StrictDeptCleanupService {
                 String qrLabel = label(work);
                 if (work.skipReason() != null) {
                     codesSkipped++;
-                    failures.add(qrLabel + "：" + work.skipReason());
+                    skippedReasons.add(qrLabel + "：" + work.skipReason());
                     continue;
                 }
 
@@ -155,7 +158,7 @@ public class StrictDeptCleanupService {
                     .setIfAbsent(rotateLockKey, rotateLockValue, ROTATE_LOCK_TTL);
                 if (!Boolean.TRUE.equals(rotateLocked)) {
                     codesSkipped++;
-                    failures.add(qrLabel + " 轮换进行中，未处理");
+                    skippedReasons.add(qrLabel + " 轮换进行中，未处理");
                     continue;
                 }
                 try {
@@ -172,7 +175,7 @@ public class StrictDeptCleanupService {
                                 work.qrCodeId(), disallowed, REMOVAL_REASON, true);
                         if (outcome.skipped()) {
                             codeSkipped = true;
-                            failures.add(qrLabel + "：" + outcome.skipReason());
+                            skippedReasons.add(qrLabel + "：" + outcome.skipReason());
                         } else {
                             codeProcessed = true;
                             activeRemoved += outcome.removed();
@@ -199,7 +202,7 @@ public class StrictDeptCleanupService {
                         } catch (RuntimeException e) {
                             log.warn("严格同部门清退：活码 {} 撤 full 接待员失败",
                                 work.qrCodeId(), e);
-                            failures.add(qrLabel + " full 接待员撤下失败：" + e.getMessage());
+                            realFailures.add(qrLabel + " full 接待员撤下失败：" + e.getMessage());
                         }
                     }
 
@@ -212,8 +215,8 @@ public class StrictDeptCleanupService {
                         changedQrIds.add(work.qrCodeId());
                     }
                 } catch (RuntimeException e) {
-                    codesSkipped++;
-                    failures.add(qrLabel + " 处理失败：" + e.getMessage());
+                    // 处理异常属真实失败，不计入跳过码
+                    realFailures.add(qrLabel + " 处理失败：" + e.getMessage());
                     log.warn("严格同部门清退：活码 {} 处理失败", work.qrCodeId(), e);
                 } finally {
                     releaseLock(rotateLockKey, rotateLockValue);
@@ -225,17 +228,24 @@ public class StrictDeptCleanupService {
                     agentRotationService.syncQrCodeToWechatAsync(qrCodeId);
                 } catch (RuntimeException e) {
                     log.warn("严格同部门清退：触发活码 {} 企微同步失败", qrCodeId, e);
-                    failures.add("活码#" + qrCodeId + " 企微同步失败：" + e.getMessage());
+                    realFailures.add("活码#" + qrCodeId + " 企微同步失败：" + e.getMessage());
                 }
             }
 
-            String description = String.format(
-                "严格同部门清退：处理活码 %d 个，跳过 %d 个，撤 active %d 人、full %d 人，"
-                    + "补位 %d 人，失败 %d 条",
-                codesProcessed, codesSkipped, activeRemoved, fullRemoved,
-                backfilled, failures.size());
-            operationLogService.log(op, "strict_dept_cleanup", "qr_code", "-", description);
+            StringBuilder description = new StringBuilder(String.format(
+                "严格同部门清退：处理 %d 码，跳过 %d 码，失败 %d 条，"
+                    + "撤 active %d 人、full %d 人，补位 %d 人",
+                codesProcessed, codesSkipped, realFailures.size(),
+                activeRemoved, fullRemoved, backfilled));
+            if (!hints.isEmpty()) {
+                description.append("，提示 ").append(hints.size()).append(" 条");
+            }
+            operationLogService.log(op, "strict_dept_cleanup", "qr_code", "-",
+                description.toString());
 
+            // 结果 DTO 保留「未处理清单」语义：跳过原因在前，真实失败在后
+            List<String> failures = new ArrayList<>(skippedReasons);
+            failures.addAll(realFailures);
             return new StrictDeptCleanupResult(codesProcessed, codesSkipped,
                 activeRemoved, fullRemoved, backfilled, failures);
         } finally {
@@ -320,11 +330,11 @@ public class StrictDeptCleanupService {
     /**
      * 按当前库状态扫描 active + full 绑定，生成逐码计划。
      *
-     * @param notes 追加提示（员工档案缺失、白名单未启用、跳过原因等）
+     * @param hints 追加纯提示（员工档案缺失、白名单未启用）；跳过原因由调用方按需另行采集
      * @throws DepartmentWhitelistService.DeptTreeUnavailableException 部门树不可用
      */
     private ScanResult scan(Set<Long> rootDeptFilter, Set<String> exemptUserids,
-                            List<String> notes) {
+                            List<String> hints) {
         Map<Long, List<QrAgent>> bindingsByQr = new TreeMap<>();
         addBindings(bindingsByQr, qrAgentRepo.findByStatus(QrAgent.AgentStatus.active));
         addBindings(bindingsByQr, qrAgentRepo.findByStatus(QrAgent.AgentStatus.full));
@@ -337,7 +347,7 @@ public class StrictDeptCleanupService {
         Set<Long> whitelistIds = loadWhitelistRootIds();
         boolean whitelistEnabled = !whitelistIds.isEmpty();
         if (!whitelistEnabled) {
-            notes.add("全局员工部门白名单未启用，将不按白名单过滤活码部门");
+            hints.add("全局员工部门白名单未启用，将不按白名单过滤活码部门");
         }
 
         List<GlobalAgentPool> poolRows = poolRepo.findAll();
@@ -408,7 +418,7 @@ public class StrictDeptCleanupService {
                 }
                 Employee employee = employees.get(userid);
                 if (employee == null) {
-                    notes.add("活码 " + qrCodeId + " 上接待员 " + userid
+                    hints.add("活码 " + qrCodeId + " 上接待员 " + userid
                         + " 缺少员工记录，保留不撤");
                     continue;
                 }

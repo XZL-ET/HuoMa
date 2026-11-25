@@ -23,6 +23,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
@@ -35,7 +36,11 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -72,6 +77,7 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
     @MockBean private DepartmentService departmentService;
     @MockBean private GlobalAgentPoolService globalAgentPoolService;
     @MockBean private AgentRotationService agentRotationService;
+    @MockBean private OperationLogService operationLogService;
 
     @BeforeEach
     void setUp() {
@@ -321,8 +327,8 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
                 assertThat(log.getReason()).isEqualTo("严格同部门移出");
             });
         verify(agentRotationService).syncQrCodeToWechatAsync(qr.getId());
-        assertThat(operationLogRepo.findAll()).anySatisfy(log ->
-            assertThat(log.getAction()).isEqualTo("strict_dept_cleanup"));
+        verify(operationLogService).log(eq("tester"), eq("strict_dept_cleanup"),
+            eq("qr_code"), eq("-"), anyString());
     }
 
     @Test
@@ -376,6 +382,50 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
             .hasValueSatisfying(qa -> assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.removed));
         assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(otherRootQr.getId(), "extB"))
             .hasValueSatisfying(qa -> assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active));
+    }
+
+    @Test
+    @DisplayName("apply 审计区分跳过与真实失败：失败只计真实失败，跳过/提示单独计数")
+    void apply审计区分跳过与真实失败() {
+        whitelist(LOCAL_ROOT);
+
+        // 1) 跳过码：departmentId 为空 → 计一条「跳过」
+        QrCode skippedQr = newQr("AUDIT-SKIP", null, QrCode.QrCodeStatus.active);
+        seedEmployee("skipExt", "[" + OTHER_DEPT + "]");
+        bind(skippedQr.getId(), "skipExt", QrAgent.AgentRole.receptionist,
+            QrAgent.AgentStatus.active);
+
+        // 2) 提示：有接待员但无员工档案 → 计一条「提示」，不是失败
+        QrCode ghostQr = newQr("AUDIT-GHOST", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        agentRepo.save(Agent.builder().userid("ghost").name("ghost").build());
+        bind(ghostQr.getId(), "ghost", QrAgent.AgentRole.receptionist,
+            QrAgent.AgentStatus.active);
+
+        // 3) 真实失败：撤人成功但企微同步抛异常 → 计一条「失败」
+        QrCode okQr = newQr("AUDIT-OK", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        seedEmployee("svcLocal", "[" + LOCAL_ROOT + "]");
+        seedEmployee("ext", "[" + OTHER_DEPT + "]");
+        bind(okQr.getId(), "svcLocal", QrAgent.AgentRole.service, QrAgent.AgentStatus.active);
+        bind(okQr.getId(), "ext", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        doThrow(new RuntimeException("wecom down"))
+            .when(agentRotationService).syncQrCodeToWechatAsync(anyLong());
+
+        StrictDeptCleanupResult result = cleanupService.apply(null, "tester");
+
+        ArgumentCaptor<String> description = ArgumentCaptor.forClass(String.class);
+        verify(operationLogService).log(eq("tester"), eq("strict_dept_cleanup"),
+            eq("qr_code"), eq("-"), description.capture());
+        assertThat(description.getValue())
+            .contains("处理 1 码")
+            .contains("跳过 1 码")
+            .contains("失败 1 条")
+            .contains("提示 1 条");
+
+        // 跳过原因与真实失败各一条，不重复计入
+        assertThat(result.failures()).hasSize(2);
+        assertThat(result.failures()).anyMatch(f -> f.contains("未设置所属部门"))
+            .anyMatch(f -> f.contains("企微同步失败"));
+        assertThat(result.failures()).noneMatch(f -> f.contains("缺少员工记录"));
     }
 
     @Test
