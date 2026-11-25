@@ -524,19 +524,6 @@ public class GlobalAgentPoolService {
     }
 
     /**
-     * 解析指定员工的主部门 ID（取 {@link Employee#department} JSON 数组第一个元素）。
-     * <p>用于「同部门优先补员」等场景：补员时优先从被补员工所在部门取人。
-     * 员工无通讯录记录或部门为空时返回 {@code null}。</p>
-     *
-     * @param userid 企微员工 userid
-     * @return 主部门 ID，未知时返回 {@code null}
-     */
-    public Long resolvePrimaryDepartmentId(String userid) {
-        Employee emp = employeeRepo.findByUserid(userid).orElse(null);
-        return emp != null ? extractPrimaryDeptId(emp.getDepartment()) : null;
-    }
-
-    /**
      * 从 Employee.department JSON 数组中提取主部门 ID（取第一个元素）。
      */
     private Long extractPrimaryDeptId(String departmentJson) {

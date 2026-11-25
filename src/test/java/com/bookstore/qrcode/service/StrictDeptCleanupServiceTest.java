@@ -19,6 +19,7 @@ import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.repository.QrAgentRepository;
 import com.bookstore.qrcode.repository.QrCodeRepository;
 import com.bookstore.qrcode.repository.QrRotateLogRepository;
+import com.bookstore.qrcode.repository.SystemConfigRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -73,6 +74,7 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
     @Autowired private GlobalAgentPoolRepository poolRepo;
     @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
     @Autowired private OperationLogRepository operationLogRepo;
+    @Autowired private SystemConfigRepository systemConfigRepo;
 
     @MockBean private DepartmentService departmentService;
     @MockBean private GlobalAgentPoolService globalAgentPoolService;
@@ -81,7 +83,8 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        // R8：每个用例显式设置严格开关与豁免名单，不依赖默认值
+        // R8：先清掉可能残留的 system_config，再显式写入本用例需要的值
+        deleteStrictConfig();
         strictDeptConfig.setStrictModeEnabled(true);
         strictDeptConfig.setExemptUserids(List.of());
 
@@ -103,8 +106,15 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        strictDeptConfig.setStrictModeEnabled(false);
-        strictDeptConfig.setExemptUserids(List.of());
+        // 删除键而非回写：缺省豁免名单（5 人）与 "[]" 语义不同，回写会污染其它用例
+        deleteStrictConfig();
+    }
+
+    private void deleteStrictConfig() {
+        systemConfigRepo.findByConfigKey(StrictDeptConfigService.STRICT_MODE_KEY)
+            .ifPresent(systemConfigRepo::delete);
+        systemConfigRepo.findByConfigKey(StrictDeptConfigService.EXEMPT_USERIDS_KEY)
+            .ifPresent(systemConfigRepo::delete);
     }
 
     // ==================== preview ====================
@@ -260,6 +270,38 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
     }
 
     @Test
+    @DisplayName("preview 员工部门缺失/不可解析时保留并记 warning（不当作外县）")
+    void preview员工部门不可判定时保留() {
+        whitelist(LOCAL_ROOT);
+        QrCode qr = newQr("PREVIEW-UNKNOWN-DEPT", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        seedEmployee("ext", "[" + OTHER_DEPT + "]");
+        seedEmployee("blankDept", "");
+        seedEmployee("nullDept", null);
+        seedEmployee("badJson", "not-json");
+        seedEmployee("emptyArr", "[]");
+        bind(qr.getId(), "ext", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "blankDept", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "nullDept", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "badJson", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "emptyArr", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+
+        StrictDeptCleanupPreview preview = cleanupService.preview(null);
+
+        StrictDeptCleanupPreview.QrPlan plan = planFor(preview, qr.getId());
+        assertThat(plan).isNotNull();
+        assertThat(plan.members()).extracting(StrictDeptCleanupPreview.Member::userid)
+            .containsExactly("ext");
+        assertThat(preview.receptionistCount()).isEqualTo(1);
+        assertThat(preview.warnings())
+            .filteredOn(w -> w.contains("部门缺失或无法解析，保留不撤"))
+            .anyMatch(w -> w.contains("blankDept"))
+            .anyMatch(w -> w.contains("nullDept"))
+            .anyMatch(w -> w.contains("badJson"))
+            .anyMatch(w -> w.contains("emptyArr"))
+            .allMatch(w -> w.contains("活码 " + qr.getId() + " 上接待员"));
+    }
+
+    @Test
     @DisplayName("preview 根部门不在部门树时跳过并记 warning")
     void preview根部门不在部门树时跳过并记warning() {
         whitelist(999L);
@@ -329,6 +371,47 @@ class StrictDeptCleanupServiceTest extends BaseIntegrationTest {
         verify(agentRotationService).syncQrCodeToWechatAsync(qr.getId());
         verify(operationLogService).log(eq("tester"), eq("strict_dept_cleanup"),
             eq("qr_code"), eq("-"), anyString());
+    }
+
+    @Test
+    @DisplayName("apply 员工部门缺失/不可解析时不撤绑定、不写轮换日志")
+    void apply员工部门不可判定时保留() {
+        whitelist(LOCAL_ROOT);
+        QrCode blankQr = newQr("APPLY-BLANK-DEPT", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        // 本县接待员保证撤人后仍 >= 1 人，避免「补位失败整体跳过」掩盖旧行为
+        seedEmployee("localTea", "[" + LOCAL_ROOT + "]");
+        seedEmployee("blankDept", "");
+        bind(blankQr.getId(), "localTea", QrAgent.AgentRole.receptionist,
+            QrAgent.AgentStatus.active);
+        bind(blankQr.getId(), "blankDept", QrAgent.AgentRole.receptionist,
+            QrAgent.AgentStatus.active);
+
+        StrictDeptCleanupResult result = cleanupService.apply(null, "tester");
+
+        assertThat(result.activeRemoved()).isZero();
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(blankQr.getId(), "blankDept"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active));
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(blankQr.getId(), "localTea"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active));
+        assertThat(rotateLogRepo.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("apply 员工部门为坏 JSON 时同样保留不撤")
+    void apply坏部门JSON时保留() {
+        whitelist(LOCAL_ROOT);
+        QrCode qr = newQr("APPLY-BAD-JSON", LOCAL_ROOT, QrCode.QrCodeStatus.active);
+        seedEmployee("localTea", "[" + LOCAL_ROOT + "]");
+        seedEmployee("badJson", "not-json");
+        bind(qr.getId(), "localTea", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+        bind(qr.getId(), "badJson", QrAgent.AgentRole.receptionist, QrAgent.AgentStatus.active);
+
+        StrictDeptCleanupResult result = cleanupService.apply(null, "tester");
+
+        assertThat(result.activeRemoved()).isZero();
+        assertThat(qrAgentRepo.findByQrCodeIdAndAgentUserid(qr.getId(), "badJson"))
+            .hasValueSatisfying(qa -> assertThat(qa.getStatus()).isEqualTo(QrAgent.AgentStatus.active));
+        assertThat(rotateLogRepo.findAll()).isEmpty();
     }
 
     @Test

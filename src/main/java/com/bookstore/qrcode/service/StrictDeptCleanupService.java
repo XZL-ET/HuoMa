@@ -430,6 +430,13 @@ public class StrictDeptCleanupService {
                         + " 缺少员工记录，保留不撤");
                     continue;
                 }
+                // 与 R6 对齐：部门无法判定（空白/坏 JSON/空数组）时 fail-open 保留，
+                // 只有「部门集合非空且与本县无交集」才算确认外县
+                if (!hasKnownDepartments(employee)) {
+                    hints.add("活码 " + qrCodeId + " 上接待员 " + userid
+                        + " 部门缺失或无法解析，保留不撤");
+                    continue;
+                }
                 if (whitelist.isEmployeeAllowed(employee, localDeptIds)) {
                     continue;
                 }
@@ -564,6 +571,28 @@ public class StrictDeptCleanupService {
             return fallbackUserid;
         }
         return employee.getName();
+    }
+
+    /**
+     * 员工部门是否可判定：部门字段非空、可解析为非空 long 数组时为 true。
+     *
+     * <p>返回 false 表示无法判断员工属于哪个县，调用方应保留该员工（fail-open），
+     * 不能把「没数据」当成「外县」。</p>
+     */
+    private boolean hasKnownDepartments(Employee emp) {
+        if (emp == null) {
+            return false;
+        }
+        String department = emp.getDepartment();
+        if (department == null || department.isBlank()) {
+            return false;
+        }
+        try {
+            long[] deptIds = objectMapper.readValue(department, long[].class);
+            return deptIds != null && deptIds.length > 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** 取员工部门 JSON 数组的首个部门 ID，用于展示；解析失败返回 null。 */

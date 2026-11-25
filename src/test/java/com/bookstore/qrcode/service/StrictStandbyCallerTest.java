@@ -134,7 +134,6 @@ class StrictStandbyCallerTest {
         when(qrAgentRepo.findByQrCodeId(1L)).thenReturn(List.of(serviceTeacher));
 
         // 旧实现会优先用服务老师本人部门 54
-        lenient().when(poolService.resolvePrimaryDepartmentId("svc-teacher")).thenReturn(54L);
         lenient().when(poolService.takeStandby(anySet(), eq(54L))).thenReturn(null);
         lenient().when(poolService.takeStandby(anySet(), eq(66L))).thenReturn(null);
 
@@ -145,7 +144,6 @@ class StrictStandbyCallerTest {
         rotationService.checkAndRotate(1L, "svc-teacher", 150);
 
         verify(poolService).takeStandby(anySet(), eq(66L));
-        verify(poolService, never()).resolvePrimaryDepartmentId(anyString());
         verify(poolService, never()).takeStandby(anySet(), eq(54L));
     }
 }

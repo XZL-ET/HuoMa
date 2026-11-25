@@ -7,6 +7,7 @@ import com.bookstore.qrcode.repository.AgentRepository;
 import com.bookstore.qrcode.repository.EmployeeRepository;
 import com.bookstore.qrcode.repository.GlobalAgentPoolRepository;
 import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
+import com.bookstore.qrcode.repository.SystemConfigRepository;
 import com.bookstore.qrcode.wecom.WecomApiClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,6 +60,7 @@ class GlobalAgentPoolServiceStrictTest {
     @Autowired private EmployeeRepository employeeRepo;
     @Autowired private AgentRepository agentRepo;
     @Autowired private PoolAllowedDepartmentRepository whitelistRepo;
+    @Autowired private SystemConfigRepository systemConfigRepo;
     @Autowired private ObjectMapper objectMapper;
 
     @MockBean private WecomApiClient wecomApi;
@@ -66,8 +68,9 @@ class GlobalAgentPoolServiceStrictTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // R8：每个用例显式设置开关，不依赖默认值
-        strictDeptConfig.setStrictModeEnabled(false);
+        // R8：删除键而非回写，避免把「严格开关=false / 空豁免」的中间态泄漏给其它用例；
+        // 需要严格模式的用例在测试体内显式 setStrictModeEnabled(true)
+        deleteStrictConfig();
         // 白名单必须为空，否则真实白名单会先于「本县」判定把候选过滤掉
         whitelistRepo.deleteAll();
         cleanTestRows();
@@ -78,8 +81,15 @@ class GlobalAgentPoolServiceStrictTest {
 
     @AfterEach
     void tearDown() {
-        strictDeptConfig.setStrictModeEnabled(false);
+        deleteStrictConfig();
         cleanTestRows();
+    }
+
+    private void deleteStrictConfig() {
+        systemConfigRepo.findByConfigKey(StrictDeptConfigService.STRICT_MODE_KEY)
+            .ifPresent(systemConfigRepo::delete);
+        systemConfigRepo.findByConfigKey(StrictDeptConfigService.EXEMPT_USERIDS_KEY)
+            .ifPresent(systemConfigRepo::delete);
     }
 
     @Test

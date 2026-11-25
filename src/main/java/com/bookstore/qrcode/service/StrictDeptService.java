@@ -19,13 +19,13 @@ import java.util.Set;
  * <p>本县 = 活码的县级根部门（{@code rootDeptId}）及其全部子孙部门。
  * 取人、补位、清退编排等场景统一通过本服务判断员工是否属于同一县。</p>
  *
- * <h3>两个方法的失败语义不同（下游务必区分）</h3>
+ * <h3>三个方法的失败语义不同（下游务必区分）</h3>
  * <ul>
  *   <li>{@link #expandLocalDeptIds(Long)}：部门树拉取失败直接抛
  *       {@link DepartmentWhitelistService.DeptTreeUnavailableException}。
  *       清退 preview/apply 等破坏性编排据此整体中止，绝不拿「精确 ID」硬跑。</li>
- *   <li>{@link #isLocal(Employee, Long)}：内部捕获树不可用，降级为「精确 root ID 命中」
- *       并记 WARN。仅用于「放行类」判定（如手动加人的初筛）。</li>
+ *   <li>{@link #isLocal(Employee, Long)}：内部捕获树不可用并降级为精确 root 命中 + WARN；
+ *       addAgent 等 fail-closed 场景用它，宁拒绝不误放。</li>
  *   <li>{@link #isLocalOrUnknown(Employee, Long)}：三态判定，不吞树不可用，
  *       也不把「无部门/部门不可解析」当成外县。自动护栏（每日重置/复活/漂移统计）走此口径。</li>
  * </ul>
