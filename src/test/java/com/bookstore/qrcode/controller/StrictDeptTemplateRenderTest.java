@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.config.LoginSuccessHandler;
 import com.bookstore.qrcode.config.SecurityConfig;
+import com.bookstore.qrcode.entity.PoolAllowedDepartment;
 import com.bookstore.qrcode.repository.*;
 import com.bookstore.qrcode.service.*;
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
@@ -63,7 +65,22 @@ class StrictDeptTemplateRenderTest {
             .andExpect(status().isOk())
             .andExpect(content().string(containsString("严格同部门")))
             .andExpect(content().string(containsString("预览")))
-            .andExpect(content().string(containsString("确认执行清退")));
+            .andExpect(content().string(containsString("确认执行清退")))
+            .andExpect(content().string(containsString("未配置区县白名单")));
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("配置区县白名单时渲染可选区县与勾选框")
+    void rendersCountyOptions() throws Exception {
+        when(cleanupService.countDriftedActiveReceptionists()).thenReturn(0L);
+        when(whitelistRepo.findAllByOrderByDeptIdAsc()).thenReturn(List.of(
+            PoolAllowedDepartment.builder().deptId(100L).deptName("测试县").build()));
+
+        mockMvc.perform(get("/strict-dept"))
+            .andExpect(status().isOk())
+            .andExpect(content().string(containsString("测试县")))
+            .andExpect(content().string(containsString("name=\"deptIds\"")));
     }
 
     @Test

@@ -32,6 +32,14 @@
         <button type="button" class="btn-close btn-sm" data-bs-dismiss="alert"></button>
     </div>
 
+    <!-- 操作顺序 -->
+    <div class="alert alert-info py-2 small">
+        <strong>操作顺序：</strong>
+        ① 勾选区县（不勾选表示全部活码）后预览影响 → ② 建议先单县执行灰度 →
+        ③ 再全量执行 → ④ 最后开启严格同部门开关。
+        先清退后开开关：开关一旦打开，新增绑定会立即按严格同部门拦截。
+    </div>
+
     <!-- 概览：开关、漂移统计、豁免名单 -->
     <div class="row g-3 mb-3">
         <div class="col-lg-5">
@@ -82,87 +90,70 @@
         </div>
     </div>
 
-    <!-- 预览 -->
-    <div class="card p-3 mb-3">
-        <h5 class="mb-2">只读预览</h5>
+    <!-- 影响面预览与执行：同一份区县过滤条件同时作用于预览和 apply -->
+    <form id="applyForm" class="card p-3 mb-3" th:action="@{/strict-dept/apply}" method="post"
+          onsubmit="return confirmApply()">
+        <h5 class="mb-2">影响面预览与执行</h5>
         <p class="text-muted small mb-2">
-            预览为实时快照，仅展示将受影响的跨县接待员，不会写入任何数据；最终以 apply 时判定为准。
+            预览为实时快照，仅展示将受影响的跨县接待员，不会写入任何数据。
+            执行会立即从活码上撤下非本县接待员，必要时从本县池补位，并按执行时的库状态重新计算。
         </p>
-        <div class="row g-2 align-items-end">
-            <div class="col-md-6">
-                <label for="previewDeptFilter" class="form-label small mb-1">
-                    区县根部门过滤（可选，留空表示全部活码；多个 deptId 用逗号分隔）
-                </label>
-                <input type="text" id="previewDeptFilter" class="form-control form-control-sm"
-                       placeholder="例如：100,200">
+
+        <label class="form-label small mb-1">区县过滤（可选，不勾选表示全部活码）</label>
+        <div th:if="${countyOptions != null && !countyOptions.isEmpty()}"
+             class="border rounded p-2 mb-2" style="max-height: 220px; overflow-y: auto;">
+            <div th:each="d : ${countyOptions}" class="form-check">
+                <input class="form-check-input" type="checkbox" name="deptIds"
+                       th:id="'county-' + ${d.deptId}" th:value="${d.deptId}">
+                <label class="form-check-label" th:for="'county-' + ${d.deptId}"
+                       th:text="${d.deptName} + ' (#' + ${d.deptId} + ')'"></label>
             </div>
-            <div class="col-md-6">
-                <button type="button" id="previewBtn" class="btn btn-outline-primary btn-sm">
-                    预览影响
-                </button>
-            </div>
+        </div>
+        <div th:if="${countyOptions == null || countyOptions.isEmpty()}"
+             class="alert alert-secondary py-2 small mb-2">
+            未配置区县白名单，无法按县过滤，将按全部活码处理。
+        </div>
+
+        <div class="d-flex gap-2 align-items-center">
+            <button type="button" id="previewBtn" class="btn btn-outline-primary btn-sm">预览影响</button>
+            <button type="submit" class="btn btn-danger btn-sm">确认执行清退</button>
         </div>
 
         <!-- 预览结果 -->
         <div id="previewResult" class="mt-3" style="display:none;">
             <div class="alert alert-info py-2 mb-3">
-                预览为实时快照，以 apply 时判定为准。
+                预览为实时快照，以执行时判定为准。
             </div>
             <div id="previewDetails"></div>
         </div>
-    </div>
-
-    <!-- 确认执行 -->
-    <div class="card p-3 mb-3">
-        <h5 class="mb-2">确认执行清退</h5>
-        <p class="text-muted small mb-2">
-            执行会立即从活码上撤下非本县接待员，必要时从本县池补位。
-            处理与跳过数量来自本次实际执行结果；「未处理清单」独立列示，不用作统计推导。
-        </p>
-        <form id="applyForm" th:action="@{/strict-dept/apply}" method="post"
-              onsubmit="return confirmApply()">
-            <div class="row g-2 align-items-end">
-                <div class="col-md-6">
-                    <label for="applyDeptFilter" class="form-label small mb-1">
-                        区县根部门过滤（可选，留空表示全部活码；多个 deptId 用逗号分隔）
-                    </label>
-                    <input type="text" id="applyDeptFilter" name="deptIds"
-                           class="form-control form-control-sm" placeholder="例如：100,200">
-                </div>
-                <div class="col-md-6">
-                    <button type="submit" class="btn btn-danger btn-sm">确认执行清退</button>
-                </div>
-            </div>
-        </form>
-    </div>
+    </form>
 
     <script th:inline="javascript">
         (function () {
             var previewBtn = document.getElementById('previewBtn');
-            var previewInput = document.getElementById('previewDeptFilter');
             var applyForm = document.getElementById('applyForm');
-            var applyInput = document.getElementById('applyDeptFilter');
             var resultBox = document.getElementById('previewResult');
             var details = document.getElementById('previewDetails');
             var previewUrl = /*[[@{/strict-dept/preview}]]*/ '/strict-dept/preview';
             var csrfToken = document.querySelector('meta[name="_csrf"]');
             var csrfHeader = document.querySelector('meta[name="_csrf_header"]');
 
-            // 执行前把预览过滤条件带入 apply 表单，避免两处填写不一致
+            // 预览与执行共用同一份勾选，避免两处过滤条件不一致
+            function selectedDeptIds() {
+                if (!applyForm) return [];
+                return Array.prototype.map.call(
+                    applyForm.querySelectorAll('input[name="deptIds"]:checked'),
+                    function (el) { return el.value; });
+            }
+
             window.confirmApply = function () {
-                if (applyInput && !applyInput.value) {
-                    applyInput.value = previewInput ? previewInput.value : '';
-                }
-                return confirm('确认执行严格同部门清退？该操作会立即从活码撤下跨县接待员。');
+                var ids = selectedDeptIds();
+                var scope = ids.length === 0 ? '全部活码' : ids.length + ' 个区县';
+                return confirm('确认对「' + scope + '」执行严格同部门清退？'
+                    + '该操作会立即从活码撤下跨县接待员。');
             };
 
-            if (!previewBtn || !previewInput || !resultBox || !details) return;
-
-            function parseDeptIds(raw) {
-                if (!raw) return [];
-                return raw.split(',').map(function (s) { return s.trim(); })
-                    .filter(function (s) { return s.length > 0; });
-            }
+            if (!previewBtn || !applyForm || !resultBox || !details) return;
 
             function esc(value) {
                 if (value === null || value === undefined) return '';
@@ -227,12 +218,20 @@
                 var warnings = data.warnings || [];
                 var parts = [];
 
+                var skippedCount = codes.filter(function (c) { return c.skipReason; }).length;
+                var noPoolCount = codes.filter(function (c) {
+                    return !c.skipReason && c.needsBackfill && !c.localStandbyAvailable;
+                }).length;
+
                 parts.push('<div class="mb-3">严格开关：'
                     + (data.strictModeEnabled
                         ? '<span class="badge bg-success">已开启</span>'
                         : '<span class="badge bg-secondary">已关闭</span>')
                     + '；可处理活码 <strong>' + esc(data.codeCount) + '</strong> 个；'
-                    + '待撤接待员 <strong>' + esc(data.receptionistCount) + '</strong> 人。</div>');
+                    + '待撤接待员 <strong>' + esc(data.receptionistCount) + '</strong> 人；'
+                    + '将被跳过 <strong>' + skippedCount + '</strong> 个；'
+                    + '需补位且本县池无人 <strong class="'
+                    + (noPoolCount > 0 ? 'text-danger' : '') + '">' + noPoolCount + '</strong> 个。</div>');
 
                 parts.push('<h6>按区县影响面（' + districts.length + '）</h6>');
                 if (districts.length === 0) {
@@ -260,7 +259,7 @@
             }
 
             previewBtn.addEventListener('click', function () {
-                var ids = parseDeptIds(previewInput.value);
+                var ids = selectedDeptIds();
                 resultBox.style.display = 'block';
 
                 var body = new URLSearchParams();

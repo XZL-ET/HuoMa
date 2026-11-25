@@ -2,6 +2,7 @@ package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.StrictDeptCleanupPreview;
 import com.bookstore.qrcode.dto.StrictDeptCleanupResult;
+import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.StrictDeptCleanupService;
 import com.bookstore.qrcode.service.StrictDeptConfigService;
@@ -33,10 +34,13 @@ class StrictDeptControllerTest {
     private MockMvc mockMvc;
     private final StrictDeptCleanupService cleanupService = mock(StrictDeptCleanupService.class);
     private final StrictDeptConfigService configService = mock(StrictDeptConfigService.class);
+    private final PoolAllowedDepartmentRepository whitelistRepo =
+        mock(PoolAllowedDepartmentRepository.class);
 
     @BeforeEach
     void setUp() {
-        StrictDeptController controller = new StrictDeptController(cleanupService, configService);
+        StrictDeptController controller =
+            new StrictDeptController(cleanupService, configService, whitelistRepo);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

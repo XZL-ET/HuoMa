@@ -1,6 +1,8 @@
 package com.bookstore.qrcode.controller;
 
 import com.bookstore.qrcode.dto.StrictDeptCleanupResult;
+import com.bookstore.qrcode.entity.PoolAllowedDepartment;
+import com.bookstore.qrcode.repository.PoolAllowedDepartmentRepository;
 import com.bookstore.qrcode.service.DepartmentWhitelistService;
 import com.bookstore.qrcode.service.StrictDeptCleanupService;
 import com.bookstore.qrcode.service.StrictDeptConfigService;
@@ -39,11 +41,12 @@ public class StrictDeptController {
 
     private final StrictDeptCleanupService cleanupService;
     private final StrictDeptConfigService strictDeptConfigService;
+    private final PoolAllowedDepartmentRepository whitelistRepo;
 
     /**
      * GET {@code /strict-dept} — 清退页。
      *
-     * <p>展示开关、豁免名单与漂移统计。漂移统计失败时降级为 0 并在页面提示，
+     * <p>展示开关、豁免名单、漂移统计与区县过滤选项。漂移统计或区县白名单读取失败时降级，
      * 页面本身仍可访问。</p>
      */
     @GetMapping
@@ -52,6 +55,15 @@ public class StrictDeptController {
         model.addAttribute("view", "strict-dept");
         model.addAttribute("strictModeEnabled", strictDeptConfigService.isStrictModeEnabled());
         model.addAttribute("exemptUserids", strictDeptConfigService.getExemptUserids());
+
+        List<PoolAllowedDepartment> countyOptions;
+        try {
+            countyOptions = whitelistRepo.findAllByOrderByDeptIdAsc();
+        } catch (RuntimeException e) {
+            log.warn("清退页：区县白名单读取失败", e);
+            countyOptions = List.of();
+        }
+        model.addAttribute("countyOptions", countyOptions);
 
         long drifted = 0L;
         try {
