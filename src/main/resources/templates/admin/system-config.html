@@ -246,7 +246,11 @@
                 </thead>
                 <tbody>
                     <tr th:each="c : ${advancedConfigs}">
-                        <td><code th:text="${c.configKey}"></code></td>
+                        <td>
+                            <code th:text="${c.configName} ?: ${c.configKey}"></code>
+                            <div class="text-muted small" th:if="${c.configName != null}"
+                                 th:text="${c.configKey}"></div>
+                        </td>
                         <td>
                             <form th:action="@{/admin/system-config/save}" method="post"
                                   class="d-flex align-items-center gap-2">

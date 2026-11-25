@@ -121,6 +121,28 @@ class AdminSystemConfigControllerWebTest {
             .andExpect(content().string(not(containsString("receptionist_daily_max_default"))));
     }
 
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    @DisplayName("GET 高级配置区展示配置名称，缺名称时回退为键")
+    void advancedConfigsShowName() throws Exception {
+        SystemConfig named = SystemConfig.builder()
+                .configKey("transfer_greeting_enabled_default")
+                .configName("转接欢迎语默认开关")
+                .configValue("true")
+                .build();
+        when(configRepository.findAll()).thenReturn(List.of(named, cfg("some_new_key", "v")));
+        when(serviceTeacherDailyMaxService.resolveDefault()).thenReturn(300);
+        when(receptionistDailyMaxService.resolveDefault()).thenReturn(200);
+        when(deletionReportService.getEffectiveRecipients()).thenReturn("");
+        when(deletionReportService.resolvePushTime()).thenReturn(LocalTime.of(9, 0));
+        when(formTemplateService.resolveImageCopy()).thenReturn(Collections.emptyMap());
+
+        mockMvc.perform(get("/admin/system-config"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("转接欢迎语默认开关")))
+                .andExpect(content().string(containsString("some_new_key")));
+    }
+
     private static SystemConfig cfg(String key, String value) {
         return SystemConfig.builder().configKey(key).configValue(value).build();
     }
